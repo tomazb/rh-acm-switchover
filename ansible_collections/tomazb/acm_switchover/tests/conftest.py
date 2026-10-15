@@ -254,9 +254,12 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     }
     vars_payload.setdefault("acm_primary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
-    vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
     _seed_phase_local_facts(vars_payload)
     _seed_migration_reads(vars_payload, execution_mode)
+    # The strict primary ManagedCluster read preflight derives the expectation from (#340), through
+    # the shared strict-read seam that roles honour only in dry_run and validate.
+    if execution_mode in {"validate", "dry_run"}:
+        test_overrides.setdefault("migration_reads", {}).setdefault("primary_managedclusters", _ok([]))
 
     for backup in vars_payload.get("acm_primary_backups_info", {}).get("resources", []):
         status = backup.get("status")
@@ -282,7 +285,8 @@ def _seed_migration_reads(vars_payload: dict, execution_mode: str) -> None:
     acm_switchover_test_overrides.migration_reads, which roles honour only in dry_run and
     validate. Each fixture Restore is overlaid on a canonical passive sync Restore, so a
     fixture that sets a phase or spec field keeps it; the Backups are one legacy schedule
-    run. A fixture that seeds migration_reads itself is left alone.
+    run. A fixture that seeds migration_reads itself is left alone here (its caller,
+    _seed_fixture_defaults, then defaults preflight's primary_managedclusters entry when omitted).
     """
     from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_api import (
         LEGACY_INVENTORY,

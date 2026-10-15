@@ -170,16 +170,28 @@
     - acm_primary_cluster_deployments_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
 
-- name: Read primary ManagedClusters when not pre-seeded by tests
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1
-    kind: ManagedCluster
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-  register: acm_primary_managed_clusters_info
-  when:
-    - acm_primary_managed_clusters_info is not defined
-    - not (acm_switchover_operation.restore_only | default(false))
+# #340 E1: the expected ManagedCluster set is derived from this read, so it is one strict LIST
+# through the shared strict-read seam: an executing run always reads the live primary, and only
+# dry_run/validate honour a pre-seeded acm_switchover_test_overrides.migration_reads entry.
+- name: Read primary ManagedClusters strictly
+  ansible.builtin.include_tasks: "{{ role_path }}/../activation/tasks/strict_read.yml"
+  vars:
+    _acm_read:
+      key: primary_managedclusters
+      hub: primary
+      read_mode: list
+      api_version: cluster.open-cluster-management.io/v1
+      kind: ManagedCluster
+      resource_name: managedclusters
+    # A private fact: the public acm_primary_*_info names are the documented pre-seed pattern, so a
+    # vars file carrying one by accident must not become the derivation input in execute mode.
+    _acm_read_fact: _acm_primary_managed_clusters_read
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Publish the primary ManagedCluster inventory for the other preflight checks
+  ansible.builtin.set_fact:
+    acm_primary_managed_clusters_info: "{{ _acm_primary_managed_clusters_read }}"
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Read primary hub ManagedCluster backups when not pre-seeded by tests
   kubernetes.core.k8s_info:

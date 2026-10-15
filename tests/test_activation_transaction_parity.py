@@ -192,7 +192,7 @@ def _collection_wait(activation, kind, *, expected=(), minimum=0, requested=None
         "enforce": bool(expected) and waiver is None,
     }
     state = "pending"
-    if kind == "full_restore" and (minimum > 0 or check["enforce"]):
+    if kind == "full_restore" and (minimum > 0 or check["expected_names"]):
         for _ in range(_POLLS):
             state = col.managed_clusters_poll(mc_read=_read(activation.hub.list_managed_clusters_strict()), **check)[
                 "state"
@@ -782,6 +782,41 @@ def test_a_waiver_never_lifts_the_count_floor_identically(tmp_path):
     outcomes = forms.wait("full_restore", expected=("cluster-x",), minimum=3, requested=WAIVER)
     forms.assert_same(outcomes)
     assert outcomes[0] is not None
+
+
+def _empty_destination(hub):
+    hub.managed_clusters = []
+    hub.local_cluster = False
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_waiver_with_a_zero_floor_refuses_an_empty_destination_identically(tmp_path, kind):
+    """#340 E2: the waiver lifts only the name check; an empty inventory with recorded names
+    is inventory_empty in both form factors, as post-activation decides."""
+    forms = _accepted(tmp_path, kind)
+    forms.both(_empty_destination)
+    outcomes = forms.wait(kind, expected=("cluster-x",), minimum=0, requested=WAIVER)
+    forms.assert_same(outcomes)
+    assert outcomes[0] is not None and "inventory_empty" in outcomes[0]
+    assert col_checkpoint.migration_backups(forms.store)["restore"]["completed_at"] is None
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_waiver_with_a_zero_floor_accepts_a_local_cluster_only_destination_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    forms.both(lambda hub: setattr(hub, "managed_clusters", []))
+    outcomes = forms.wait(kind, expected=("cluster-x",), minimum=0, requested=WAIVER)
+    forms.assert_same(outcomes)
+    assert outcomes == [None, None]
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_zero_floor_with_nothing_expected_admits_an_empty_destination_identically(tmp_path, kind):
+    forms = _accepted(tmp_path, kind)
+    forms.both(_empty_destination)
+    outcomes = forms.wait(kind, expected=(), minimum=0)
+    forms.assert_same(outcomes)
+    assert outcomes == [None, None]
 
 
 @pytest.mark.parametrize("kind", KINDS)

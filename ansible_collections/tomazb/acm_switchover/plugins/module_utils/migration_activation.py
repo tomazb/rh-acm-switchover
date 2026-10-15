@@ -827,14 +827,31 @@ def _check_inputs(min_managed_clusters: Any, enforce: Any) -> Tuple[int, bool]:
     return min_managed_clusters, enforce
 
 
-def _managed_cluster_names(mc_read: Any) -> List[str]:
+def _managed_cluster_inventory(mc_read: Any) -> Tuple[bool, List[str]]:
+    """Whether the strict inventory is empty, and its non-local names."""
     items = strict_list(mc_read, "ManagedCluster inventory")
     names = []
     for item in items:
-        name = (item.get("metadata") or {}).get("name") if isinstance(item, dict) else None
-        if name and name != LOCAL_CLUSTER_NAME:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if not isinstance(name, str) or not name:
+            # A nameless member is never counted, so it can never be the proof that the
+            # destination is non-empty (post-activation's malformed_inventory, #340 E2).
+            raise ActivationRefused(
+                "ManagedCluster inventory is malformed (malformed_inventory): a ManagedCluster has no name"
+            )
+        if name != LOCAL_CLUSTER_NAME:
             names.append(name)
-    return names
+    return not items, names
+
+
+def _refuses_empty_destination(inventory_empty: bool, expected_names: List[str]) -> bool:
+    """#340 E2: an empty destination is accepted only when no expected name was recorded.
+
+    The waiver lifts only the name check; it never turns recorded names into "nothing
+    expected" (SecondaryActivation._refuses_empty_destination, post-activation inventory_empty).
+    """
+    return inventory_empty and bool(expected_names)
 
 
 def managed_clusters_poll(
@@ -842,7 +859,7 @@ def managed_clusters_poll(
 ) -> Dict[str, str]:
     """One poll of the full-restore ManagedCluster wait (enforce False is the journaled waiver)."""
     min_managed_clusters, enforce = _check_inputs(min_managed_clusters, enforce)
-    names = _managed_cluster_names(mc_read)
+    inventory_empty, names = _managed_cluster_inventory(mc_read)
     count = len(names)
     missing = sorted(set(expected_names) - set(names))
     if enforce and missing:
@@ -850,6 +867,8 @@ def managed_clusters_poll(
             "state": "pending",
             "detail": f"found {count}/{min_managed_clusters} ManagedCluster(s); missing expected: {missing}",
         }
+    if _refuses_empty_destination(inventory_empty, expected_names):
+        return {"state": "pending", "detail": "no ManagedClusters found"}
     if count >= min_managed_clusters:
         return {"state": "complete", "detail": f"found {count} ManagedCluster(s): {', '.join(names)}"}
     return {"state": "pending", "detail": f"found {count}/{min_managed_clusters} ManagedCluster(s): {names}"}
@@ -864,12 +883,18 @@ def verify_managed_clusters(
     the count floor.
     """
     min_managed_clusters, enforce = _check_inputs(min_managed_clusters, enforce)
-    names = _managed_cluster_names(mc_read)
+    inventory_empty, names = _managed_cluster_inventory(mc_read)
     count = len(names)
     missing = sorted(set(expected_names) - set(names))
     if enforce and missing:
         raise ActivationRefused(
             f"Missing expected ManagedCluster(s) after restore: {', '.join(missing)}. Found {count}: {names}"
+        )
+    if min_managed_clusters == 0 and _refuses_empty_destination(inventory_empty, expected_names):
+        raise ActivationRefused(
+            "No ManagedClusters found after restore (inventory_empty): expected ManagedCluster(s) "
+            f"{', '.join(sorted(expected_names))} were recorded, and a waiver lifts only "
+            "the name check, never an empty destination"
         )
     if min_managed_clusters == 0 or count >= min_managed_clusters:
         return {"detail": f"Found {count} ManagedCluster(s) on secondary hub: {', '.join(names)}"}

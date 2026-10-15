@@ -8,15 +8,11 @@ from typing import List, Optional, Tuple, TypedDict
 from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
-from lib.constants import (
-    LOCAL_CLUSTER_NAME,
-    MANAGED_CLUSTER_API_GROUP,
-    MANAGED_CLUSTER_API_VERSION,
-    MANAGED_CLUSTER_PLURAL,
-    OBSERVABILITY_NAMESPACE,
-)
+from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.exceptions import MalformedResponseError, ValidationError
 from lib.kube_client import KubeClient
+from lib.migration_evidence import MigrationEvidenceError
+from lib.migration_post_activation import expected_managed_cluster_names
 from lib.rbac_validator import validate_rbac_permissions
 
 from .preflight import (
@@ -303,32 +299,39 @@ class PreflightValidator:
         return len(critical_failures) == 0, config
 
     def _derive_expected_managed_cluster_names(self) -> List[str]:
-        """Return expected ManagedCluster names and record API failures as validation results."""
+        """Return the expected non-local ManagedCluster names from one strict primary inventory.
+
+        Only a positively complete strict read derives an expectation (#340 E1); any other
+        outcome is a critical preflight failure, never an expectation of zero clusters.
+        """
+        if self.restore_only:
+            return []
         try:
-            return self._expected_managed_cluster_names()
-        except ApiException as e:
+            if self.primary is None:
+                raise MigrationEvidenceError(
+                    "inventory_unreadable", "no primary hub client is available to read the ManagedCluster inventory"
+                )
+            outcome = self.primary.list_managed_clusters_strict()
+            if not outcome.is_success:
+                detail = f"{outcome.status.value}: {outcome.reason}" if outcome.reason else outcome.status.value
+                raise MigrationEvidenceError(
+                    "inventory_unreadable",
+                    f"the primary ManagedCluster inventory is not positively complete ({detail})",
+                )
+            names = expected_managed_cluster_names(outcome.items)
+        except MigrationEvidenceError as exc:
             self.reporter.add_result(
                 "ManagedCluster inventory",
                 False,
-                f"Failed to list primary ManagedClusters for restore expectation: {e.status} {e.reason}",
+                f"Cannot derive the expected ManagedClusters from the primary hub ({exc})",
                 critical=True,
             )
-            logger.warning("Unable to list primary ManagedClusters for restore expectation.")
+            logger.warning("Unable to derive the expected ManagedClusters from the primary hub inventory.")
             return []
-
-    def _expected_managed_cluster_names(self) -> List[str]:
-        """Return non-local ManagedCluster names observed on the primary during preflight."""
-        if self.restore_only or self.primary is None:
-            return []
-
-        managed_clusters = self.primary.list_custom_resources(
-            group=MANAGED_CLUSTER_API_GROUP,
-            version=MANAGED_CLUSTER_API_VERSION,
-            plural=MANAGED_CLUSTER_PLURAL,
+        self.reporter.add_result(
+            "ManagedCluster inventory",
+            True,
+            f"primary hub inventory expects {len(names)} non-local ManagedCluster(s)",
+            critical=True,
         )
-        names = [
-            item.get("metadata", {}).get("name")
-            for item in managed_clusters
-            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
-        ]
-        return sorted(names)
+        return names

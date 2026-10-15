@@ -324,7 +324,10 @@ python acm_switchover.py \
 > **Note:** `--activation-method` applies only to `--method passive`.
 > When `--min-managed-clusters` is omitted, the tool derives the expected non-local
 > ManagedCluster names/count from primary preflight and enforces that set after
-> activation. In `--restore-only` mode, omitted `--min-managed-clusters` defaults
+> activation. Preflight derives that set only from a positively complete, strictly read
+> primary ManagedCluster inventory: an unreadable or unserved ManagedCluster API, an incomplete
+> read, a ManagedCluster without a name, or a repeated name fails preflight
+> (`ManagedCluster inventory`) instead of deriving zero expected clusters. In `--restore-only` mode, omitted `--min-managed-clusters` defaults
 > to at least one restored non-local ManagedCluster because no primary inventory is
 > available (the collection likewise never derives restore-only names or a count from its
 > `acm_switchover_managed_clusters` klusterlet map). An explicit `--min-managed-clusters N` (`N` non-negative) is an
@@ -448,6 +451,11 @@ python acm_switchover.py ... \
 ```
 
 - The scope is `activation`, `post_activation`, or `both`; actor and reason must be non-empty.
+- A waiver never admits an **empty** destination. With recorded names and
+  `--min-managed-clusters 0`, activation and post-activation both refuse a destination that
+  has no ManagedCluster at all (`inventory_empty`); a destination with only `local-cluster`
+  passes. If the primary genuinely has no clusters left to migrate, re-run preflight so the
+  expectation is re-derived from the current primary.
 - It is rejected with `--validate-only`, `--decommission`, `--setup`, and
   `--argocd-resume-only`; it is rejected with `--restore-only` in every scope, because restore-only
   records no expected name; and it is rejected when its scope has no expected name to waive.

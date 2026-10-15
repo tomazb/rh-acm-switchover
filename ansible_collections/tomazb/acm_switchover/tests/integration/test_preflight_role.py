@@ -716,3 +716,69 @@ def test_preflight_requires_the_sync_flag_even_with_the_conventional_fallback(
     (result,) = [item for item in report["results"] if item["id"] == "preflight-passive-restore-secondary"]
     assert result["status"] == "fail"
     assert result["message"] == "secondary hub has no sync-enabled passive restore"
+
+
+@pytest.mark.parametrize(
+    ("mc_read", "code"),
+    [
+        pytest.param(
+            {"read_status": "error", "resources": [], "resource_version": None}, "inventory_unreadable", id="unreadable"
+        ),
+        pytest.param(
+            {"read_status": "kind_not_served", "resources": [], "resource_version": None},
+            "inventory_unreadable",
+            id="api-not-served",
+        ),
+        pytest.param(
+            {"read_status": "ok", "resources": [{"metadata": {}}], "resource_version": "1"},
+            "malformed_inventory",
+            id="nameless-member",
+        ),
+    ],
+)
+def test_an_unprovable_primary_inventory_fails_preflight_instead_of_deriving_zero(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+    mc_read,
+    code,
+):
+    """#340 E1: the derivation refuses a read that does not prove a complete inventory."""
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+                "migration_reads": {"primary_managedclusters": mc_read},
+            },
+        },
+    )
+    assert completed.returncode != 0
+    assert report["status"] == "fail"
+    (result,) = [item for item in report["results"] if item["id"] == "preflight-managed-cluster-inventory"]
+    assert result["status"] == "fail" and result["severity"] == "critical"
+    assert code in result["message"]
+
+
+def test_a_complete_primary_inventory_derives_the_expectation_in_preflight(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+):
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+                "migration_reads": {
+                    "primary_managedclusters": {
+                        "read_status": "ok",
+                        "resources": [{"metadata": {"name": "cluster-a"}}, {"metadata": {"name": "local-cluster"}}],
+                        "resource_version": "1",
+                    }
+                },
+            },
+        },
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    (result,) = [item for item in report["results"] if item["id"] == "preflight-managed-cluster-inventory"]
+    assert result["status"] == "pass"
+    assert result["details"] == {"expected_managed_cluster_names": ["cluster-a"], "expected_managed_cluster_count": 1}

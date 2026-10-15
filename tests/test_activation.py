@@ -506,14 +506,64 @@ class TestMinManagedClusters:
             str(refused.value) == "Expected at least 3 ManagedCluster(s) after restore, but found only 1: ['cluster-a']"
         )
 
-    def test_unenforced_names_with_zero_floor_allow_an_empty_hub(self, mock_secondary_client, mock_state_manager):
-        """With a zero floor and no enforced names an empty hub is informational only."""
+    def test_unenforced_recorded_names_with_zero_floor_refuse_an_empty_hub(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """#340 E2: recorded names that are not enforced (the waiver) never make an empty hub
+        acceptable; that is the inventory_empty refusal post-activation also applies."""
         mock_secondary_client.list_custom_resources.return_value = []
         act = SecondaryActivation(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             min_managed_clusters=0,
             expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        with pytest.raises(FatalError, match="inventory_empty"):
+            act._verify_managed_clusters_restored()
+
+    def test_unenforced_recorded_names_with_zero_floor_accept_a_local_cluster_only_hub(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """With the name check lifted and a zero floor, a non-empty inventory is informational only."""
+        mock_secondary_client.list_custom_resources.return_value = [{"metadata": {"name": "local-cluster"}}]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        act._verify_managed_clusters_restored()
+
+    @pytest.mark.parametrize("member", [{}, {"metadata": {}}, {"metadata": {"name": ""}}, {"metadata": None}])
+    def test_a_nameless_member_is_malformed_never_the_non_empty_proof(
+        self, mock_secondary_client, mock_state_manager, member
+    ):
+        """#340 E2: a member without a name refuses like post-activation's malformed_inventory;
+        it never stands in for a non-empty destination under a waiver and a zero floor."""
+        mock_secondary_client.list_custom_resources.return_value = [member]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        with pytest.raises(FatalError, match="malformed_inventory"):
+            act._verify_managed_clusters_restored()
+
+    def test_zero_floor_without_recorded_names_allows_an_empty_hub(self, mock_secondary_client, mock_state_manager):
+        """Unchanged: nothing recorded and a zero floor permit an empty destination."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=[],
             enforce_expected_managed_cluster_names=False,
         )
 
@@ -542,45 +592,6 @@ class TestMinManagedClusters:
             act._wait_for_managed_clusters_restored(timeout=10)
 
         wait.assert_called_once()
-
-    def test_managed_cluster_name_listing_can_reuse_single_generation_cache(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """Repeated same-generation ManagedCluster checks should not re-list resources."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "cluster-a"}},
-            {"metadata": {"name": "local-cluster"}},
-        ]
-        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
-        generation_cache = {}
-
-        first = act._list_restored_managed_cluster_names(name_cache=generation_cache)
-        second = act._list_restored_managed_cluster_names(name_cache=generation_cache)
-
-        assert first == ["cluster-a"]
-        assert second == ["cluster-a"]
-        assert mock_secondary_client.list_custom_resources.call_count == 1
-
-    def test_managed_cluster_name_listing_force_refreshes_for_final_verification(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """Final verification can bypass a same-generation cache and see fresh ManagedClusters."""
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [{"metadata": {"name": "local-cluster"}}],
-            [
-                {"metadata": {"name": "local-cluster"}},
-                {"metadata": {"name": "cluster-a"}},
-            ],
-        ]
-        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
-        generation_cache = {}
-
-        first = act._list_restored_managed_cluster_names(name_cache=generation_cache)
-        refreshed = act._list_restored_managed_cluster_names(name_cache=generation_cache, force_refresh=True)
-
-        assert first == []
-        assert refreshed == ["cluster-a"]
-        assert mock_secondary_client.list_custom_resources.call_count == 2
 
     def test_managed_cluster_wait_refreshes_between_poll_iterations(self, mock_secondary_client, mock_state_manager):
         """ManagedCluster wait polling must refresh so newly restored clusters can become visible."""

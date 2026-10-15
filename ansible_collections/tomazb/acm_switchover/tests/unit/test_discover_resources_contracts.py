@@ -18,6 +18,28 @@ FINALIZATION_DISCOVER = ROLES_DIR / "finalization" / "tasks" / "discover_resourc
 POST_ACTIVATION_DISCOVER = ROLES_DIR / "post_activation" / "tasks" / "discover_resources.yml"
 
 
+def _walk(tasks):
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        yield task
+        for key in ("block", "rescue", "always"):
+            yield from _walk(task.get(key))
+
+
+def _strict_read_includes():
+    """Every include of the shared strict-read seam, as (path, task), parsed from all role tasks."""
+    found = []
+    for path in sorted(ROLES_DIR.glob("*/tasks/**/*.yml")):
+        for task in _walk(yaml.safe_load(path.read_text()) or []):
+            target = task.get("ansible.builtin.include_tasks") or task.get("include_tasks")
+            if isinstance(target, dict):
+                target = target.get("file")
+            if isinstance(target, str) and target.endswith("strict_read.yml"):
+                found.append((path, task))
+    return found
+
+
 class TestActivationDiscoverResources:
     """R4-04: activation strictly reads the destination hub; fixtures pre-seed only non-live runs."""
 
@@ -34,10 +56,17 @@ class TestActivationDiscoverResources:
         assert reads[0]["vars"]["_acm_read"]["read_mode"] == "list"
         assert not [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
 
-    def test_strict_reads_use_the_secondary_hub(self):
-        (read,) = [t for t in self.strict_read if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
-        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
-        assert "secondary" in params["kubeconfig"] and "secondary" in params["context"]
+    def test_every_strict_read_targets_the_destination_hub_except_the_preflight_primary_read(self):
+        """The shared seam reads the hub its caller names (default: the secondary, the destination).
+        Parsed over every role: only preflight's expected-ManagedCluster read names the primary."""
+        includes = _strict_read_includes()
+        assert len(includes) >= 10, "the strict-read seam should be found across the roles"
+        for path, task in includes:
+            hub = ((task.get("vars") or {}).get("_acm_read") or {}).get("hub")
+            if path == ROLES_DIR / "preflight" / "tasks" / "discover_resources.yml":
+                assert hub == "primary", path
+            else:
+                assert hub in (None, "secondary"), f"{path}: {task.get('name')} names hub {hub!r}"
 
     def test_the_override_seam_is_non_live_only(self):
         """An executing run always reads the live hub; pre-seeded reads serve dry_run/validate fixtures."""
@@ -203,6 +232,12 @@ class TestPostActivationDiscoverResources:
             (POST_ACTIVATION_DISCOVER.parents[2] / "activation" / "tasks" / "strict_read.yml").read_text()
         )
         (read,) = [t for t in seam if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
-        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
-        assert params["kubeconfig"] == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        assert params["context"] == "{{ acm_switchover_hubs.secondary.context }}"
+        assert read.get("no_log") is True
+        # The hub each caller names is checked on the parsed includes (see the activation class);
+        # here, every post-activation strict read leaves the default destination hub.
+        post_activation = [
+            (path, task) for path, task in _strict_read_includes() if path.parent == POST_ACTIVATION_DISCOVER.parent
+        ]
+        assert post_activation
+        for path, task in post_activation:
+            assert ((task.get("vars") or {}).get("_acm_read") or {}).get("hub") in (None, "secondary"), path.name

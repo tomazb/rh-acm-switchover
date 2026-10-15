@@ -496,6 +496,43 @@ def test_an_activation_waiver_is_journaled_and_never_verifies_names(run_activati
     assert run.journal["restore"]["completed_at"]
 
 
+@pytest.mark.parametrize("serve_local_cluster", [False, True], ids=["empty-destination", "local-cluster-only"])
+def test_a_waiver_with_a_zero_floor_never_admits_an_empty_full_restore_destination(run_activation, serve_local_cluster):
+    """#340 E2 through real templating: recorded names + an activation waiver + floor 0 still waits
+    for and requires a non-empty inventory; a local-cluster-only destination completes."""
+    fake = FakeMigrationHub(restores=[passive_restore()], controller=complete_on_mutation, managed_clusters=[])
+    fake.serve_local_cluster = serve_local_cluster
+    waiver = {"scope": "activation", "actor": "operator@example.com", "reason": "retired", "request_id": None}
+    try:
+        run = run_activation(
+            "full_restore",
+            fake,
+            extra={
+                "acm_switchover_operation": dict(
+                    KIND_OPERATION["full_restore"],
+                    restore_only=False,
+                    old_hub_action="secondary",
+                    min_managed_clusters=0,
+                ),
+                "acm_switchover_expected_managed_cluster_names": ["cluster-x"],
+                "_acm_role_entry_inputs": {
+                    "results": [
+                        {"id": "preflight-input-operation", "details": {"managed_cluster_expectation_waiver": waiver}}
+                    ]
+                },
+            },
+        )
+    finally:
+        fake.close()
+    if serve_local_cluster:
+        assert run.completed.returncode == 0, run.output
+        assert run.journal["restore"]["completed_at"]
+    else:
+        assert run.completed.returncode != 0
+        assert "No ManagedClusters found after restore (inventory_empty)" in run.output
+        assert run.journal["restore"]["completed_at"] is None
+
+
 @pytest.mark.parametrize("kind", ["passive_patch", "full_restore"])
 def test_the_whole_activation_role_runs_the_transaction_and_completes_the_phase(tmp_path, kind):
     """Direct role entry (docs/variable-reference.md): guard, transaction, completion and pass."""

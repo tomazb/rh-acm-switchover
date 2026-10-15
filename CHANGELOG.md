@@ -101,6 +101,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ManagedCluster expectation safety (#340, both form factors).** Preflight derives the expected
+  ManagedCluster names/count only from a positively complete strict primary inventory
+  (`list_managed_clusters_strict` / `acm_k8s_read_outcome`); an unreadable or unserved API, an
+  incomplete or malformed read, a nameless member or a repeated name now fails preflight
+  (`ManagedCluster inventory` / `preflight-managed-cluster-inventory`) instead of deriving zero
+  expected clusters, which with an omitted floor could admit an empty destination. The collection's
+  executing preflight always reads the primary inventory live through the shared strict-read seam
+  (a pre-seeded read is honoured only in dry_run/validate). A nameless destination ManagedCluster
+  is now malformed at activation as at post-activation. Activation now applies
+  post-activation's `inventory_empty` rule: with recorded names, a waiver plus
+  `--min-managed-clusters 0` no longer admits a destination with no ManagedCluster at all, so a run
+  can no longer pass activation and then refuse every post-activation retry. Coverage is
+  fake-backed, fixture-backed and static only; it is not live certification evidence.
 - The final pre-PATCH hive/cluster credential prediction of a legacy `passive_patch` now requires
   the latest Credentials Backup to equal the frozen seven-field projection, not just its name; a
   same-name replacement refuses with `credential_variant_source_mismatch` (both form factors).

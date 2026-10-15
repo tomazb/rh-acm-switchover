@@ -97,7 +97,9 @@
         loop_var: _acm_poll_delay
       when:
         - acm_switchover_operation.method == 'full'
-        - (_acm_mc_check.min_managed_clusters | int) > 0 or (_acm_mc_check.enforce | bool)
+        # A zero floor has nothing to wait for only when no expected name was recorded
+        # (#340 E2): a waived name check still waits for a non-empty inventory.
+        - (_acm_mc_check.min_managed_clusters | int) > 0 or (_acm_mc_check.expected_names | length) > 0
         - _acm_mc_state != 'complete'
 
     - name: Read the ManagedCluster inventory strictly

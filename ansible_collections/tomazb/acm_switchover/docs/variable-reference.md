@@ -14,6 +14,10 @@
 ## Notes
 
 - The collection public API is grouped variables, not a flat CLI flag layer.
+- Result facts, discovery facts and internal `_acm_*` variables are outputs, not inputs. Ansible
+  gives extra vars precedence over every play variable, so setting one of them can override a
+  validation; doing so is unsupported. The strict-read test seam
+  (`acm_switchover_test_overrides.migration_reads`) is honoured only in `dry_run`/`validate`.
 - Checkpoint files are collection-owned JSON state and are not interchangeable with Python CLI state files.
 
 ## Core Input Variables
@@ -155,7 +159,7 @@ Resume is fail-closed on unresolved obligations (ADR-0001; see `coexistence.md`)
 | `acm_switchover_preflight_summary.passed` | bool | False when any critical finding fails |
 | `acm_switchover_preflight_result.report` | dict | Structured preflight report payload |
 | `acm_switchover_preflight_result.path` | string | Path to the written JSON report |
-| `acm_switchover_expected_managed_cluster_names` | list[str] | Non-local ManagedCluster names observed on the primary during preflight; empty for restore-only because no primary is available |
+| `acm_switchover_expected_managed_cluster_names` | list[str] | Non-local ManagedCluster names observed on the primary during preflight, derived only from a positively complete strict read (an unreadable, incomplete, nameless or duplicate inventory fails preflight as `preflight-managed-cluster-inventory`); empty for restore-only because no primary is available |
 | `acm_switchover_expected_managed_cluster_count` | int | Count derived from `acm_switchover_expected_managed_cluster_names`; restore-only records `0` here but still requires a restored non-local ManagedCluster unless `min_managed_clusters: 0` is set explicitly (activation and post-activation) or, for post-activation only with the minimum omitted, `allow_zero_managed_clusters` is enabled |
 | `acm_switchover_primary_has_observability` | bool | Effective primary Observability detection after `skip_observability_checks`; persisted in checkpoints for old-hub finalization behavior |
 | `acm_switchover_secondary_has_observability` | bool | Effective secondary Observability detection after `skip_observability_checks`; persisted in checkpoints for post-activation Observability verification |

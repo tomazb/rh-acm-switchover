@@ -10,6 +10,7 @@ import pytest
 from kubernetes.client.rest import ApiException
 
 from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
+from lib.strict_read import StrictReadOutcome
 from modules.preflight import (
     NamespaceValidator,
     ObservabilityDetector,
@@ -234,6 +235,7 @@ def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized(caplog
     primary.namespace_exists.return_value = True
     secondary.namespace_exists.return_value = True
     primary.list_custom_resources.return_value = []
+    primary.list_managed_clusters_strict.return_value = StrictReadOutcome.from_items([])
 
     validator = PreflightValidator(
         primary_client=primary,
