@@ -431,7 +431,11 @@ def _prove_target(
             source=kubeconfig,
         )
     except SnapshotError as exc:
-        raise _Refusal("unverified", exc.reason) from None
+        # Locate the refused entry - kind, name, context, file - never its content.
+        refused = (cluster_entry or {}).get("name") if exc.entry == "cluster" else user_reference
+        raise _Refusal(
+            "unverified", exc.reason, f"{exc.entry or 'entry'} {refused!r} of context {context_name!r} in {kubeconfig}"
+        ) from None
     # The document classified here is the one remediation applies: one read, one parse.
     return snapshot, api_url, expected_hub, bootstrap_doc or {}
 
@@ -510,8 +514,12 @@ def probe_one_cluster(
     request_timeout: int | float | None = None,
     managed_cluster_reader: ManagedClusterReader | None = None,
     material_dir: str = "",
+    proofs: dict | None = None,
 ) -> dict:
     """Probe one mapped cluster (amendment §2.3, §2.6, §2.7, §6).
+
+    ``proofs`` keeps each cluster's target proof and snapshot for the whole invocation: the
+    wait loop re-reads only the klusterlet secret, never the credential files (amendment §6).
 
     The target is proven before any spoke client exists, and the spoke client is bound to
     the proven endpoint before anything is read through it.
@@ -534,9 +542,23 @@ def probe_one_cluster(
         }
 
     try:
-        snapshot, api_url, expected_hub, _bootstrap_doc = _prove_target(
-            cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
-        )
+        proofs = {} if proofs is None else proofs
+        if cluster_name not in proofs:
+            try:
+                proofs[cluster_name] = _prove_target(
+                    cluster_name,
+                    kubeconfig,
+                    managed.get("context"),
+                    managed_cluster_reader,
+                    secondary_client,
+                    request_timeout,
+                )
+            except _Refusal as refusal:
+                proofs[cluster_name] = refusal
+        proof = proofs[cluster_name]
+        if isinstance(proof, _Refusal):
+            raise proof
+        snapshot, api_url, expected_hub, _bootstrap_doc = proof
         managed_client = _bound_spoke_client(spoke_core_factory, snapshot, material_dir, api_url, request_timeout)
         return _classify_spoke(cluster_name, managed_client, expected_hub, request_timeout)
     except _Refusal as refusal:
@@ -645,6 +667,7 @@ def probe_klusterlet_connections(
                 request_timeout=request_timeout_value,
                 managed_cluster_reader=managed_cluster_reader,
                 material_dir=material_dir,
+                proofs=proofs,
             ),
             future_timeout=future_timeout_value,
             timeout_result=lambda cluster: {
@@ -658,10 +681,13 @@ def probe_klusterlet_connections(
     # One private directory per invocation for the materialized spoke credentials,
     # removed after every worker has finished (amendment §6).
     material_dir = new_private_dir()
+    proofs: dict = {}
     try:
-        return _probe_until_settled(run_probe_once, wait_timeout, wait_interval)
-    finally:
-        remove_private_dir(material_dir)
+        result = _probe_until_settled(run_probe_once, wait_timeout, wait_interval)
+    except BaseException:
+        _discard_material(material_dir, None)
+        raise
+    return _discard_material(material_dir, result)
 
 
 def _probe_until_settled(run_probe_once: Callable[[], dict], wait_timeout, wait_interval) -> dict:
@@ -994,7 +1020,7 @@ def remediate_klusterlets(
     # for both phases and is removed after every worker of both has finished.
     material_dir = new_private_dir()
     try:
-        return _remediate_in_two_phases(
+        result = _remediate_in_two_phases(
             candidates,
             worker_count,
             strict,
@@ -1012,8 +1038,28 @@ def remediate_klusterlets(
             ),
             request_timeout_value,
         )
-    finally:
+    except BaseException:
+        _discard_material(material_dir, None)
+        raise
+    return _discard_material(material_dir, result)
+
+
+def _discard_material(material_dir: str, result: dict | None) -> dict:
+    """Remove the invocation's credential material; a failure fails the result, never silently.
+
+    With ``result`` None an exception is already propagating: the cleanup failure must not
+    replace it, and the caller re-raises.
+    """
+    try:
         remove_private_dir(material_dir)
+    except SnapshotError as cleanup:
+        if result is None:
+            return {}
+        result = dict(result)
+        result["failed"] = True
+        result["credential_cleanup_failed"] = True
+        result["msg"] = f"Could not remove klusterlet credential material at {material_dir} ({cleanup.reason})"
+    return result if result is not None else {}
 
 
 def _remediate_in_two_phases(

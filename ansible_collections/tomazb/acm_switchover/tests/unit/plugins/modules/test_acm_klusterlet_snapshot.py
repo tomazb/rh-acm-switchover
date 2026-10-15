@@ -81,6 +81,7 @@ class SpokeApi:
         self.slow_restart = 0.0
         self.material_during_restart = None
         self.material_check: Callable[[], bool | None] = lambda: None
+        self.api_client: object = None
 
     @staticmethod
     def _hub(server):
@@ -292,3 +293,123 @@ def test_the_private_directory_is_removed_when_the_probe_fails(world):
     assert _status(result) == ("unverified", "endpoint_mismatch_unverified")
     assert world["dirs"] and not os.path.exists(world["dirs"][0])
     assert "captured-token" not in repr(result)
+
+
+def test_the_wait_loop_keeps_the_first_snapshot(world, monkeypatch):
+    """Codex PR 3: polling re-reads only the klusterlet secret, never the credential files."""
+    monkeypatch.setattr(klusterlet_utils.time, "sleep", lambda _seconds: None)
+    spoke = SpokeApi(OLD_HUB)
+    world["spokes"][SPOKE] = spoke
+    creds = world["creds"]
+    reads = {"count": 0}
+    real_read = spoke.read_namespaced_secret
+
+    def converging_read(name, namespace, **kwargs):
+        reads["count"] += 1
+        if reads["count"] == 2:
+            (creds / "token").write_bytes(b"replaced-token\n")
+            spoke.secrets[(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME)] = SpokeApi._hub(NEW_HUB)
+        return real_read(name, namespace, **kwargs)
+
+    spoke.read_namespaced_secret = converging_read  # type: ignore[method-assign]
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": world["kubeconfig"]()}},
+        wait_timeout=30,
+        wait_interval=1,
+        core_client_factory=_hub_factory({"a": SPOKE}),
+        managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+    )
+
+    assert _status(result) == ("verified", None)
+    assert len(world["built"]) >= 2
+    assert {record["bearer"] for record in world["built"]} == {"Bearer captured-token"}
+
+
+CERT = b"-----BEGIN CERTIFICATE-----\nMIIBclient\n-----END CERTIFICATE-----\n"
+KEY = b"-----BEGIN PRIVATE KEY-----\nMIIEkey\n-----END PRIVATE KEY-----\n"
+
+
+@pytest.mark.parametrize("field", ["ca.crt", "client.crt", "client.key", "token"])
+@pytest.mark.parametrize("action", ["replace", "delete"])
+def test_each_file_backed_credential_is_bound_inside_one_remediation(world, field, action):
+    """PR 3 #1 for all four file-backed fields, between remediation's prepare and mutate phases."""
+    creds = world["creds"]
+    (creds / "client.crt").write_bytes(CERT)
+    (creds / "client.key").write_bytes(KEY)
+    path = world["kubeconfig"](
+        user={"tokenFile": "creds/token", "client-certificate": "creds/client.crt", "client-key": "creds/client.key"}
+    )
+    spoke = SpokeApi(OLD_HUB)
+    world["spokes"][SPOKE] = spoke
+    seen = []
+    import kubernetes.client
+
+    def wrap_and_read(api_client):
+        configuration = api_client.configuration
+        contents = {}
+        for name, attr in (("ca.crt", "ssl_ca_cert"), ("client.crt", "cert_file"), ("client.key", "key_file")):
+            with open(getattr(configuration, attr), "rb") as handle:
+                contents[name] = handle.read()
+        contents["token"] = configuration.auth_settings()["BearerToken"]["value"]
+        seen.append(contents)
+        spoke.api_client = api_client
+        return spoke
+
+    def tamper():
+        target = creds / field
+        if action == "delete":
+            target.unlink()
+        else:
+            target.write_bytes(b"REPLACED\n")
+
+    spoke.on_first_read = tamper
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(kubernetes.client, "CoreV1Api", wrap_and_read)
+        patcher.setattr(kubernetes.client, "AppsV1Api", wrap_and_read)
+        result = remediate_klusterlets(
+            secondary_hub={"kubeconfig": "hub"},
+            managed_clusters={"a": {"kubeconfig": path}},
+            pending_clusters=["a"],
+            core_client_factory=_hub_factory({"a": SPOKE}),
+            managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+        )
+
+    assert _status(result) == ("remediated", None)
+    assert len(seen) == 2
+    for contents in seen:
+        assert contents == {"ca.crt": CA, "client.crt": CERT, "client.key": KEY, "token": "Bearer captured-token"}
+
+
+def test_a_credential_refusal_locates_its_entry(world):
+    path = world["kubeconfig"](user={"exec": {"command": "get-token"}})
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": path}},
+        core_client_factory=_hub_factory({"a": SPOKE}),
+        managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+    )
+    item = result["results"][0]
+    assert (item["status"], item["reason"]) == ("unverified", "exec_credential_unsupported")
+    assert item["detail"] == f"user 'admin' of context 'spoke-admin' in {path}"
+    assert "get-token" not in repr(result)
+
+
+def test_a_cleanup_failure_fails_the_module_result(world, monkeypatch):
+    world["spokes"][SPOKE] = SpokeApi(NEW_HUB)
+
+    def failing_cleanup(path):
+        raise snapshot_module.SnapshotError("credential_cleanup_failed")
+
+    monkeypatch.setattr(klusterlet_utils, "remove_private_dir", failing_cleanup)
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"a": {"kubeconfig": world["kubeconfig"]()}},
+        core_client_factory=_hub_factory({"a": SPOKE}),
+        managed_cluster_reader_factory=Hub({"a": SPOKE}).reader_factory,
+    )
+    assert _status(result) == ("verified", None)
+    assert result["failed"] is True and result["credential_cleanup_failed"] is True
+    assert "credential_cleanup_failed" in result["msg"]

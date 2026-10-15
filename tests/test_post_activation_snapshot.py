@@ -318,7 +318,7 @@ def test_a_remediation_finishing_after_its_timeout_is_reported_and_outlives_clea
 
     assert spoke.mutations == ["patch_secret", "restart"]
     assert seen_material == [True]
-    assert "completed after the worker timeout" in caplog.text
+    assert "changed the cluster before it was reported as failed" in caplog.text
     assert not os.path.exists(built.private_dirs[0])
 
 
@@ -346,3 +346,121 @@ def test_a_timed_out_check_worker_keeps_its_material_until_it_finishes(tmp_path,
 
     assert seen and all(seen)
     assert not os.path.exists(built.private_dirs[0])
+
+
+CERT = b"-----BEGIN CERTIFICATE-----\nMIIBclient\n-----END CERTIFICATE-----\n"
+KEY = b"-----BEGIN PRIVATE KEY-----\nMIIEkey\n-----END PRIVATE KEY-----\n"
+
+
+@pytest.mark.parametrize("field", ["ca.crt", "client.crt", "client.key", "token"])
+@pytest.mark.parametrize("action", ["replace", "delete"])
+def test_each_file_backed_credential_is_bound_across_every_stage(
+    tmp_path, spoke_dir, verifier, monkeypatch, field, action
+):
+    """PR 3 #1 for all four file-backed fields: the captured bytes reach every client."""
+    (spoke_dir / "client.crt").write_bytes(CERT)
+    (spoke_dir / "client.key").write_bytes(KEY)
+    users = [
+        {
+            "name": "admin",
+            "user": {
+                "tokenFile": "creds/token",
+                "client-certificate": "creds/client.crt",
+                "client-key": "creds/client.key",
+            },
+        }
+    ]
+    pav, _state = verifier(_write_kubeconfig(tmp_path, users=users), [_managed_cluster("a")])
+    built = []
+    real = kube_config_module.new_client_from_config_dict
+
+    def recording(document, context=None, persist_config=True, **kwargs):
+        api_client = real(document, context=context, persist_config=persist_config, **kwargs)
+        configuration = api_client.configuration
+        contents = {}
+        for name, path in (
+            ("ca.crt", configuration.ssl_ca_cert),
+            ("client.crt", configuration.cert_file),
+            ("client.key", configuration.key_file),
+        ):
+            with open(path, "rb") as handle:
+                contents[name] = handle.read()
+        contents["token"] = configuration.auth_settings()["BearerToken"]["value"]
+        built.append(contents)
+        return api_client
+
+    monkeypatch.setattr(snapshot_module.config, "new_client_from_config_dict", recording)
+    spoke = Spoke(OLD_HUB)
+
+    def tamper(read_count):
+        if read_count == 1:
+            target = spoke_dir / field
+            if action == "delete":
+                target.unlink()
+            else:
+                target.write_bytes(b"REPLACED\n")
+
+    spoke.on_read = tamper
+    _run(pav, spoke)
+
+    assert spoke.mutations == ["patch_secret", "restart"]
+    assert len(built) >= 3
+    for contents in built:
+        assert contents == {"ca.crt": CA, "client.crt": CERT, "client.key": KEY, "token": "Bearer captured-token"}
+
+
+def test_a_partial_change_that_then_fails_is_reported(tmp_path, spoke_dir, verifier, monkeypatch, caplog):
+    """Codex PR 3: a secret patch that succeeds before a later failure is reported, not lost."""
+    pav, _state = verifier(_write_kubeconfig(tmp_path), [_managed_cluster("a")])
+    Constructions(monkeypatch)
+    spoke = Spoke(OLD_HUB)
+    caplog.set_level(logging.WARNING, logger="acm_switchover")
+
+    def no_visibility(*_args, **_kwargs):
+        raise SwitchoverError("bootstrap-hub-kubeconfig secret not visible")
+
+    monkeypatch.setattr(PostActivationVerification, "_wait_for_secret_visibility", no_visibility)
+    with pytest.raises(SwitchoverError, match="Klusterlet remediation failed for cluster"):
+        _run(pav, spoke)
+
+    assert spoke.mutations == ["patch_secret"]
+    assert "changed the cluster before it was reported as failed" in caplog.text
+
+
+def test_a_refused_credential_is_located_for_the_operator(tmp_path, spoke_dir, verifier, monkeypatch, caplog):
+    users = [{"name": "admin", "user": {"exec": {"command": "get-token", "env": [{"name": "SECRET", "value": "zzz"}]}}}]
+    kubeconfig = _write_kubeconfig(tmp_path, users=users)
+    pav, _state = verifier(kubeconfig, [_managed_cluster("a")])
+    Constructions(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="acm_switchover")
+
+    with pytest.raises(SwitchoverError, match=r"a \(exec_credential_unsupported\)"):
+        _run(pav, Spoke(OLD_HUB))
+
+    assert f"Kubeconfig user 'admin' (context 'spoke-admin', from {kubeconfig})" in caplog.text
+    assert "zzz" not in caplog.text and "get-token" not in caplog.text
+
+
+def test_a_cleanup_failure_fails_a_passing_step(tmp_path, spoke_dir, verifier, monkeypatch):
+    pav, state = verifier(_write_kubeconfig(tmp_path), [_managed_cluster("a")])
+    Constructions(monkeypatch)
+    monkeypatch.setattr(
+        "modules.post_activation.remove_private_dir",
+        lambda path: (_ for _ in ()).throw(snapshot_module.SnapshotError("credential_cleanup_failed")),
+    )
+    with pytest.raises(SwitchoverError, match="credential_cleanup_failed"):
+        _run(pav, Spoke(NEW_HUB))
+    assert not state.is_step_completed(STEP)
+
+
+def test_a_cleanup_failure_never_masks_the_primary_error(tmp_path, spoke_dir, verifier, monkeypatch, caplog):
+    pav, _state = verifier(_write_kubeconfig(tmp_path), [_managed_cluster("a")])
+    Constructions(monkeypatch)
+    monkeypatch.setattr(
+        "modules.post_activation.remove_private_dir",
+        lambda path: (_ for _ in ()).throw(snapshot_module.SnapshotError("credential_cleanup_failed")),
+    )
+    caplog.set_level(logging.ERROR, logger="acm_switchover")
+    with pytest.raises(SwitchoverError, match="endpoint_mismatch_unverified"):
+        _run(pav, Spoke("https://api.new-hub.example:443"))
+    assert "Could not remove klusterlet credential material" in caplog.text

@@ -239,8 +239,9 @@ these rules, or the cluster is unverified before any client exists:
 
 - every file-backed credential (`certificate-authority`, `client-certificate`,
   `client-key`, `tokenFile`) is read once, when the cluster is selected, and must be a
-  regular, non-empty file within the kubeconfig size limit. A symbolic link, directory,
-  empty, oversized or unreadable file is refused (`credential_symlink`,
+  regular, non-empty file within the kubeconfig size limit. A credential path that is
+  itself a symbolic link (its parent directories resolve normally), a directory, FIFO or
+  device, or an empty, oversized or unreadable file is refused (`credential_symlink`,
   `credential_not_regular`, `credential_empty`, `credential_oversized`,
   `credential_unreadable`). Relative paths resolve against the file that defined the entry;
 - an inline `token` wins over `tokenFile`. A token file is read as strict UTF-8 with

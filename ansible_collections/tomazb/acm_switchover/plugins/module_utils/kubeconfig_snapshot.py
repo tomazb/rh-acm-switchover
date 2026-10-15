@@ -38,6 +38,7 @@ REASON_CREDENTIAL_EMPTY = "credential_empty"
 REASON_CREDENTIAL_OVERSIZED = "credential_oversized"
 REASON_CLIENT_CONSTRUCTION_FAILED = "client_construction_failed"
 REASON_CLIENT_ENDPOINT_MISMATCH = "client_endpoint_mismatch"
+REASON_CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
 
 _READ_CHUNK = 64 * 1024
 _TOKEN_TRAILING_WHITESPACE = " \t\r\n"
@@ -51,11 +52,13 @@ _CONSTRUCTION_LOCK = threading.Lock()
 
 
 class SnapshotError(Exception):
-    """A sanitized refusal: a stable reason, never credential content."""
+    """A sanitized refusal: a stable reason and the entry kind it concerns, never content."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, entry: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
+        # "cluster" or "user": which entry of the selected context was refused (provenance).
+        self.entry = entry
 
 
 class SpokeSnapshot(NamedTuple):
@@ -79,11 +82,14 @@ class SpokeSnapshot(NamedTuple):
 def capture_file(path: str, size_limit: int) -> bytes:
     """Read one credential file once, through a descriptor that is the file validated.
 
-    ``O_NOFOLLOW`` refuses a symlink; ``fstat`` on the open descriptor (never a second
-    path lookup) requires a regular, non-empty file within the limit; the read is bounded
-    on the same descriptor, so a file that grows after ``fstat`` is still refused.
+    ``O_NOFOLLOW`` refuses a credential path that is itself a symlink (parent directories
+    resolve normally: the content is captured once, so they open no later window);
+    ``O_NONBLOCK`` keeps a FIFO or device from blocking the open before it is refused;
+    ``fstat`` on the open descriptor (never a second path lookup) requires a regular,
+    non-empty file within the limit; the read is bounded on the same descriptor, so a file
+    that grows after ``fstat`` is still refused.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -181,13 +187,39 @@ def build_snapshot(
     ``user`` is None when the context names no user, or names one that does not exist
     (``user_reference`` set): the latter is refused, never turned into an anonymous client.
     """
-    if user is None and user_reference:
-        raise SnapshotError(REASON_CREDENTIAL_UNSUPPORTED)
-    user = user or {}
-    if "exec" in user:
-        raise SnapshotError(REASON_EXEC_CREDENTIAL_UNSUPPORTED)
-    if "auth-provider" in user:
-        raise SnapshotError(REASON_AUTH_PROVIDER_UNSUPPORTED)
+    try:
+        _check_cluster(cluster)
+    except SnapshotError as exc:
+        raise SnapshotError(exc.reason, "cluster") from None
+    try:
+        user_body = _check_user(user, user_reference)
+    except SnapshotError as exc:
+        raise SnapshotError(exc.reason, "user") from None
+    contents: dict[str, bytes | None] = {}
+    for kind, field, name in _FILE_FIELDS:
+        entry, base_dir = (cluster, cluster_base_dir) if kind == "cluster" else (user_body, user_base_dir)
+        try:
+            contents[name] = _field_content(entry, field, base_dir, size_limit)
+        except SnapshotError as exc:
+            raise SnapshotError(exc.reason, kind) from None
+    try:
+        token = _token(user_body, user_base_dir, size_limit)
+    except SnapshotError as exc:
+        raise SnapshotError(exc.reason, "user") from None
+    return SpokeSnapshot(
+        context_name=context_name,
+        server=cluster["server"],
+        ca=contents["ca"],
+        cert=contents["cert"],
+        key=contents["key"],
+        token=token,
+        username=user_body.get("username"),
+        password=user_body.get("password"),
+        source=source,
+    )
+
+
+def _check_cluster(cluster) -> None:
     server = cluster.get("server")
     if not isinstance(server, str) or not server.lower().startswith("https://"):
         raise SnapshotError(REASON_TLS_VERIFICATION_UNPROVEN)
@@ -196,23 +228,22 @@ def build_snapshot(
         raise SnapshotError(REASON_TLS_VERIFICATION_UNPROVEN)
     if "tls-server-name" in cluster or "proxy-url" in cluster:
         raise SnapshotError(REASON_TLS_VERIFICATION_UNPROVEN)
-    contents: dict[str, bytes | None] = {}
-    for kind, field, name in _FILE_FIELDS:
-        entry, base_dir = (cluster, cluster_base_dir) if kind == "cluster" else (user, user_base_dir)
-        contents[name] = _field_content(entry, field, base_dir, size_limit)
-    username = user.get("username")
-    password = user.get("password")
-    return SpokeSnapshot(
-        context_name=context_name,
-        server=server,
-        ca=contents["ca"],
-        cert=contents["cert"],
-        key=contents["key"],
-        token=_token(user, user_base_dir, size_limit),
-        username=username if isinstance(username, str) else None,
-        password=password if isinstance(password, str) else None,
-        source=source,
-    )
+
+
+def _check_user(user, user_reference: str | None):
+    if user is None and user_reference:
+        raise SnapshotError(REASON_CREDENTIAL_UNSUPPORTED)
+    user = user or {}
+    if "exec" in user:
+        raise SnapshotError(REASON_EXEC_CREDENTIAL_UNSUPPORTED)
+    if "auth-provider" in user:
+        raise SnapshotError(REASON_AUTH_PROVIDER_UNSUPPORTED)
+    if "username" in user or "password" in user:
+        # A malformed pair would otherwise be dropped, leaving an anonymous client.
+        username, password = user.get("username"), user.get("password")
+        if not (isinstance(username, str) and username and isinstance(password, str) and password):
+            raise SnapshotError(REASON_CREDENTIAL_UNSUPPORTED)
+    return user
 
 
 def new_private_dir() -> str:
@@ -221,7 +252,13 @@ def new_private_dir() -> str:
 
 
 def remove_private_dir(path: str) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+    """Remove the materialized credentials; an already-absent directory is fine, nothing else is."""
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise SnapshotError(REASON_CREDENTIAL_CLEANUP_FAILED) from None
 
 
 def _write_private(directory: str, content: bytes) -> str:
@@ -290,8 +327,17 @@ def build_api_client(snapshot: SpokeSnapshot, private_dir: str, api_url: str):
         or configuration.key_file != user.get("client-key")
     ):
         raise SnapshotError(REASON_CLIENT_CONSTRUCTION_FAILED)
+    # The effective authentication is exactly the captured one: the token, else the basic
+    # pair, else none (certificate-only or anonymous).
     bearer = (configuration.auth_settings().get("BearerToken") or {}).get("value")
-    if snapshot.token is not None and bearer != f"Bearer {snapshot.token}":
+    if snapshot.token is not None:
+        expected = f"Bearer {snapshot.token}"
+    elif snapshot.username is not None and snapshot.password is not None:
+        pair = f"{snapshot.username}:{snapshot.password}".encode()
+        expected = "Basic " + base64.b64encode(pair).decode()
+    else:
+        expected = None
+    if bearer != expected:
         raise SnapshotError(REASON_CLIENT_CONSTRUCTION_FAILED)
     if not normalized_equal(configuration.host, api_url):
         raise SnapshotError(REASON_CLIENT_ENDPOINT_MISMATCH)

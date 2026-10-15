@@ -145,6 +145,9 @@ class PostActivationVerification:
         # directory that holds this run's materialized spoke credentials.
         self._kubeconfig_sources: Dict[Tuple[str, str], str] = {}
         self._spoke_material_dir: Optional[str] = None
+        # Clusters whose bootstrap secret or klusterlet this run actually changed; a set add is
+        # atomic, so remediation workers record progress here even when they later fail.
+        self._klusterlet_changed: set = set()
 
     def _step(self, step_name: str) -> AbstractContextManager:
         """Guard one step; a dry-run consults completion markers but never records one.
@@ -1043,16 +1046,15 @@ class PostActivationVerification:
             # thread, so wait for bounded API calls to exit before reporting.
             executor.shutdown(wait=True, cancel_futures=True)
 
-        # A worker that finished after its timeout is still a failure, but what it really
-        # did is reported, never the placeholder (amendment §2.8).
-        for future, (cluster_name, _fallback) in fix_future_fallbacks.items():
-            if cluster_name in fix_failed and future.done() and not future.cancelled() and future.exception() is None:
-                if future.result()[1]:
-                    logger.warning(
-                        "Klusterlet remediation for %s completed after the worker timeout: the cluster was "
-                        "changed, but it is reported as failed and must be re-verified",
-                        cluster_name,
-                    )
+        # A failed remediation - including one that finished after its timeout - reports what
+        # it really changed, never the placeholder (amendment §2.8).
+        for cluster_name in fix_failed:
+            if cluster_name in self._klusterlet_changed:
+                logger.warning(
+                    "Klusterlet remediation for %s changed the cluster before it was reported as failed "
+                    "(including a worker that finished after its timeout); it must be re-verified",
+                    cluster_name,
+                )
         return fixed, fix_failed
 
     def _recheck_klusterlet_target(
@@ -1207,9 +1209,29 @@ class PostActivationVerification:
         self._spoke_material_dir = new_private_dir()
         try:
             self._verify_klusterlet_targets(kubeconfig_data)
-        finally:
-            remove_private_dir(self._spoke_material_dir)
-            self._spoke_material_dir = None
+        except BaseException:
+            self._discard_spoke_material(primary_error=True)
+            raise
+        self._discard_spoke_material(primary_error=False)
+
+    def _discard_spoke_material(self, primary_error: bool) -> None:
+        """Remove this run's materialized credentials; a failure is never silent.
+
+        It fails the step, or - when the step is already failing - is logged without
+        replacing that primary error.
+        """
+        directory, self._spoke_material_dir = self._spoke_material_dir, None
+        if directory is None:
+            return
+        try:
+            remove_private_dir(directory)
+        except SnapshotError as cleanup:
+            if primary_error:
+                logger.error("Could not remove klusterlet credential material at %s (%s)", directory, cleanup.reason)
+                return
+            raise SwitchoverError(
+                f"Could not remove klusterlet credential material at {directory} ({cleanup.reason}); remove it manually"
+            ) from None
 
     def _verify_klusterlet_targets(self, kubeconfig_data: Dict) -> None:
         cluster_targets = self._klusterlet_cluster_targets()
@@ -1354,16 +1376,30 @@ class PostActivationVerification:
         user_name = body.get("user") or None
         cluster = next(entry for entry in kubeconfig_data.get("clusters", []) if entry["name"] == cluster_name)
         user = next((entry for entry in kubeconfig_data.get("users", []) if entry["name"] == user_name), None)
-        return build_snapshot(
-            context_name,
-            cluster.get("cluster") or {},
-            self._source_dir("clusters", cluster_name),
-            (user.get("user") or {}) if user is not None else None,
-            self._source_dir("users", user_name) if user_name else "",
-            user_name,
-            MAX_KUBECONFIG_SIZE,
-            source=self._kubeconfig_sources.get(("contexts", context_name), ""),
-        )
+        try:
+            return build_snapshot(
+                context_name,
+                cluster.get("cluster") or {},
+                self._source_dir("clusters", cluster_name),
+                (user.get("user") or {}) if user is not None else None,
+                self._source_dir("users", user_name) if user_name else "",
+                user_name,
+                MAX_KUBECONFIG_SIZE,
+                source=self._kubeconfig_sources.get(("contexts", context_name), ""),
+            )
+        except SnapshotError as refusal:
+            # Locate the refused entry for the operator: kind, name and source, never content.
+            name = cluster_name if refusal.entry == "cluster" else user_name
+            section = "clusters" if refusal.entry == "cluster" else "users"
+            logger.warning(
+                "Kubeconfig %s %r (context %r, from %s) cannot build a spoke client: %s",
+                refusal.entry or "entry",
+                name,
+                context_name,
+                self._kubeconfig_sources.get((section, name or ""), "an unknown file"),
+                refusal.reason,
+            )
+            raise
 
     def _source_dir(self, section: str, name: Optional[str]) -> str:
         source = self._kubeconfig_sources.get((section, name or ""))
@@ -1471,6 +1507,7 @@ class PostActivationVerification:
                 body=body,
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
+            self._klusterlet_changed.add(cluster_name)
             logger.debug("Patched bootstrap-hub-kubeconfig secret on %s", cluster_name)
             return
         except ApiException as e:
@@ -1483,6 +1520,7 @@ class PostActivationVerification:
                 body=_secret_create_body(body),
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
+            self._klusterlet_changed.add(cluster_name)
             logger.debug("Created bootstrap-hub-kubeconfig secret on %s", cluster_name)
         except ApiException as e:
             if e.status != 409:
@@ -1493,6 +1531,7 @@ class PostActivationVerification:
                 body=body,
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
+            self._klusterlet_changed.add(cluster_name)
             logger.debug("Patched bootstrap-hub-kubeconfig secret on %s after create conflict", cluster_name)
 
     def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str, namespace: str) -> None:
@@ -1558,6 +1597,7 @@ class PostActivationVerification:
                 body=patch,
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
+            self._klusterlet_changed.add(cluster_name)
             logger.debug("Triggered klusterlet restart on %s", cluster_name)
         except ApiException as e:
             logger.warning("Failed to restart klusterlet on %s: status=%s reason=%s", cluster_name, e.status, e.reason)

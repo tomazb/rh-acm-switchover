@@ -256,3 +256,56 @@ def test_a_client_that_does_not_prove_its_material_is_refused(impl, tmp_path, mo
         assert excinfo.value.reason == reason
     finally:
         impl.remove_private_dir(private)
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_a_fifo_credential_is_refused_without_blocking(impl, tmp_path):
+    """Codex PR 3: a writerless FIFO must not hang the open before its type is checked."""
+    fifo = tmp_path / "token"
+    os.mkfifo(fifo)
+    with pytest.raises(impl.SnapshotError) as excinfo:
+        impl.build_snapshot("c", {"server": SERVER}, str(tmp_path), {"tokenFile": "token"}, str(tmp_path), "u", LIMIT)
+    assert (excinfo.value.reason, excinfo.value.entry) == ("credential_not_regular", "user")
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+@pytest.mark.parametrize(
+    ("cluster", "user", "entry"),
+    [
+        ({"server": "http://h:6443"}, {"token": "t"}, "cluster"),
+        ({"server": SERVER, "certificate-authority": "absent.crt"}, {"token": "t"}, "cluster"),
+        ({"server": SERVER}, {"exec": {"command": "x"}}, "user"),
+        ({"server": SERVER}, {"client-key": "absent.key"}, "user"),
+    ],
+)
+def test_a_refusal_names_the_entry_it_concerns(impl, tmp_path, cluster, user, entry):
+    with pytest.raises(impl.SnapshotError) as excinfo:
+        impl.build_snapshot("c", cluster, str(tmp_path), user, str(tmp_path), "u", LIMIT)
+    assert excinfo.value.entry == entry
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_a_cleanup_failure_is_never_silent(impl, tmp_path, monkeypatch):
+    private = impl.new_private_dir()
+    monkeypatch.setattr(impl.shutil, "rmtree", lambda path: (_ for _ in ()).throw(PermissionError("denied")))
+    with pytest.raises(impl.SnapshotError) as excinfo:
+        impl.remove_private_dir(private)
+    assert excinfo.value.reason == "credential_cleanup_failed"
+    monkeypatch.undo()
+    impl.remove_private_dir(private)
+    impl.remove_private_dir(private)  # already absent is fine
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_basic_auth_is_proven_after_construction(impl, tmp_path):
+    snapshot = impl.build_snapshot(
+        "c", {"server": SERVER}, str(tmp_path), {"username": "admin", "password": "pw"}, str(tmp_path), "u", LIMIT
+    )
+    private = impl.new_private_dir()
+    try:
+        configuration = impl.build_api_client(snapshot, private, SERVER).configuration
+        assert (
+            configuration.auth_settings()["BearerToken"]["value"] == "Basic " + base64.b64encode(b"admin:pw").decode()
+        )
+    finally:
+        impl.remove_private_dir(private)
