@@ -313,5 +313,8 @@ def test_verify_klusterlet_requires_every_remediated_cluster_to_re_verify():
     )
     when = _when_text(fail_task)
 
-    assert "_klusterlet_remediation_result.remediated_clusters" in when
-    assert "difference" in when and "verified_clusters" in when
+    compact = " ".join(when.split())
+    assert (
+        "(_klusterlet_remediation_result.remediated_clusters | default([]))"
+        " | difference((_klusterlet_post_remediation_probe_result | default({})).verified_clusters | default([]))"
+    ) in compact
