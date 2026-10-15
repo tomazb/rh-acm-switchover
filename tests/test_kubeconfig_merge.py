@@ -330,3 +330,13 @@ def test_a_conflict_in_one_kind_is_reported_with_its_kind(tmp_path):
         load_merged_kubeconfig(f"{a}:{b}", DEFAULT_KUBECONFIG_SIZE)
     assert "user 'u' at" in str(excinfo.value)
     assert "one" not in str(excinfo.value).replace(str(tmp_path), "")
+
+
+def test_a_yaml_set_is_refused_with_its_position(tmp_path):
+    """Amendment §3: `!!set` has no defined duplicate comparison; the refusal names where it is."""
+    path = _write(tmp_path / "set.yaml", "clusters: []\nusers: !!set {a, b}\n")
+    with pytest.raises(SwitchoverError) as excinfo:
+        load_merged_kubeconfig(path, DEFAULT_KUBECONFIG_SIZE)
+    assert str(excinfo.value) == (
+        f"kubeconfig_load_failed (structure_invalid): {path} line 2 column 8 (YAML sets are not supported)"
+    )
