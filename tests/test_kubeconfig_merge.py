@@ -196,6 +196,37 @@ def test_a_huge_limit_never_preallocates_or_crashes(tmp_path):
     assert load_merged_kubeconfig(small, 2**62)["contexts"][0]["name"] == "a"
 
 
+def test_no_read_ever_asks_for_more_than_one_chunk(tmp_path, monkeypatch):
+    """The bound holds per read call: an oversized file is never read whole into memory."""
+    import lib.kubeconfig_merge as merge
+
+    big = tmp_path / "big.yaml"
+    big.write_bytes(b"#" * (512 * 1024))
+    requested = []
+    real_open = open
+
+    class Recording:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+            return False
+
+        def read(self, size=-1):
+            requested.append(size)
+            return self._handle.read(size)
+
+    monkeypatch.setattr(merge, "open", lambda path, mode="r": Recording(real_open(path, mode)), raising=False)
+    with pytest.raises(SwitchoverError, match=r"\(oversized\)"):
+        load_merged_kubeconfig(str(big), 100 * 1024)
+    assert requested and all(0 < size <= 64 * 1024 for size in requested), requested
+    assert sum(requested) <= 100 * 1024 + 64 * 1024
+
+
 def test_a_pipe_is_bounded_without_preallocating(tmp_path):
     """A FIFO (`KUBECONFIG=<(oc config view --raw)`) has no size to stat; the read is chunked."""
     fifo = tmp_path / "fifo"
