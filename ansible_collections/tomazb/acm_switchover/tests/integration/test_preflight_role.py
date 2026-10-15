@@ -746,8 +746,10 @@ def test_an_unprovable_primary_inventory_fails_preflight_instead_of_deriving_zer
     completed, report = run_preflight_fixture(
         "passive_success.yml",
         overrides={
-            "acm_switchover_test_overrides": {"fixture_kubeconfig_server": fixture_kubernetes_api_server},
-            "acm_primary_managed_clusters_info": mc_read,
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+                "migration_reads": {"primary_managedclusters": mc_read},
+            },
         },
     )
     assert completed.returncode != 0
@@ -764,11 +766,15 @@ def test_a_complete_primary_inventory_derives_the_expectation_in_preflight(
     completed, report = run_preflight_fixture(
         "passive_success.yml",
         overrides={
-            "acm_switchover_test_overrides": {"fixture_kubeconfig_server": fixture_kubernetes_api_server},
-            "acm_primary_managed_clusters_info": {
-                "read_status": "ok",
-                "resources": [{"metadata": {"name": "cluster-a"}}, {"metadata": {"name": "local-cluster"}}],
-                "resource_version": "1",
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+                "migration_reads": {
+                    "primary_managedclusters": {
+                        "read_status": "ok",
+                        "resources": [{"metadata": {"name": "cluster-a"}}, {"metadata": {"name": "local-cluster"}}],
+                        "resource_version": "1",
+                    }
+                },
             },
         },
     )

@@ -1,9 +1,10 @@
 ---
-# One strict read of the destination hub for the R4-04 activation transaction, published
+# One strict read of a hub (the destination hub unless _acm_read.hub names another), published
 # as {read_status, resources, resource_version} in the fact named by _acm_read_fact.
 #
 # Inputs: _acm_read (key, read_mode, api_version, kind, resource_name, and namespace or
-# name where they apply) and _acm_read_fact. A non-live test may pre-seed the result in
+# name where they apply; hub defaults to secondary, the destination hub, and preflight passes
+# primary) and _acm_read_fact. A non-live test may pre-seed the result in
 # acm_switchover_test_overrides.migration_reads[key]; that seam is honoured only in the
 # dry_run and validate modes, so an executing run always reads the live hub.
 
@@ -24,8 +25,8 @@
     namespace: "{{ _acm_read.namespace | default(omit) }}"
     name: "{{ _acm_read.name | default(omit) }}"
     request_timeout: "{{ _acm_read.request_timeout | default(omit) }}"
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    kubeconfig: "{{ acm_switchover_hubs[_acm_read.hub | default('secondary')].kubeconfig }}"
+    context: "{{ acm_switchover_hubs[_acm_read.hub | default('secondary')].context }}"
   register: _acm_live_read
   no_log: true
   when: not (_acm_read_overridden | bool)

@@ -254,14 +254,12 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     }
     vars_payload.setdefault("acm_primary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
-    # A strict acm_k8s_read_outcome result (#340): the preflight derivation refuses any other shape,
-    # and an executing run refuses a pre-supplied one, so only non-live fixtures are seeded.
-    if execution_mode in {"validate", "dry_run"}:
-        vars_payload.setdefault(
-            "acm_primary_managed_clusters_info", {"read_status": "ok", "resources": [], "resource_version": "1"}
-        )
     _seed_phase_local_facts(vars_payload)
     _seed_migration_reads(vars_payload, execution_mode)
+    # The strict primary ManagedCluster read preflight derives the expectation from (#340), through
+    # the shared strict-read seam that roles honour only in dry_run and validate.
+    if execution_mode in {"validate", "dry_run"}:
+        test_overrides.setdefault("migration_reads", {}).setdefault("primary_managedclusters", _ok([]))
 
     for backup in vars_payload.get("acm_primary_backups_info", {}).get("resources", []):
         status = backup.get("status")

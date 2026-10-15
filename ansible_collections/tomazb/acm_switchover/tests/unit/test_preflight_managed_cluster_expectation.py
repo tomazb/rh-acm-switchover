@@ -31,6 +31,7 @@ except ImportError:  # pragma: no cover - ansible-core < 2.19
 
 
 ROLE_TASKS = pathlib.Path(__file__).resolve().parents[2] / "roles" / "preflight" / "tasks"
+STRICT_READ = pathlib.Path(__file__).resolve().parents[2] / "roles" / "activation" / "tasks" / "strict_read.yml"
 WAIT_FOR_RESTORE = (
     pathlib.Path(__file__).resolve().parents[2] / "roles" / "activation" / "tasks" / "wait_for_restore.yml"
 )
@@ -111,73 +112,78 @@ def test_an_unprovable_inventory_is_a_refused_decision_not_zero_names(monkeypatc
 
 
 class TestPrimaryManagedClusterDiscovery:
+    """The primary read goes through the shared strict-read seam with the primary hub."""
+
     def setup_method(self):
         self.tasks = yaml.safe_load((ROLE_TASKS / "discover_resources.yml").read_text()) or []
-        self.read = next(t for t in self.tasks if t.get("register") == "_acm_primary_managed_clusters_read")
-        self.publish = next(
+        self.read = next(
             t
             for t in self.tasks
-            if "_acm_primary_managed_clusters_derivation_read" in (t.get("ansible.builtin.set_fact") or {})
+            if ((t.get("vars") or {}).get("_acm_read") or {}).get("key") == "primary_managedclusters"
         )
+        self.seam = yaml.safe_load(STRICT_READ.read_text()) or []
 
-    def test_the_primary_inventory_is_one_strict_list(self):
-        params = self.read["tomazb.acm_switchover.acm_k8s_read_outcome"]
-        assert self.read.get("no_log") is True
-        assert params["read_mode"] == "list"
-        assert params["api_version"] == "cluster.open-cluster-management.io/v1"
-        assert params["kind"] == "ManagedCluster" and params["resource_name"] == "managedclusters"
-        assert "primary" in params["kubeconfig"] and "primary" in params["context"]
+    def test_the_primary_inventory_is_one_strict_list_through_the_shared_seam(self):
+        assert self.read["ansible.builtin.include_tasks"].endswith("/activation/tasks/strict_read.yml")
+        spec = self.read["vars"]["_acm_read"]
+        assert spec == {
+            "key": "primary_managedclusters",
+            "hub": "primary",
+            "read_mode": "list",
+            "api_version": "cluster.open-cluster-management.io/v1",
+            "kind": "ManagedCluster",
+            "resource_name": "managedclusters",
+        }
+        assert self.read["vars"]["_acm_read_fact"] == "_acm_primary_managed_clusters_derivation_read"
+        assert "restore_only" in _when_text(self.read)
         assert not [t for t in self.tasks if (t.get("kubernetes.core.k8s_info") or {}).get("kind") == "ManagedCluster"]
 
+    @pytest.mark.parametrize(("hub", "expected"), [("primary", "/kc/primary"), (None, "/kc/secondary")])
+    def test_the_seam_reads_the_named_hub_and_defaults_to_the_destination(self, hub, expected):
+        (read,) = [t for t in self.seam if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
+        assert read.get("no_log") is True
+        spec = {"key": "k"} if hub is None else {"key": "k", "hub": hub}
+        variables = {
+            "_acm_read": spec,
+            "acm_switchover_hubs": {
+                "primary": {"kubeconfig": "/kc/primary", "context": "ctx-primary"},
+                "secondary": {"kubeconfig": "/kc/secondary", "context": "ctx-secondary"},
+            },
+        }
+        templar = Templar(loader=DataLoader(), variables=variables)
+        params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
+        assert templar.template(trust_as_template(params["kubeconfig"])) == expected
+        assert templar.template(trust_as_template(params["context"])) == expected.replace("/kc/", "ctx-")
+
     @pytest.mark.parametrize(
-        ("restore_only", "mode", "seeded", "reads"),
+        ("mode", "seeded", "overridden"),
         [
-            (False, "execute", False, True),
-            (False, "execute", True, True),
-            (False, "dry_run", False, True),
-            (False, "dry_run", True, False),
-            (False, "validate", True, False),
-            (True, "execute", False, False),
-            (True, "dry_run", False, False),
+            ("execute", True, False),
+            ("execute", False, False),
+            ("dry_run", True, True),
+            ("validate", True, True),
+            ("dry_run", False, False),
         ],
     )
-    def test_the_read_condition_truth_table(self, restore_only, mode, seeded, reads):
-        """An executing run always reads; only a non-live fixture may stand in; restore-only never reads."""
+    def test_only_a_non_live_run_honours_a_pre_seeded_primary_read(self, mode, seeded, overridden):
+        """An executing run always reads the live primary; a fixture stands in only in dry_run/validate."""
+        resolve = self.seam[0]["ansible.builtin.set_fact"]["_acm_read_overridden"]
+        overrides = {"migration_reads": {"primary_managedclusters": {"read_status": "ok"}}} if seeded else {}
         variables = {
-            "acm_switchover_operation": {"restore_only": restore_only},
+            "_acm_read": {"key": "primary_managedclusters"},
             "acm_switchover_execution": {"mode": mode},
+            "acm_switchover_test_overrides": overrides,
         }
-        if seeded:
-            variables["acm_primary_managed_clusters_info"] = {"read_status": "ok", "resources": []}
-        assert _holds(self.read["when"], variables) is reads
-
-    def _derivation_read(self, live, seeded):
-        """Render the published derivation input as Ansible would after the read task."""
-        variables = {"_acm_primary_managed_clusters_read": live}
-        if seeded is not None:
-            variables["acm_primary_managed_clusters_info"] = seeded
         templar = Templar(loader=DataLoader(), variables=variables)
-        expression = self.publish["ansible.builtin.set_fact"]["_acm_primary_managed_clusters_derivation_read"]
-        return templar.template(trust_as_template(expression))
+        assert (str(templar.template(trust_as_template(resolve))).strip() == "True") is overridden
 
-    def test_an_executing_run_derives_from_its_live_read_even_with_a_pre_supplied_fact(self):
-        """Extra vars outrank registered results, so the derivation input in an executing run is
-        the live register itself, never a pre-supplied acm_primary_managed_clusters_info."""
-        live = {"changed": False, "read_status": "error", "resources": [], "resource_version": None, "invocation": {}}
-        seeded = {"read_status": "ok", "resources": [], "resource_version": "1"}
-        assert self._derivation_read(live, seeded) == {
-            "read_status": "error",
-            "resources": [],
-            "resource_version": None,
-        }
-
-    def test_a_non_live_fixture_read_is_the_derivation_input_when_the_read_is_skipped(self):
-        seeded = {"read_status": "ok", "resources": [{"metadata": {"name": "a"}}], "resource_version": "1"}
-        assert self._derivation_read({"skipped": True, "changed": False}, seeded) == seeded
-
-    def test_the_published_read_never_carries_the_module_arguments(self):
-        live = {"read_status": "ok", "resources": [], "resource_version": "3", "invocation": {"module_args": {}}}
-        assert set(self._derivation_read(live, None)) == {"read_status", "resources", "resource_version"}
+    def test_the_other_preflight_checks_see_the_strict_read(self):
+        publish = next(
+            t for t in self.tasks if "acm_primary_managed_clusters_info" in (t.get("ansible.builtin.set_fact") or {})
+        )
+        assert self.tasks.index(publish) > self.tasks.index(self.read)
+        value = publish["ansible.builtin.set_fact"]["acm_primary_managed_clusters_info"]
+        assert value == "{{ _acm_primary_managed_clusters_derivation_read }}"
 
 
 class TestDerivation:

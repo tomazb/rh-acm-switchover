@@ -14,6 +14,10 @@
 ## Notes
 
 - The collection public API is grouped variables, not a flat CLI flag layer.
+- Result facts, discovery facts and internal `_acm_*` variables are outputs, not inputs. Ansible
+  gives extra vars precedence over every play variable, so setting one of them can override a
+  validation; doing so is unsupported. The strict-read test seam
+  (`acm_switchover_test_overrides.migration_reads`) is honoured only in `dry_run`/`validate`.
 - Checkpoint files are collection-owned JSON state and are not interchangeable with Python CLI state files.
 
 ## Core Input Variables

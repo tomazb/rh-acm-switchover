@@ -180,20 +180,37 @@ with the same code, `inventory_unreadable`. The Python caller is the coordinator
 Collection caller is the module operation.
 
 The two share no code. The Collection's primary ManagedCluster discovery read in
-`roles/preflight/tasks/discover_resources.yml` becomes `acm_k8s_read_outcome`. The read
-registers privately with `no_log`. Its published outcome is `{read_status, resources,
-resource_version}` and never echoes module arguments. That outcome becomes the derivation
-input and `acm_primary_managed_clusters_info` for the other preflight checks. The two
-managed-clusters backup checks report `error` on an unreadable outcome instead of passing over
-an empty one.
+`roles/preflight/tasks/discover_resources.yml` goes through the shared strict-read seam
+`roles/activation/tasks/strict_read.yml`, which gains a `hub` parameter defaulting to the
+secondary. The read uses `hub: primary` and key `primary_managedclusters`. That seam already:
 
-The pre-existing pre-seed seam is narrowed to non-live modes. An executing run always reads
-the live primary and derives from that read's own register. Extra vars outrank registered
-results and `set_fact`, so an extra var named `acm_primary_managed_clusters_info` can never
-stand in for the derivation input. This follows the AGENTS execution-time discovery rule: the
-derived expectation decides which destination state the mutating phases accept. Python always
-reads live. The same execute-mode seam on the other discovery facts is pre-existing and
-tracked separately; this slice does not change it.
+- registers privately with `no_log`;
+- publishes only `{read_status, resources, resource_version}`;
+- honours a pre-seeded `acm_switchover_test_overrides.migration_reads` entry only in
+  dry_run/validate.
+
+So an executing run always reads the live primary, as Python always does. This follows the
+AGENTS execution-time discovery rule: the derived expectation decides which destination state
+the mutating phases accept. The published outcome is the derivation input, and it is also
+`acm_primary_managed_clusters_info` for the other preflight checks.
+
+The two managed-clusters backup checks are unchanged. In both form factors they still consume
+the ManagedCluster inventory fail-open, which is pre-existing behavior outside this slice. They
+cannot turn an unreadable inventory into a passing preflight, because the derivation's critical
+result fails preflight first. Moving them to the strict authority is a paired change for both
+form factors (#347). The execute-mode pre-seed seam on the other discovery facts
+is likewise pre-existing and tracked separately (#346).
+
+**Trust boundary.** Extra vars are the operator's input channel, and Ansible gives them
+precedence over every play variable: registered results, `set_fact`, and private
+`_acm_*` names alike. No play-level guard can therefore be immune to one. A guard variable is
+itself shadowable. More directly, an operator who controls extra vars can set the derived
+fact `acm_switchover_expected_managed_cluster_names` to `[]` without touching the read at all.
+The collection's supported input surface is the grouped `acm_switchover_*` namespaces
+(`variable-reference.md`). Result facts, discovery facts and `_acm_*` internals are outputs,
+and setting them is unsupported. This slice guarantees what is enforceable in a playbook:
+every executing run performs the live strict read, and no test seam is honoured outside
+dry_run/validate.
 
 Parity tests hold the two derivation functions and the two activation decisions equal over
 shared cases. Required cases cover every row of both tables above, plus pagination

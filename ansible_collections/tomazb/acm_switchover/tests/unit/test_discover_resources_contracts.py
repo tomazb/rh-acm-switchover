@@ -204,5 +204,10 @@ class TestPostActivationDiscoverResources:
         )
         (read,) = [t for t in seam if "tomazb.acm_switchover.acm_k8s_read_outcome" in t]
         params = read["tomazb.acm_switchover.acm_k8s_read_outcome"]
-        assert params["kubeconfig"] == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        assert params["context"] == "{{ acm_switchover_hubs.secondary.context }}"
+        # The shared seam reads the hub its caller names and defaults to the secondary (#340 adds
+        # preflight's primary read); post-activation never names another hub.
+        assert params["kubeconfig"] == "{{ acm_switchover_hubs[_acm_read.hub | default('secondary')].kubeconfig }}"
+        assert params["context"] == "{{ acm_switchover_hubs[_acm_read.hub | default('secondary')].context }}"
+        post_activation_tasks = POST_ACTIVATION_DISCOVER.parent
+        for path in post_activation_tasks.glob("*.yml"):
+            assert "hub: primary" not in path.read_text(), path.name
