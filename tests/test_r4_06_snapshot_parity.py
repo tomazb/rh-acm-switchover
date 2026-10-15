@@ -218,3 +218,41 @@ def test_a_loader_failure_is_a_sanitized_construction_failure(impl, tmp_path, mo
         assert "SECRETLEAK" not in str(excinfo.value) and excinfo.value.__suppress_context__
     finally:
         impl.remove_private_dir(private)
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+@pytest.mark.parametrize(
+    ("doctor", "reason"),
+    [
+        (lambda cfg: setattr(cfg, "verify_ssl", False), "tls_verification_unproven"),
+        (lambda cfg: setattr(cfg, "ssl_ca_cert", "/somewhere/else/ca.crt"), "client_construction_failed"),
+        (lambda cfg: setattr(cfg, "cert_file", "/somewhere/else/client.crt"), "client_construction_failed"),
+        (lambda cfg: setattr(cfg, "key_file", "/somewhere/else/client.key"), "client_construction_failed"),
+        (
+            lambda cfg: (
+                setattr(cfg, "refresh_api_key_hook", None),
+                cfg.api_key.update({"BearerToken": "Bearer other", "authorization": "Bearer other"}),
+            ),
+            "client_construction_failed",
+        ),
+    ],
+    ids=["verify-off", "foreign-ca", "foreign-cert", "foreign-key", "other-token"],
+)
+def test_a_client_that_does_not_prove_its_material_is_refused(impl, tmp_path, monkeypatch, doctor, reason):
+    """The post-construction assertions are what prove the client uses the captured content."""
+    _source, snapshot = _file_backed(impl, tmp_path)
+    real = kube_config.new_client_from_config_dict
+
+    def doctored(*args, **kwargs):
+        api_client = real(*args, **kwargs)
+        doctor(api_client.configuration)
+        return api_client
+
+    monkeypatch.setattr(kubernetes.config, "new_client_from_config_dict", doctored)
+    private = impl.new_private_dir()
+    try:
+        with pytest.raises(impl.SnapshotError) as excinfo:
+            impl.build_api_client(snapshot, private, SERVER)
+        assert excinfo.value.reason == reason
+    finally:
+        impl.remove_private_dir(private)

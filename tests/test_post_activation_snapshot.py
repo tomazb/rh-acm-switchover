@@ -320,3 +320,29 @@ def test_a_remediation_finishing_after_its_timeout_is_reported_and_outlives_clea
     assert seen_material == [True]
     assert "completed after the worker timeout" in caplog.text
     assert not os.path.exists(built.private_dirs[0])
+
+
+def test_a_timed_out_check_worker_keeps_its_material_until_it_finishes(tmp_path, spoke_dir, verifier, monkeypatch):
+    """The check executor waits for every worker before the credential directory is removed."""
+    import time
+
+    import modules.post_activation as post_activation_module
+
+    pav, _state = verifier(_write_kubeconfig(tmp_path), [_managed_cluster("a")])
+    built = Constructions(monkeypatch)
+    spoke = Spoke(NEW_HUB)
+    seen = []
+
+    def slow_read(read_count):
+        time.sleep(0.3)
+        seen.append(bool(os.listdir(built.private_dirs[0])) if os.path.isdir(built.private_dirs[0]) else False)
+
+    spoke.on_read = slow_read
+    real_wait = post_activation_module.wait
+    monkeypatch.setattr(post_activation_module, "wait", lambda futures, timeout: real_wait(futures, timeout=0.05))
+
+    with pytest.raises(SwitchoverError, match="timed out"):
+        _run(pav, spoke)
+
+    assert seen and all(seen)
+    assert not os.path.exists(built.private_dirs[0])
