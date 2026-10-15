@@ -101,6 +101,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Klusterlet verification no longer skips silently on a bad kubeconfig (R4-06 PR 1 / GLM-H3, #349,
+  Python).** Post-activation used to skip the klusterlet wrong-hub gate, report success and
+  checkpoint the step whenever the local kubeconfig could not be loaded or the new hub's API server
+  could not be found. Missing, unreadable, oversized or invalid files were dropped, and one bad file
+  could empty the whole merge. The load is now fail-closed (design 2026-07-29 §1):
+  - `KUBECONFIG` is read left to right, each file once;
+  - every file is bounded by the 10 MiB limit, which `ACM_KUBECONFIG_MAX_SIZE` can no longer
+    disable (`0` and negative values now mean the default, and the internal `max_size=0` bypass is
+    gone);
+  - YAML with duplicate keys and structurally invalid documents are refused;
+  - any failure aborts the step with a sanitized reason code (`kubeconfig_load_failed (missing)` and
+    so on), without parser text or key material.
+
+  `verify()` then fails, and the step stays uncheckpointed so a resume re-runs it. A stale or missing
+  `KUBECONFIG` entry now fails post-activation instead of being ignored. The collection already
+  failed closed here. Fake- and fixture-backed coverage only; not live certification evidence.
 - **ManagedCluster expectation safety (#340, both form factors).** Preflight derives the expected
   ManagedCluster names/count only from a positively complete strict primary inventory
   (`list_managed_clusters_strict` / `acm_k8s_read_outcome`); an unreadable or unserved API, an
