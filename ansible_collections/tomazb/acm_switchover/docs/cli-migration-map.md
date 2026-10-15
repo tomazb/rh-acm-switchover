@@ -111,6 +111,12 @@ decommission, so neither flow uses this normal two-hub predicate.
 | Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires explicit non-empty primary kubeconfig/context plus `acm_switchover_decommission.confirmed: true` or `mode: dry_run`; MultiClusterHub teardown records the target UID and the captured operator identity before a UID-guarded delete, then classifies every remaining ACM Pod by owner chain up to the recorded operator Deployment, and fails closed on drain timeout, on an unreadable pass, or on a recorded identity that no longer holds — the same contract as the Python CLI (#290), except for two operator-approved, fail-closed #317 strict-read divergences (built-in named reads, and custom-resource named reads from a stale cached route; the former malformed-`groupVersion` divergence was aligned by #321) recorded in [coexistence.md](coexistence.md). Its RBAC surface now also requires the `open-cluster-management` reads `clusterserviceversions` (get, list), `deployments` (get) and `replicasets` (get) plus `multiclusterhubs` get on the decommission extension; see `docs/deployment/rbac-requirements.md`. MultiClusterObservability deletion goes through a UID-preconditioned guarded delete with a durable per-resource phase record and a fresh completion proof; the standalone playbook declares `acm_switchover_standalone_decommission: true`, never evaluates the destination-observability gate, and refuses a truthy `acknowledge_observability_not_migrated` in `pre_tasks` before any read |
 | RBAC bootstrap | dual-supported | `playbooks/rbac_bootstrap.yml` | Replaces `scripts/setup-rbac.sh` |
 
+Klusterlet endpoint identity (R4-06): the CLI finds each managed cluster's context in
+`KUBECONFIG` by the ManagedCluster API URL; the collection takes it from
+`acm_switchover_managed_clusters.<cluster>.kubeconfig`/`.context` and proves that the
+context's server is that URL. Both apply the same endpoint rule and reason codes; see
+[coexistence.md](coexistence.md#r4-06-klusterlet-endpoint-identity).
+
 ## Phase 2 Capability Status
 
 | Python / CLI Capability | Collection Phase 2 Status | Notes |

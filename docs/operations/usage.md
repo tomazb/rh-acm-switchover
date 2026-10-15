@@ -348,25 +348,105 @@ Clusters without a managed-cluster kubeconfig are explicitly skipped for direct
 klusterlet probing/remediation. That skip is non-fatal only when the
 ManagedCluster readiness checks already passed; if the same cluster remains not
 joined or unavailable, the post-activation ManagedCluster gate still fails.
-Python post-activation also treats missing klusterlet hub secrets and malformed
-or incomplete embedded kubeconfig data as non-fatal skips, but managed-cluster
-client construction failures, non-404 secret API errors, transport failures, and
-unexpected probe exceptions now fail post-activation.
+Python post-activation also treats a missing klusterlet hub secret, a hub
+kubeconfig without a `server`, and unreadable embedded kubeconfig YAML as
+non-fatal skips (the collection reports unreadable embedded YAML as `failed`).
+A `server` that is present but empty, not a string, or not a valid URL is
+`endpoint_malformed` (below), not a skip. Managed-cluster client construction
+failures, non-404 secret API errors, transport failures, and unexpected probe
+exceptions fail post-activation.
+
+**Endpoint identity.** Before a managed cluster is inspected, both form factors
+prove which cluster they are about to reach and which hub that cluster should
+use:
+
+- The cluster's API URL is the first non-empty
+  `spec.managedClusterClientConfigs[].url` of its ManagedCluster, read fresh.
+  Without a usable URL the cluster fails with `endpoint_unavailable` (or
+  `endpoint_malformed`). No context is ever chosen from the cluster's name, and
+  nothing is inspected or changed.
+- The expected hub is the API server in the cluster's `<cluster>-import`
+  bootstrap kubeconfig on the new hub, which is the value remediation writes.
+  The Python CLI used to expect the server of `--secondary-context` instead.
+  Two consequences: a cluster with no usable import secret now fails with
+  `expected_endpoint_unavailable` (or `expected_endpoint_malformed`) instead of
+  passing; and a klusterlet that points at a genuinely different host from the
+  import secret is remediated, as the collection already did.
+- Endpoints are compared as complete normalized URLs: scheme, host
+  (case-insensitive, IPv6 in canonical form), port (a default port equals an
+  omitted one) and path (a trailing `/` is not significant). A URL with
+  userinfo, a query or fragment, an invalid port or host, or a bad percent
+  escape is rejected, and rejected values are never echoed in logs or results.
+- A klusterlet whose hub differs from the expected hub only in scheme, port or
+  path, or that the previous hostname-only comparison treated as the same hub
+  (for example two IPv6 literals in the same `2001:` block), is **unverified**,
+  with reason `endpoint_mismatch_unverified`. It is never reported verified and
+  never remediated automatically: it needs operator review, and there is no
+  bypass flag. Only a different host is `wrong_hub` and remediated.
+- Every spoke client must be bound to the proven URL before anything is read
+  through it; otherwise the cluster is unverified with `client_endpoint_mismatch`.
+- Any unverified, failed or timed-out cluster fails the step **before any
+  remediation in the run**, so a genuine wrong-hub cluster in the same run is not
+  remediated until every cluster is proven. The step is not recorded as
+  complete, and a resume re-evaluates every cluster.
+
+Python selects a spoke context from the validated `KUBECONFIG` merge: the
+context whose cluster `server` equals the cluster's API URL. Several contexts on
+one cluster entry (for example per-role users such as `managed1:operator` and
+`managed1:validator`) select the first in `KUBECONFIG` order. Two different
+cluster entries with the same server give `context_ambiguous`. A context with
+the same host but a different scheme, port or path gives
+`endpoint_mismatch_unverified`. No matching context at all remains the
+documented non-fatal skip.
+
+The collection never discovers contexts: `acm_switchover_managed_clusters` maps
+each cluster to one kubeconfig file and, optionally, a context. Every mapped
+file is validated like the Python merge. The selected context's server must equal
+the ManagedCluster's API URL, or the cluster fails with
+`target_identity_mismatch` (a different host) or `endpoint_mismatch_unverified`.
+Other per-cluster failures are `context_missing`, `context_ambiguous` (no context
+mapped and no `current-context`), `kubeconfig_duplicate_conflict`,
+`kubeconfig_load_failed (<reason>)` and `kubeconfig_path_unsupported` (a mapped
+path containing `:`). A mapping alone is never treated as proof of which cluster
+a context reaches.
+
+The collection's remediation reads the ManagedCluster URL and re-checks the hub
+in the same invocation, and changes only a cluster it has just found
+`wrong_hub`. A cluster that cluster verification reports as pending is no longer
+remediated for being pending. If any cluster in the batch is unproven, no
+cluster is changed: genuine wrong-hub peers report
+`remediation_blocked_by_unproven_cluster`.
+
+Recovery:
+
+- `endpoint_unavailable`: the ManagedCluster has not registered its API URL yet.
+  Check `oc get managedcluster <name> -o jsonpath='{.spec.managedClusterClientConfigs[*].url}'`,
+  wait for the klusterlet to report it, and re-run. In the collection you may
+  instead remove the cluster's `acm_switchover_managed_clusters` entry: the
+  cluster is then skipped, and the ManagedCluster readiness gate still applies.
+- `endpoint_mismatch_unverified`: compare the `server` in the klusterlet's
+  `hub-kubeconfig-secret` with the one in the `<cluster>-import` bootstrap
+  kubeconfig. If they name the same hub, correct whichever is wrong outside this
+  tool, then re-run.
+- `expected_endpoint_unavailable`: the new hub has no usable import secret for
+  the cluster yet. Wait for the import controller to create it, then re-run.
 
 The local kubeconfig that Python uses to find managed-cluster contexts is loaded
 fail-closed. Every file named in `KUBECONFIG` (or `~/.kube/config` when
 `KUBECONFIG` is unset) must exist, be readable, be at most the size limit
 (10 MiB; `ACM_KUBECONFIG_MAX_SIZE` can raise or lower it but not disable it),
-parse as YAML without duplicate keys or `<<` merge keys, and have a valid
-kubeconfig structure (an absent or `null` section and an empty `user`/`cluster`
-in a context are accepted as kubectl writes them). The
-secondary-hub context must also resolve to an API server. Otherwise the
-klusterlet step fails with `kubeconfig_load_failed (<reason>)` (reason one of
-`missing`, `unreadable`, `oversized`, `yaml_invalid`, `duplicate_yaml_key`,
-`structure_invalid`) or a "cannot determine the new hub API server" error. The
-step is not recorded as complete, so a resume runs it again after you fix the
-kubeconfig. Remove stale entries from `KUBECONFIG` rather than relying on them
-being skipped.
+parse as YAML without duplicate keys, `<<` merge keys, sets or recursive
+aliases, and have a valid kubeconfig structure (an absent or `null` section and
+an empty `user`/`cluster` in a context are accepted as kubectl writes them).
+Otherwise the klusterlet step fails with `kubeconfig_load_failed (<reason>)`
+(reason one of `missing`, `unreadable`, `oversized`, `yaml_invalid`,
+`duplicate_yaml_key`, `structure_invalid`). A cluster, context or user name
+defined more than once across the whole `KUBECONFIG` chain is used once when
+every definition is identical, and fails the step with
+`kubeconfig_duplicate_conflict` when they differ; the message locates every
+definition by file and position, never by content. The step is not recorded as
+complete, so a resume runs it again after you fix the kubeconfig. Remove stale
+entries from `KUBECONFIG` rather than relying on them being skipped.
 
 In the Ansible collection, direct klusterlet probes and remediations default to
 10 worker threads, 30-second Kubernetes request timeouts, and 180-second
@@ -380,6 +460,8 @@ Override these with
 `acm_switchover_execution.timeouts.klusterlet_worker_seconds`,
 `acm_switchover_execution.timeouts.klusterlet_recheck_seconds`, and
 `acm_switchover_execution.timeouts.klusterlet_recheck_interval_seconds`.
+The two worker counts are capped at 32; a larger value fails the module with an
+actionable message.
 
 **Advantages:**
 - Faster activation (data already restored)

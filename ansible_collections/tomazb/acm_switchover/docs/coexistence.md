@@ -196,6 +196,30 @@ cleanup transaction follow the #317 stale-route rule above: a 404 through a stal
 `error`, never absence. In the cleanup that can only block an attempt (an unreadable read changes
 no cleanup state); it can never record absence or completion.
 
+## R4-06 klusterlet endpoint identity
+
+Both form factors share one endpoint rule
+(`docs/plans/2026-10-15-r4-06-current-base-amendment.md` §2), held equal by
+`tests/fixtures/r4_06_endpoint_vectors.json` and `tests/fixtures/r4_06_kubeconfig_vectors.json`:
+normalized URL equality; `wrong_hub` only for a different host that neither former
+hostname-only comparator called equal, every other mismatch `unverified`; the expected hub
+from each cluster's `<cluster>-import` bootstrap server; no name-only context fallback; a
+client bound to the proven URL before any read; and any unverified or failed cluster
+blocking every remediation in the run. The safety outcome is the same: an ambiguous or
+unverifiable input never authorizes a spoke mutation.
+
+The input models differ by design (operator decision 1, 2026-10-15). These are recorded
+differences, not parity gaps, and the capability stays `dual-supported`:
+
+| Concern | Python CLI | Collection |
+| --- | --- | --- |
+| Which clusters are inspected | every non-local ManagedCluster | the clusters mapped in `acm_switchover_managed_clusters`; unmapped clusters are skipped |
+| Where a spoke context comes from | discovered by URL from the validated `KUBECONFIG` merge | the mapped file and context, whose server must equal the ManagedCluster URL |
+| Duplicate entry names | whole-chain rule: a differing duplicate anywhere fails the step | within-file rule: a differing duplicate fails that cluster only |
+| `endpoint_unavailable` scope | every non-local cluster | mapped clusters |
+| No matching context | `no_context`, non-fatal skip | not applicable (an unmapped cluster is skipped) |
+| Unreadable embedded hub kubeconfig YAML | `unreachable`, non-fatal skip | `failed` (pre-existing, unchanged) |
+
 ## Auto-import reset obligation (issue #214, audit C3/C4)
 
 **The cluster is the collection's register** for the auto-import reset

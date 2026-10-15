@@ -51,6 +51,11 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_restore_cleanup_transaction_parity.py` | parity | Restore-cleanup transaction, recovery, repair and gates agree |
 | `tests/test_argocd_rescue_journal.py` | Python unit | Argo CD resume-on-failure under a migration journal: re-pause marker, no rewind, re-pause on retry |
 | `tests/test_restore_discovery.py` | Python unit | Strict passive sync Restore discovery |
+| `tests/test_r4_06_endpoint_parity.py` | parity | R4-06 endpoint canonicalization, hub classification, redaction and ManagedCluster URL rule over `tests/fixtures/r4_06_endpoint_vectors.json` |
+| `tests/test_r4_06_kubeconfig_parity.py` | parity | R4-06 single-file kubeconfig contract and duplicate rule over `tests/fixtures/r4_06_kubeconfig_vectors.json` |
+| `tests/test_post_activation_endpoint_identity.py` | Python unit | R4-06 Python klusterlet endpoint identity: discovery, refusals with construction/read/mutation counters, remediation barrier |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_endpoint_identity.py` | collection unit | R4-06 collection klusterlet identity proof, refusals, two-phase remediation barrier, stale URL, worker cap |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/module_utils/test_kubeconfig_file.py` | collection unit | R4-06 mapped kubeconfig validation and context selection |
 | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_migration_evidence.py` | collection unit | `acm_migration_evidence` adapter: operations, refusal messages, templating floor |
 | `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_rescue_safeguards.py` | collection unit | `checkpoint_phase` journal safeguards: re-pause marker, refused pre-freeze resets, rewind fence |
 | `ansible_collections/tomazb/acm_switchover/tests/unit/test_activation_transaction_contracts.py` | collection unit | Activation role wiring of the transaction (guarded module only, freeze before mutation, `completed_at` last) |
