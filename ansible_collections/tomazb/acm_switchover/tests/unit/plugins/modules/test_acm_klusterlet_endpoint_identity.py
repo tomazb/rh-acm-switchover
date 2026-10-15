@@ -53,6 +53,19 @@ def _managed_cluster(url) -> dict:
     return {"metadata": {"name": "a"}, "spec": {"managedClusterClientConfigs": [{"url": url}] if url else []}}
 
 
+def _spoke(factory):
+    """Adapt a label-keyed fake client factory to the snapshot spoke-factory seam (R4-06 PR 3).
+
+    The fake is keyed by the mapped kubeconfig path and context, which the snapshot carries
+    as provenance; production builds the client from the snapshot content alone.
+    """
+
+    def build(snapshot, material_dir, api_url, request_timeout=None):
+        return factory(snapshot.source, snapshot.context_name)
+
+    return build
+
+
 class Spoke:
     """A managed cluster's API as seen through one client: secrets, reads and writes."""
 
@@ -135,6 +148,12 @@ class Fleet:
         self.constructions.append((kubeconfig, context))
         return self.spokes[kubeconfig]
 
+    def spoke_core(self, snapshot, material_dir, api_url, request_timeout=None):
+        return self.core(snapshot.source, snapshot.context_name)
+
+    def spoke_apps(self, snapshot, material_dir, api_url, request_timeout=None):
+        return self.apps(snapshot.source, snapshot.context_name)
+
     def reads(self):
         return sum(spoke.reads for spoke in self.spokes.values())
 
@@ -173,6 +192,7 @@ def _probe(fleet, managed_clusters, candidates=("a",)):
         workers=2,
         core_client_factory=fleet.core,
         managed_cluster_reader_factory=fleet.hub.reader_factory,
+        spoke_core_factory=fleet.spoke_core,
     )
 
 
@@ -184,8 +204,9 @@ def _remediate(fleet, managed_clusters, pending=("a",), strict=False):
         workers=2,
         strict=strict,
         core_client_factory=fleet.core,
-        apps_client_factory=fleet.apps,
         managed_cluster_reader_factory=fleet.hub.reader_factory,
+        spoke_core_factory=fleet.spoke_core,
+        spoke_apps_factory=fleet.spoke_apps,
     )
 
 
@@ -484,6 +505,7 @@ def test_the_cap_bounds_a_large_batch(mapped):
         workers=KLUSTERLET_MAX_WORKERS,
         core_client_factory=fleet.core,
         managed_cluster_reader_factory=hub.reader_factory,
+        spoke_core_factory=fleet.spoke_core,
     )
 
     assert result["workers"] == KLUSTERLET_MAX_WORKERS
@@ -540,6 +562,7 @@ def test_a_loader_error_never_reaches_the_result():
         managed_clusters={"a": {"kubeconfig": "/nonexistent"}},
         workers=1,
         core_client_factory=leaking_factory,
+        spoke_core_factory=_spoke(leaking_factory),
         managed_cluster_reader_factory=hub.reader_factory,
     )
     assert "SECRETLEAK" not in repr(result)
@@ -559,6 +582,7 @@ def test_a_spoke_loader_error_is_a_sanitized_construction_failure(mapped):
         managed_clusters={"a": {"kubeconfig": path}},
         workers=1,
         core_client_factory=factory,
+        spoke_core_factory=_spoke(factory),
         managed_cluster_reader_factory=hub.reader_factory,
     )
 
@@ -643,7 +667,8 @@ def test_a_hub_client_setup_failure_in_remediation_is_sanitized(mapped):
         managed_clusters={"a": {"kubeconfig": path}, "u": {}},
         pending_clusters=["a", "u"],
         core_client_factory=factory,
-        apps_client_factory=factory,
+        spoke_core_factory=_spoke(factory),
+        spoke_apps_factory=_spoke(factory),
         managed_cluster_reader_factory=Hub().reader_factory,
     )
 

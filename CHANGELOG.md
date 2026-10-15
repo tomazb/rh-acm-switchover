@@ -101,6 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snapshot-built klusterlet spoke clients (R4-06 PR 3, #357; Python + Collection).** Every
+  spoke client is built from one snapshot of the selected kubeconfig context, captured when the
+  cluster is selected and never re-read: credential file contents are read once (`O_NOFOLLOW`,
+  `fstat` on the open descriptor), materialized into `0600` files in a private `0700` directory
+  that is removed after every worker finishes, with the token passed in memory and the context
+  named explicitly. The client loader's content-keyed temp-file cache is never used.
+  `exec`/`auth-provider` users, empty or undecodable credentials, dangling users and settings
+  that disable TLS verification (including the string `"false"` for
+  `insecure-skip-tls-verify`) are refused before any client exists; after construction the
+  client must prove TLS verification, its own credential files, the captured token and the
+  proven endpoint. Workers finish before cleanup; a collection worker that misses its deadline
+  is still a failure but reports its real `changed` state (`completed_after_timeout`). New CI
+  job `kubernetes-min-client` runs the real-loader regressions on kubernetes 28.1.0 (#358
+  tracks the root CLI's effective floor of 29.0.0).
 - **Klusterlet endpoint identity (R4-06 PR 2, #355; Python + Collection).** A managed cluster is
   inspected only after its target is proven, and only a genuinely different hub host is
   remediated (`docs/plans/2026-10-15-r4-06-current-base-amendment.md`):

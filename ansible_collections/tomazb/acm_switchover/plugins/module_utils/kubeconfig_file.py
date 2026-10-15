@@ -285,8 +285,8 @@ def load_kubeconfig_file(path: str, size_limit: int = KUBECONFIG_SIZE_LIMIT) -> 
     return resolve_duplicates(parse_kubeconfig_text(_read_bounded(path, size_limit)))
 
 
-def select_context(document: dict, context: str | None) -> tuple[str, dict | None]:
-    """Amendment §4: ``(context_name, cluster_entry_or_None)`` for the mapped context.
+def select_context_entries(document: dict, context: str | None) -> tuple[str, dict | None, dict | None, str | None]:
+    """Amendment §4: ``(context, cluster_entry, user_entry, user_reference)`` for the mapped context.
 
     A named context must exist (``context_missing``). An omitted one requires a
     ``current-context`` naming exactly one context (``context_ambiguous``). The cluster
@@ -303,6 +303,14 @@ def select_context(document: dict, context: str | None) -> tuple[str, dict | Non
         if not isinstance(current, str) or current not in contexts:
             raise KubeconfigFileError(REASON_CONTEXT_AMBIGUOUS)
         name = current
-    cluster_name = (contexts[name].get("context") or {}).get("cluster")
+    body = contexts[name].get("context") or {}
+    cluster_name = body.get("cluster")
+    user_name = body.get("user") or None
     clusters = {entry["name"]: entry for entry in document.get("clusters") or []}
-    return name, clusters.get(cluster_name) if cluster_name else None
+    users = {entry["name"]: entry for entry in document.get("users") or []}
+    return (
+        name,
+        clusters.get(cluster_name) if cluster_name else None,
+        users.get(user_name) if user_name else None,
+        user_name,
+    )

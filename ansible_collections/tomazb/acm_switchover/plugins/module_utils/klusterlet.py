@@ -44,9 +44,18 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.endpoint_ide
     redact,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_file import (
+    KUBECONFIG_SIZE_LIMIT,
     KubeconfigFileError,
     load_kubeconfig_file,
-    select_context,
+    select_context_entries,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_snapshot import (
+    SnapshotError,
+    SpokeSnapshot,
+    build_api_client,
+    build_snapshot,
+    new_private_dir,
+    remove_private_dir,
 )
 
 
@@ -62,8 +71,10 @@ class AppsV1Client(Protocol):
     def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs) -> object: ...
 
 
+# The secondary-hub client, built from the hub kubeconfig path.
 CoreClientFactory = Callable[[str, str | None], CoreV1Client]
-AppsClientFactory = Callable[[str, str | None], AppsV1Client]
+# A spoke client, built from a cluster's snapshot alone: (snapshot, material_dir, api_url, request_timeout).
+SpokeClientFactory = Callable[[SpokeSnapshot, str, str, "int | float | None"], object]
 # A ManagedCluster object by name; None when the hub answers 404. Any other error raises.
 ManagedClusterReader = Callable[[str], "dict | None"]
 ManagedClusterReaderFactory = Callable[[str, "str | None", "int | float"], ManagedClusterReader]
@@ -118,20 +129,30 @@ def build_core_v1_client(
     return client.CoreV1Api(api_client=api_client)
 
 
-def build_apps_v1_client(
-    kubeconfig: str,
-    context: str | None = None,
+def build_spoke_core_client(
+    snapshot: SpokeSnapshot,
+    material_dir: str,
+    api_url: str,
     request_timeout: int | float | None = None,
 ):
-    if not kubeconfig:
-        raise ValueError("kubeconfig is required")
+    """A spoke CoreV1Api built from the cluster's snapshot alone (amendment §6)."""
+    from kubernetes import client
 
-    from kubernetes import client, config
+    api_client = build_api_client(snapshot, material_dir, api_url)
+    api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
+    return client.CoreV1Api(api_client=api_client)
 
-    kwargs = {"persist_config": False, "config_file": kubeconfig}
-    if context:
-        kwargs["context"] = context
-    api_client = config.new_client_from_config(**kwargs)
+
+def build_spoke_apps_client(
+    snapshot: SpokeSnapshot,
+    material_dir: str,
+    api_url: str,
+    request_timeout: int | float | None = None,
+):
+    """A spoke AppsV1Api built from the cluster's snapshot alone (amendment §6)."""
+    from kubernetes import client
+
+    api_client = build_api_client(snapshot, material_dir, api_url)
     api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
     return client.AppsV1Api(api_client=api_client)
 
@@ -282,6 +303,7 @@ def ordered_bounded_map(
     results: list[dict | None] = [None] * len(items)
     timeout = normalize_timeout(future_timeout, "future_timeout")
     executor = ThreadPoolExecutor(max_workers=workers)
+    late = []
     try:
         futures = {executor.submit(fn, item): index for index, item in enumerate(items)}
         done, not_done = wait(futures, timeout=timeout)
@@ -302,8 +324,29 @@ def ordered_bounded_map(
                     "status": "failed",
                     "reason": worker_timeout_reason(timeout),
                 }
+            late.append((future, index))
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # A timed-out worker can still be using this invocation's credential files, or
+        # mutating: wait for it before anything is cleaned up or reported (amendment §2.8).
+        executor.shutdown(wait=True, cancel_futures=True)
+    for future, index in late:
+        # Still a timeout failure, but what the worker really did (its `changed` value and
+        # its steps) is reported instead of the placeholder.
+        if future.cancelled() or future.exception() is not None:
+            continue
+        real = future.result()
+        if isinstance(real, dict):
+            placeholder = results[index] or {}
+            reported = {key: value for key, value in real.items() if not key.startswith("_")}
+            # The cluster stays a timeout failure; the worker's own outcome is kept beside it.
+            reported["completed_status"] = real.get("status")
+            if real.get("reason"):
+                reported["completed_reason"] = real["reason"]
+            reported.update({key: placeholder[key] for key in ("status", "reason") if key in placeholder})
+            if isinstance(reported.get("steps"), dict):
+                reported["steps"] = _mark_pending_not_run(reported["steps"])
+            reported["completed_after_timeout"] = True
+            results[index] = reported
     return [item for item in results if item is not None]
 
 
@@ -334,12 +377,13 @@ def _prove_target(
     managed_cluster_reader: ManagedClusterReader,
     secondary_client: CoreV1Client,
     request_timeout: int | float | None,
-) -> tuple[str, str, str, dict]:
-    """Amendment §2.4/§2.6: ``(context, api_url, expected_hub, bootstrap_secret_doc)``, or raise.
+) -> tuple[SpokeSnapshot, str, str, dict]:
+    """Amendment §2.4/§2.6/§6: ``(snapshot, api_url, expected_hub, bootstrap_secret_doc)``, or raise.
 
     Everything here happens before any spoke client exists: a fresh ManagedCluster read,
     the URL rule, the expected hub from the import secret, the mapped file's validation,
-    context selection and the identity proof. Each failure is a ``_Refusal``.
+    context selection, the identity proof, and the credential snapshot every spoke client of
+    this invocation is built from. Each failure is a ``_Refusal``.
     """
     managed_cluster = managed_cluster_reader(cluster_name)
     if managed_cluster is None:
@@ -368,7 +412,7 @@ def _prove_target(
 
     try:
         document = load_kubeconfig_file(kubeconfig)
-        context_name, cluster_entry = select_context(document, context)
+        context_name, cluster_entry, user_entry, user_reference = select_context_entries(document, context)
     except KubeconfigFileError as exc:
         # Location only (path, line/column, entry names, indexes, variants), never content.
         raise _Refusal("failed", exc.reason, f"{kubeconfig}: {exc.detail}" if exc.detail else kubeconfig) from None
@@ -376,16 +420,44 @@ def _prove_target(
     identity_reason = prove_target_identity(api_url, mapped_server)
     if identity_reason:
         raise _Refusal("failed", identity_reason)
-    # The document classified here is the one remediation applies: one read, one parse.
-    return context_name, api_url, expected_hub, bootstrap_doc or {}
-
-
-def _bound_spoke_client(factory: Callable, kubeconfig: str, context: str, api_url: str):
-    """A spoke client whose host is the proven endpoint (amendment §2.7), or a refusal."""
+    base_dir = os.path.dirname(os.path.abspath(kubeconfig))
     try:
-        api = factory(kubeconfig, context)
-    except Exception as exc:  # noqa: BLE001 - the loader re-reads files; its errors can quote credentials
+        snapshot = build_snapshot(
+            context_name,
+            (cluster_entry or {}).get("cluster") or {},
+            base_dir,
+            ((user_entry or {}).get("user") or {}) if user_entry is not None else None,
+            base_dir,
+            user_reference,
+            KUBECONFIG_SIZE_LIMIT,
+            source=kubeconfig,
+        )
+    except SnapshotError as exc:
+        # Locate the refused entry - kind, name, context, file - never its content.
+        refused = (cluster_entry or {}).get("name") if exc.entry == "cluster" else user_reference
+        raise _Refusal(
+            "unverified", exc.reason, f"{exc.entry or 'entry'} {refused!r} of context {context_name!r} in {kubeconfig}"
+        ) from None
+    # The document classified here is the one remediation applies: one read, one parse.
+    return snapshot, api_url, expected_hub, bootstrap_doc or {}
+
+
+def _bound_spoke_client(
+    factory: SpokeClientFactory,
+    snapshot: SpokeSnapshot,
+    material_dir: str,
+    api_url: str,
+    request_timeout: int | float | None,
+):
+    """A snapshot-built spoke client bound to the proven endpoint (amendment §6, §2.7), or a refusal."""
+    try:
+        api = factory(snapshot, material_dir, api_url, request_timeout)
+    except SnapshotError as exc:
+        # Same status as Python for every snapshot refusal: unproven, never inspected.
+        raise _Refusal("unverified", exc.reason) from None
+    except Exception as exc:  # noqa: BLE001 - loader errors can quote credentials
         raise _Refusal("failed", f"client_construction_failed ({exc.__class__.__name__})") from None
+    # Defense in depth: whatever built the client, it must be bound to the proven endpoint.
     if not normalized_equal(_client_host(api), api_url):
         raise _Refusal("unverified", REASON_CLIENT_ENDPOINT_MISMATCH)
     return api
@@ -440,11 +512,16 @@ def probe_one_cluster(
     cluster_name: str,
     secondary_client: CoreV1Client | None,
     managed_clusters: dict,
-    core_client_factory: CoreClientFactory,
+    spoke_core_factory: SpokeClientFactory,
     request_timeout: int | float | None = None,
     managed_cluster_reader: ManagedClusterReader | None = None,
+    material_dir: str = "",
+    proofs: dict | None = None,
 ) -> dict:
-    """Probe one mapped cluster (amendment §2.3, §2.6, §2.7).
+    """Probe one mapped cluster (amendment §2.3, §2.6, §2.7, §6).
+
+    ``proofs`` keeps each cluster's target proof and snapshot for the whole invocation: the
+    wait loop re-reads only the klusterlet secret, never the credential files (amendment §6).
 
     The target is proven before any spoke client exists, and the spoke client is bound to
     the proven endpoint before anything is read through it.
@@ -467,10 +544,24 @@ def probe_one_cluster(
         }
 
     try:
-        context_name, api_url, expected_hub, _bootstrap_doc = _prove_target(
-            cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
-        )
-        managed_client = _bound_spoke_client(core_client_factory, kubeconfig, context_name, api_url)
+        proofs = {} if proofs is None else proofs
+        if cluster_name not in proofs:
+            try:
+                proofs[cluster_name] = _prove_target(
+                    cluster_name,
+                    kubeconfig,
+                    managed.get("context"),
+                    managed_cluster_reader,
+                    secondary_client,
+                    request_timeout,
+                )
+            except _Refusal as refusal:
+                proofs[cluster_name] = refusal
+        proof = proofs[cluster_name]
+        if isinstance(proof, _Refusal):
+            raise proof
+        snapshot, api_url, expected_hub, _bootstrap_doc = proof
+        managed_client = _bound_spoke_client(spoke_core_factory, snapshot, material_dir, api_url, request_timeout)
         return _classify_spoke(cluster_name, managed_client, expected_hub, request_timeout)
     except _Refusal as refusal:
         return refusal.result(cluster_name)
@@ -508,6 +599,7 @@ def probe_klusterlet_connections(
     check_mode: bool = False,
     core_client_factory: CoreClientFactory = build_core_v1_client,
     managed_cluster_reader_factory: ManagedClusterReaderFactory | None = None,
+    spoke_core_factory: SpokeClientFactory = build_spoke_core_client,
 ) -> dict:
     worker_count = normalize_workers(workers)
     request_timeout_value = normalize_timeout(request_timeout, "request_timeout")
@@ -573,9 +665,11 @@ def probe_klusterlet_connections(
                 cluster,
                 secondary_client,
                 managed_clusters,
-                core_client_factory,
+                spoke_core_factory,
                 request_timeout=request_timeout_value,
                 managed_cluster_reader=managed_cluster_reader,
+                material_dir=material_dir,
+                proofs=proofs,
             ),
             future_timeout=future_timeout_value,
             timeout_result=lambda cluster: {
@@ -586,6 +680,19 @@ def probe_klusterlet_connections(
         )
         return build_probe_result(results)
 
+    # One private directory per invocation for the materialized spoke credentials,
+    # removed after every worker has finished (amendment §6).
+    material_dir = new_private_dir()
+    proofs: dict = {}
+    try:
+        result = _probe_until_settled(run_probe_once, wait_timeout, wait_interval)
+    except BaseException:
+        _discard_material(material_dir, None)
+        raise
+    return _discard_material(material_dir, result)
+
+
+def _probe_until_settled(run_probe_once: Callable[[], dict], wait_timeout, wait_interval) -> dict:
     if wait_timeout is None:
         return run_probe_once()
 
@@ -635,10 +742,11 @@ def prepare_one_cluster(
     cluster_name: str,
     secondary_client: CoreV1Client,
     managed_clusters: dict,
-    core_client_factory: CoreClientFactory,
-    apps_client_factory: AppsClientFactory,
+    spoke_core_factory: SpokeClientFactory,
+    spoke_apps_factory: SpokeClientFactory,
     request_timeout: int | float | None = None,
     managed_cluster_reader: ManagedClusterReader | None = None,
+    material_dir: str = "",
 ) -> dict:
     """Remediation phase 1 (read-only): re-prove the target and re-classify the hub.
 
@@ -656,15 +764,15 @@ def prepare_one_cluster(
         return _result(cluster_name, "failed", _mark_pending_not_run(steps), reason="secondary_hub_client_unavailable")
 
     try:
-        context_name, api_url, expected_hub, bootstrap_doc = _prove_target(
+        snapshot, api_url, expected_hub, bootstrap_doc = _prove_target(
             cluster_name, kubeconfig, managed.get("context"), managed_cluster_reader, secondary_client, request_timeout
         )
         steps["import_secret_read"] = "ok"
-        managed_core = _bound_spoke_client(core_client_factory, kubeconfig, context_name, api_url)
+        managed_core = _bound_spoke_client(spoke_core_factory, snapshot, material_dir, api_url, request_timeout)
         probe = _classify_spoke(cluster_name, managed_core, expected_hub, request_timeout)
-        # Only a cluster about to be mutated needs a workload client.
+        # Only a cluster about to be mutated needs a workload client - from the same snapshot.
         apps_client = (
-            _bound_spoke_client(apps_client_factory, kubeconfig, context_name, api_url)
+            _bound_spoke_client(spoke_apps_factory, snapshot, material_dir, api_url, request_timeout)
             if probe["status"] == "wrong_hub"
             else None
         )
@@ -816,8 +924,9 @@ def remediate_klusterlets(
     request_timeout: int | float | None = None,
     future_timeout: int | float | None = None,
     core_client_factory: CoreClientFactory = build_core_v1_client,
-    apps_client_factory: AppsClientFactory = build_apps_v1_client,
     managed_cluster_reader_factory: ManagedClusterReaderFactory | None = None,
+    spoke_core_factory: SpokeClientFactory = build_spoke_core_client,
+    spoke_apps_factory: SpokeClientFactory = build_spoke_apps_client,
 ) -> dict:
     """Two-phase remediation (amendment §2.6 rule 4 and §2.8).
 
@@ -909,18 +1018,65 @@ def remediate_klusterlets(
         "klusterlet_restarted": "not_run",
     }
 
+    # One private directory per invocation: it holds the materialized spoke credentials
+    # for both phases and is removed after every worker of both has finished.
+    material_dir = new_private_dir()
+    try:
+        result = _remediate_in_two_phases(
+            candidates,
+            worker_count,
+            strict,
+            future_timeout_value,
+            timeout_steps,
+            lambda cluster: prepare_one_cluster(
+                cluster,
+                secondary_client,
+                managed_clusters,
+                spoke_core_factory,
+                spoke_apps_factory,
+                request_timeout=request_timeout_value,
+                managed_cluster_reader=managed_cluster_reader,
+                material_dir=material_dir,
+            ),
+            request_timeout_value,
+        )
+    except BaseException:
+        _discard_material(material_dir, None)
+        raise
+    return _discard_material(material_dir, result)
+
+
+def _discard_material(material_dir: str, result: dict | None) -> dict:
+    """Remove the invocation's credential material; a failure fails the result, never silently.
+
+    With ``result`` None an exception is already propagating: the cleanup failure must not
+    replace it, and the caller re-raises.
+    """
+    try:
+        remove_private_dir(material_dir)
+    except SnapshotError as cleanup:
+        if result is None:
+            return {}
+        result = dict(result)
+        result["failed"] = True
+        result["credential_cleanup_failed"] = True
+        result["msg"] = f"Could not remove klusterlet credential material at {material_dir} ({cleanup.reason})"
+    return result if result is not None else {}
+
+
+def _remediate_in_two_phases(
+    candidates: list[str],
+    worker_count: int,
+    strict: bool,
+    future_timeout_value: int | float,
+    timeout_steps: dict,
+    prepare: Callable[[str], dict],
+    request_timeout_value: int | float,
+) -> dict:
     prepared = ordered_bounded_map(
         candidates,
         worker_count,
-        lambda cluster: prepare_one_cluster(
-            cluster,
-            secondary_client,
-            managed_clusters,
-            core_client_factory,
-            apps_client_factory,
-            request_timeout=request_timeout_value,
-            managed_cluster_reader=managed_cluster_reader,
-        ),
+        prepare,
         future_timeout=future_timeout_value,
         timeout_result=lambda cluster: _result(
             cluster,

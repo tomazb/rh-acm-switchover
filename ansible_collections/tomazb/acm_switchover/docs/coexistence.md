@@ -208,6 +208,12 @@ client bound to the proven URL before any read; and any unverified or failed clu
 blocking every remediation in the run. The safety outcome is the same: an ambiguous or
 unverifiable input never authorizes a spoke mutation.
 
+Both form factors also build every spoke client the same way (amendment §6, R4-06 PR 3):
+from one credential snapshot of the selected context, captured once and never re-read,
+materialized in a private directory, with the same refusals, held equal by
+`tests/fixtures/r4_06_credential_vectors.json`. The snapshot lives for one Python run or one
+collection module invocation.
+
 The input models differ by design (operator decision 1, 2026-10-15). These are recorded
 differences, not parity gaps, and the capability stays `dual-supported`:
 

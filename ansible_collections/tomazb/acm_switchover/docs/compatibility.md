@@ -87,6 +87,15 @@ That is a separate surface and is unaffected by this policy.
 `requirements.txt` and the CI lanes. `kubernetes.core` itself requires only
 `>=24.2.0`; the higher floor here is a deliberate tightening, not a conflict.
 
+There is no `kubernetes` 28.0.0 final release, so the lowest client the floor admits is
+28.1.0, which requires `urllib3<2`. The `kubernetes-min-client` job in
+`.github/workflows/ci-cd.yml` installs exactly 28.1.0, proves that no lower final release
+satisfies the floor, and runs the real-loader klusterlet snapshot, credential, TLS and
+endpoint regressions of both form factors against it. The repository-root
+`requirements.txt` also requires `urllib3>=2.6.3`, which 28.1.0 cannot satisfy, so the
+root CLI's effective client floor is 29.0.0; whether to change the declared floor is
+tracked in #358.
+
 ## Ansible Automation Platform
 
 **No AAP combination is repository-tested.** This repository runs no AAP job and

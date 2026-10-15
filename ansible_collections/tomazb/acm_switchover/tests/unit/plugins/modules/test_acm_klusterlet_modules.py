@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import builtins
 import threading
-import time
 from types import SimpleNamespace
 from typing import NoReturn
 
@@ -21,7 +20,6 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     MANAGED_CLUSTER_AGENT_NAMESPACE,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import (
-    build_apps_v1_client,
     build_core_v1_client,
     ordered_bounded_map,
 )
@@ -87,6 +85,19 @@ def mapped_cluster_identity(tmp_path, monkeypatch):
     reads = ManagedClusterReads(default=_managed_cluster())
     monkeypatch.setattr(klusterlet_utils, "build_managed_cluster_reader", reads.factory)
     return reads
+
+
+def _spoke(factory):
+    """Adapt a label-keyed fake client factory to the snapshot spoke-factory seam (R4-06 PR 3).
+
+    The fake is keyed by the mapped kubeconfig path and context, which the snapshot carries
+    as provenance; production builds the client from the snapshot content alone.
+    """
+
+    def build(snapshot, material_dir, api_url, request_timeout=None):
+        return factory(snapshot.source, snapshot.context_name)
+
+    return build
 
 
 class FakeApiError(Exception):
@@ -255,6 +266,7 @@ def test_probe_reports_verified_wrong_hub_and_skipped_clusters():
         candidate_clusters=["cluster-a", "cluster-b", "cluster-c"],
         workers=1,
         core_client_factory=core_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
     )
 
     assert result["workers"] == 1
@@ -283,6 +295,7 @@ def test_probe_defaults_to_all_managed_clusters_when_candidates_are_omitted():
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
         workers=1,
         core_client_factory=core_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
     )
 
     assert result["verified_clusters"] == ["cluster-a"]
@@ -296,6 +309,7 @@ def test_probe_check_mode_returns_plan_without_clients():
         workers=1,
         check_mode=True,
         core_client_factory=_fail_client_factory,
+        spoke_core_factory=_spoke(_fail_client_factory),
     )
 
     assert result["changed"] is False
@@ -318,6 +332,7 @@ def test_probe_reports_client_exception_as_failed_result():
         candidate_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
     )
 
     assert result["failed"] is True
@@ -361,6 +376,7 @@ def test_probe_waits_until_wrong_hub_secret_converges(monkeypatch):
         wait_timeout=3,
         wait_interval=1,
         core_client_factory=core_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
     )
 
     assert result["verified_clusters"] == ["cluster-a"]
@@ -381,7 +397,7 @@ def test_client_builders_require_explicit_kubeconfig(monkeypatch):
     with pytest.raises(ValueError, match="kubeconfig is required"):
         build_core_v1_client("")
     with pytest.raises(ValueError, match="kubeconfig is required"):
-        build_apps_v1_client(None)
+        build_core_v1_client(None)
 
 
 def test_remediation_skips_when_no_pending_clusters():
@@ -403,7 +419,8 @@ def test_remediation_check_mode_returns_plan_without_clients():
         pending_clusters=["cluster-a"],
         check_mode=True,
         core_client_factory=_fail_client_factory,
-        apps_client_factory=_fail_client_factory,
+        spoke_core_factory=_spoke(_fail_client_factory),
+        spoke_apps_factory=_spoke(_fail_client_factory),
     )
 
     assert result["changed"] is True
@@ -437,7 +454,8 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
         workers=1,
         strict=False,
         core_client_factory=core_client_factory,
-        apps_client_factory=_new_fake_apps_client,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(_new_fake_apps_client),
     )
 
     # Without an import secret there is no expected endpoint (amendment §2.4): the cluster
@@ -478,7 +496,8 @@ def test_remediation_patches_and_restarts_klusterlet_in_default_namespace():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["changed"] is True
@@ -511,7 +530,8 @@ def test_remediation_patches_existing_bootstrap_secret_without_delete():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed_clusters"] == []
@@ -546,7 +566,8 @@ def test_remediation_failed_patch_keeps_existing_bootstrap_secret_and_skips_rest
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed_clusters"] == ["cluster-a"]
@@ -574,7 +595,8 @@ def test_remediation_creates_absent_bootstrap_secret_without_delete_attempt():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed_clusters"] == []
@@ -619,7 +641,8 @@ def test_remediation_retries_patch_after_create_conflict():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed_clusters"] == []
@@ -657,7 +680,8 @@ def test_remediation_patches_bootstrap_secret_from_manifest_namespace():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed_clusters"] == []
@@ -698,7 +722,8 @@ def test_remediation_reports_restart_failure():
         workers=1,
         strict=False,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["failed"] is False
@@ -742,7 +767,8 @@ def test_remediation_unexpected_failure_after_secret_apply_still_reports_changed
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     # The bootstrap secret was already patched before the unexpected error,
@@ -787,7 +813,8 @@ def test_remediation_preserves_best_effort_partial_failure():
         workers=2,
         strict=False,
         core_client_factory=core_client_factory,
-        apps_client_factory=apps_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(apps_client_factory),
     )
 
     assert result["changed"] is True
@@ -812,7 +839,8 @@ def test_remediation_strict_mode_fails_partial_failure():
         pending_clusters=["cluster-a"],
         strict=True,
         core_client_factory=core_client_factory,
-        apps_client_factory=_new_fake_apps_client,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(_new_fake_apps_client),
     )
 
     assert result["failed"] is True
@@ -843,7 +871,8 @@ def test_remediation_uses_bounded_worker_threads():
         pending_clusters=["cluster-a", "cluster-b"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=_new_fake_apps_client,
+        spoke_core_factory=_spoke(core_client_factory),
+        spoke_apps_factory=_spoke(_new_fake_apps_client),
     )
 
     assert result["workers"] == 1
@@ -872,6 +901,7 @@ def test_probe_passes_bounded_request_timeout_to_secret_reads():
         workers=1,
         request_timeout=7,
         core_client_factory=core_client_factory,
+        spoke_core_factory=_spoke(core_client_factory),
     )
 
     assert result["failed"] is False
@@ -879,35 +909,79 @@ def test_probe_passes_bounded_request_timeout_to_secret_reads():
     assert managed.request_timeouts == [7]
 
 
-# Workers below block on an event instead of sleeping, so they cannot finish before the
-# deadline however the scheduler behaves. The event is always set after the call returns;
-# this timeout only bounds a worker if ordered_bounded_map regresses to waiting for it.
-_BLOCKED_WORKER_MAX_SECONDS = 5
+# R4-06 PR 3 (amendment §2.8): a worker that misses the batch deadline is still a failure, but
+# ordered_bounded_map waits for it before returning - it may be using this invocation's private
+# credential files, or mutating - and reports what it really did instead of a placeholder.
+_LATE_WORKER_RELEASE_SECONDS = 0.2
 
 
 def _worker_timeout_result(cluster: str) -> dict:
     return {"cluster": cluster, "status": "failed", "reason": "worker_timeout"}
 
 
-def test_worker_future_timeout_surfaces_as_failed_result():
+def _release_later(event: threading.Event, seconds: float = _LATE_WORKER_RELEASE_SECONDS) -> threading.Timer:
+    timer = threading.Timer(seconds, event.set)
+    timer.start()
+    return timer
+
+
+def test_a_late_worker_is_a_timeout_failure_reporting_its_real_outcome():
     release = threading.Event()
 
-    def blocked_worker(cluster_name: str) -> dict:
-        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
-        return {"cluster": cluster_name, "status": "verified"}
+    def late_worker(cluster_name: str) -> dict:
+        release.wait(5)
+        return {"cluster": cluster_name, "status": "remediated", "changed": True, "steps": {"x": "ok"}, "_prepared": 1}
 
+    timer = _release_later(release)
     try:
         results = ordered_bounded_map(
             ["cluster-a"],
             workers=2,
-            fn=blocked_worker,
+            fn=late_worker,
             future_timeout=0.001,
             timeout_result=_worker_timeout_result,
         )
     finally:
         release.set()
+        timer.cancel()
 
-    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+    assert results == [
+        {
+            "cluster": "cluster-a",
+            "status": "failed",
+            "reason": "worker_timeout",
+            "changed": True,
+            "steps": {"x": "ok"},
+            "completed_status": "remediated",
+            "completed_after_timeout": True,
+        }
+    ]
+
+
+def test_a_late_refusal_keeps_its_reason_and_unrun_steps():
+    release = threading.Event()
+
+    def late_refusal(cluster_name: str) -> dict:
+        release.wait(5)
+        return {
+            "cluster": cluster_name,
+            "status": "unverified",
+            "reason": "credential_symlink",
+            "steps": {"a": "pending"},
+        }
+
+    timer = _release_later(release)
+    try:
+        results = ordered_bounded_map(
+            ["c"], workers=1, fn=late_refusal, future_timeout=0.001, timeout_result=_worker_timeout_result
+        )
+    finally:
+        release.set()
+        timer.cancel()
+
+    assert results[0]["status"] == "failed" and results[0]["reason"] == "worker_timeout"
+    assert (results[0]["completed_status"], results[0]["completed_reason"]) == ("unverified", "credential_symlink")
+    assert results[0]["steps"] == {"a": "not_run"}
 
 
 def _record_wait_timeouts(monkeypatch) -> list:
@@ -924,81 +998,63 @@ def _record_wait_timeouts(monkeypatch) -> list:
     return timeouts
 
 
-# Generous on purpose: the call should return about 1 ms after it starts, and a regression that
-# runs the worker inline or joins it takes _BLOCKED_WORKER_MAX_SECONDS. This only has to catch
-# a deadline overshoot of seconds, so it tolerates heavy scheduler contention.
-_PROMPT_RETURN_MAX_SECONDS = 2
-
-
-def test_single_worker_future_timeout_surfaces_as_failed_result(monkeypatch):
+def test_the_call_returns_only_after_a_late_worker_finishes(monkeypatch):
     wait_timeouts = _record_wait_timeouts(monkeypatch)
     release = threading.Event()
     finished = threading.Event()
 
-    def blocked_worker(cluster_name: str) -> dict:
-        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
+    def late_worker(cluster_name: str) -> dict:
+        release.wait(5)
         finished.set()
         return {"cluster": cluster_name, "status": "verified"}
 
-    started_at = time.monotonic()
+    timer = _release_later(release)
     try:
         results = ordered_bounded_map(
             ["cluster-a"],
             workers=1,
-            fn=blocked_worker,
+            fn=late_worker,
             future_timeout=0.001,
             timeout_result=_worker_timeout_result,
         )
-        elapsed = time.monotonic() - started_at
-        # The worker is still blocked, so the call returned at the deadline: it neither ran
-        # the worker inline nor waited for it to finish.
         worker_finished_before_return = finished.is_set()
     finally:
         release.set()
+        timer.cancel()
 
-    assert not worker_finished_before_return
-    assert wait_timeouts == [0.001], "the single-worker path must wait exactly the requested deadline"
-    assert elapsed < _PROMPT_RETURN_MAX_SECONDS
-    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+    assert worker_finished_before_return
+    assert wait_timeouts == [0.001], "the deadline is one wait with exactly the requested timeout"
+    assert [(item["status"], item["reason"]) for item in results] == [("failed", "worker_timeout")]
 
 
 def test_worker_future_timeout_uses_one_batch_deadline(monkeypatch):
     wait_timeouts = _record_wait_timeouts(monkeypatch)
     release = threading.Event()
     clusters = ["cluster-a", "cluster-b", "cluster-c"]
-    future_timeout = 0.75
+    future_timeout = 0.2
 
-    def blocked_worker(cluster_name: str) -> dict:
-        release.wait(_BLOCKED_WORKER_MAX_SECONDS)
+    def late_worker(cluster_name: str) -> dict:
+        release.wait(5)
         return {"cluster": cluster_name, "status": "verified"}
 
-    started_at = time.monotonic()
+    timer = _release_later(release, 0.5)
     try:
         results = ordered_bounded_map(
             clusters,
             workers=len(clusters),
-            fn=blocked_worker,
+            fn=late_worker,
             future_timeout=future_timeout,
             timeout_result=_worker_timeout_result,
         )
-        elapsed = time.monotonic() - started_at
     finally:
         release.set()
+        timer.cancel()
 
-    # Exactly one wait over the whole batch with the full deadline. Waiting on each future in
-    # turn (per-future ``result(timeout=...)`` or one ``wait`` per future) records zero or
-    # len(clusters) calls.
+    # Exactly one wait over the whole batch with the full deadline; per-future waits would
+    # record zero or len(clusters) calls.
     assert wait_timeouts == [future_timeout]
-    # Nor does anything wait per future afterwards. Every worker stays blocked, so waiting on each
-    # of the N futures in turn costs at least N * future_timeout on its own (2.25 s here). A batch
-    # wait followed by per-future waits costs (N + 1) * future_timeout (3.0 s). The correct call
-    # returns after one future_timeout (about 0.75 s), which leaves (N - 1) * future_timeout
-    # (1.5 s) of scheduling slack under the N * future_timeout bound.
-    assert elapsed < len(clusters) * future_timeout
-    assert results == [
-        {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
-        {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},
-        {"cluster": "cluster-c", "status": "failed", "reason": "worker_timeout"},
+    assert [(item["cluster"], item["status"], item["completed_after_timeout"]) for item in results] == [
+        (cluster, "failed", True) for cluster in clusters
     ]
 
 

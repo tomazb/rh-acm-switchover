@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from lib.exceptions import SwitchoverError
+from lib.kubeconfig_snapshot import build_snapshot
 from lib.strict_read import StrictReadOutcome
 from lib.utils import StateManager
 from modules.post_activation import PostActivationVerification
@@ -23,6 +24,18 @@ from modules.post_activation import PostActivationVerification
 NEW_HUB = "https://api.new-hub.example:6443"
 OLD_HUB = "https://api.old-hub.example:6443"
 STEP = "verify_klusterlet_connections"
+
+
+def _fake_api_client(host, token="t"):
+    configuration = SimpleNamespace(
+        host=host,
+        verify_ssl=True,
+        ssl_ca_cert=None,
+        cert_file=None,
+        key_file=None,
+        auth_settings=lambda: {"BearerToken": {"value": f"Bearer {token}"}},
+    )
+    return SimpleNamespace(configuration=configuration)
 
 
 def _b64(text):
@@ -79,7 +92,8 @@ class Fleet:
         self.spokes = spokes
         self.constructions = []
 
-    def build(self, context_name, api_url):
+    def build(self, snapshot, api_url):
+        context_name = snapshot.context_name
         self.constructions.append((context_name, api_url))
         spoke = self.spokes[context_name]
         return spoke, spoke
@@ -347,10 +361,9 @@ def test_a_client_bound_elsewhere_is_unverified_with_zero_reads(run):
         _kubeconfig([("ctx-a", "ka", "https://api.a:6443")]), [_managed_cluster("a", "https://api.a:6443")]
     )
     spoke = FakeSpoke(OLD_HUB)
-    api_client = Mock()
-    api_client.configuration.host = "https://api.elsewhere:6443"
+    elsewhere = _fake_api_client("https://api.elsewhere:6443")
 
-    with patch("modules.post_activation.config.new_client_from_config", return_value=api_client), patch(
+    with patch("lib.kubeconfig_snapshot.config.new_client_from_config_dict", return_value=elsewhere), patch(
         "modules.post_activation.client.CoreV1Api", return_value=spoke
     ) as core:
         with pytest.raises(SwitchoverError, match=r"a \(client_endpoint_mismatch\)"):
@@ -360,19 +373,24 @@ def test_a_client_bound_elsewhere_is_unverified_with_zero_reads(run):
     assert spoke.reads == 0 and spoke.mutations == []
 
 
-def test_reconnect_never_writes_through_a_client_bound_elsewhere(run):
-    """The remediation path builds its own client; it is checked before any write (PR 2 interim)."""
+def test_reconnect_never_writes_through_a_client_bound_elsewhere(run, tmp_path):
+    """The remediation client is snapshot-built and still checked before any write."""
     pav, _state = run(_kubeconfig([]), [])
+    pav._spoke_material_dir = str(tmp_path)
+    snapshot = build_snapshot(
+        "ctx-a", {"server": "https://api.a:6443"}, str(tmp_path), {"token": "t"}, str(tmp_path), "u", 64
+    )
     spoke = FakeSpoke(OLD_HUB)
-    api_client = Mock()
-    api_client.configuration.host = "https://api.elsewhere:6443"
     pav.secondary.get_secret.side_effect = None
     pav.secondary.get_secret.return_value = _import_secret(NEW_HUB)
 
-    with patch("modules.post_activation.config.new_client_from_config", return_value=api_client), patch(
-        "modules.post_activation.client.CoreV1Api", return_value=spoke
-    ), patch("modules.post_activation.client.AppsV1Api", return_value=spoke):
-        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443", NEW_HUB) is False
+    with patch(
+        "lib.kubeconfig_snapshot.config.new_client_from_config_dict",
+        return_value=_fake_api_client("https://api.elsewhere:6443"),
+    ), patch("modules.post_activation.client.CoreV1Api", return_value=spoke), patch(
+        "modules.post_activation.client.AppsV1Api", return_value=spoke
+    ):
+        assert pav._force_klusterlet_reconnect("a", snapshot, "https://api.a:6443", NEW_HUB) is False
 
     assert spoke.reads == 0 and spoke.mutations == []
 

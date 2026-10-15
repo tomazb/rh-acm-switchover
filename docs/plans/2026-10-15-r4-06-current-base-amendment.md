@@ -244,10 +244,10 @@ both.
 
 | group | codes |
 | --- | --- |
-| endpoint | `endpoint_unavailable`, `endpoint_malformed`, `endpoint_mismatch_unverified`, `expected_endpoint_unavailable`, `expected_endpoint_malformed` |
+| endpoint | `endpoint_unavailable`, `endpoint_malformed`, `endpoint_mismatch_unverified`, `expected_endpoint_unavailable`, `expected_endpoint_malformed`, `expected_endpoint_changed` (Python reconnect log: the import secret changed after verification) |
 | target and client | `context_ambiguous`, `context_missing`, `target_identity_mismatch`, `client_endpoint_mismatch` |
 | kubeconfig files | `kubeconfig_load_failed (<code>)`, `kubeconfig_duplicate_conflict`, `kubeconfig_path_unsupported` |
-| credentials (PR 3) | `tls_verification_unproven`, `exec_credential_unsupported`, `auth_provider_unsupported`, `credential_unsupported`, `credential_unreadable`, `credential_symlink`, `credential_not_regular`, `credential_empty`, `credential_oversized`, `client_construction_failed` |
+| credentials (PR 3) | `credential_cleanup_failed` (the private credential directory could not be removed), `tls_verification_unproven`, `exec_credential_unsupported`, `auth_provider_unsupported`, `credential_unsupported`, `credential_unreadable`, `credential_symlink`, `credential_not_regular`, `credential_empty`, `credential_oversized`, `client_construction_failed` |
 
 **Output sanitization (PR 2).**
 - Results and logs carry endpoints only after §2.1 validation, with userinfo removed,

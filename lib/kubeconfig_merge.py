@@ -54,6 +54,14 @@ def kubeconfig_paths(kubeconfig_env: Optional[str]) -> List[str]:
 
 
 def load_merged_kubeconfig(kubeconfig_env: Optional[str], size_limit: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Load, validate and merge every kubeconfig file, or raise SwitchoverError."""
+    merged, _sources = load_merged_kubeconfig_with_sources(kubeconfig_env, size_limit)
+    return merged
+
+
+def load_merged_kubeconfig_with_sources(
+    kubeconfig_env: Optional[str], size_limit: int
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[Tuple[str, str], str]]:
     """Load, validate and merge every kubeconfig file, or raise SwitchoverError.
 
     Entries keep their file and in-file order. Nothing is merged unless every file loads
@@ -67,7 +75,16 @@ def load_merged_kubeconfig(kubeconfig_env: Optional[str], size_limit: int) -> Di
         for section, _member in _SECTIONS:
             for index, entry in enumerate(document.get(section) or []):
                 occurrences[section].append((entry, path, index))
-    return {section: _resolve_duplicates(section, entries) for section, entries in occurrences.items()}
+    merged: Dict[str, List[Dict[str, Any]]] = {}
+    sources: Dict[Tuple[str, str], str] = {}
+    for section, entries in occurrences.items():
+        merged[section] = []
+        for entry, path in _resolve_duplicates(section, entries):
+            merged[section].append(entry)
+            # The absolute source of the entry that won first-wins: its relative credential
+            # paths resolve against this file's directory (design §4).
+            sources[(section, entry["name"])] = os.path.abspath(path)
+    return merged, sources
 
 
 class CanonicalForms:
@@ -124,7 +141,9 @@ class CanonicalForms:
 _KINDS = {"clusters": "cluster", "contexts": "context", "users": "user"}
 
 
-def _resolve_duplicates(section: str, entries: List[Tuple[Dict[str, Any], str, int]]) -> List[Dict[str, Any]]:
+def _resolve_duplicates(
+    section: str, entries: List[Tuple[Dict[str, Any], str, int]]
+) -> List[Tuple[Dict[str, Any], str]]:
     """First-wins for identical duplicates; refuse a group with more than one variant."""
     groups: Dict[str, List[Tuple[Dict[str, Any], str, int]]] = {}
     forms = CanonicalForms()
@@ -150,7 +169,7 @@ def _resolve_duplicates(section: str, entries: List[Tuple[Dict[str, Any], str, i
             )
     if conflicts:
         raise SwitchoverError("kubeconfig_duplicate_conflict: " + "; ".join(conflicts))
-    return [group[0][0] for group in groups.values()]
+    return [(group[0][0], group[0][1]) for group in groups.values()]
 
 
 def _failure(code: str, path: str, detail: str = "") -> SwitchoverError:
