@@ -134,7 +134,7 @@ class TestPrimaryManagedClusterDiscovery:
             "kind": "ManagedCluster",
             "resource_name": "managedclusters",
         }
-        assert self.read["vars"]["_acm_read_fact"] == "acm_primary_managed_clusters_info"
+        assert self.read["vars"]["_acm_read_fact"] == "_acm_primary_managed_clusters_read"
         assert not [t for t in self.tasks if (t.get("kubernetes.core.k8s_info") or {}).get("kind") == "ManagedCluster"]
 
     @pytest.mark.parametrize(("restore_only", "reads"), [(False, True), (True, False)])
@@ -226,7 +226,7 @@ class TestDerivation:
             == "expected_managed_clusters"
         ]
         inputs = derive["tomazb.acm_switchover.acm_migration_evidence"]["inputs"]
-        assert inputs["mc_read"] == "{{ acm_primary_managed_clusters_info | default({}) }}"
+        assert inputs["mc_read"] == "{{ _acm_primary_managed_clusters_read | default({}) }}"
         assert (
             _holds(
                 derive["when"],

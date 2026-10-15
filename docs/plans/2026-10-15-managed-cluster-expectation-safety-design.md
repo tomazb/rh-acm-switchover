@@ -185,14 +185,18 @@ The two share no code. The Collection's primary ManagedCluster discovery read in
 secondary. The read uses `hub: primary` and key `primary_managedclusters`. That seam already:
 
 - registers privately with `no_log`;
-- publishes only `{read_status, resources, resource_version}`;
+- publishes only `{read_status, resources, resource_version}` of a live read, and a
+  pre-seeded fixture read as given;
 - honours a pre-seeded `acm_switchover_test_overrides.migration_reads` entry only in
   dry_run/validate.
 
 So an executing run always reads the live primary, as Python always does. This follows the
 AGENTS execution-time discovery rule: the derived expectation decides which destination state
-the mutating phases accept. The seam publishes the outcome as `acm_primary_managed_clusters_info`.
-That one fact is both the derivation input and the input to the other preflight checks.
+the mutating phases accept. The seam publishes the outcome into the private fact
+`_acm_primary_managed_clusters_read`, which is the derivation input. A copy is published as
+`acm_primary_managed_clusters_info` for the other preflight checks. The public
+`acm_primary_*_info` names follow the documented pre-seed pattern, so a vars file that carries
+one by accident never becomes the derivation input.
 
 The two managed-clusters backup checks are unchanged. In both form factors they still consume
 the ManagedCluster inventory fail-open, which is pre-existing behavior outside this slice. They

@@ -285,8 +285,8 @@ def _seed_migration_reads(vars_payload: dict, execution_mode: str) -> None:
     acm_switchover_test_overrides.migration_reads, which roles honour only in dry_run and
     validate. Each fixture Restore is overlaid on a canonical passive sync Restore, so a
     fixture that sets a phase or spec field keeps it; the Backups are one legacy schedule
-    run. A fixture that seeds migration_reads itself keeps its own activation reads; only
-    preflight's primary_managedclusters entry is defaulted afterwards when the fixture omits it.
+    run. A fixture that seeds migration_reads itself is left alone here (its caller,
+    _seed_fixture_defaults, then defaults preflight's primary_managedclusters entry when omitted).
     """
     from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_api import (
         LEGACY_INVENTORY,
