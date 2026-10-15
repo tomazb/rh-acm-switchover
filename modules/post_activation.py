@@ -1390,6 +1390,9 @@ class PostActivationVerification:
                 if kind == "Secret" and name == "bootstrap-hub-kubeconfig":
                     bootstrap_namespace = namespace
                     self._patch_or_create_bootstrap_secret(v1, namespace, doc, cluster_name)
+                    # Only the first bootstrap Secret is the one whose server was validated
+                    # (_bootstrap_server_from_import); a later duplicate is never applied.
+                    break
             except ApiException as e:
                 # Log only status/reason to avoid leaking sensitive data from exception body
                 logger.debug(

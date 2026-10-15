@@ -459,3 +459,23 @@ def _bootstrap_server(import_secret):
 
     found, server = _bootstrap_server_from_import(base64.b64decode(import_secret["data"]["import.yaml"]).decode())
     return server if found else None
+
+
+def test_only_the_validated_first_bootstrap_secret_is_applied(run):
+    """Validator V13 on PR 356: a second bootstrap-hub-kubeconfig document is never written."""
+    pav, _state = run(_kubeconfig([]), [])
+    first = base64.b64decode(_import_secret(NEW_HUB)["data"]["import.yaml"]).decode()
+    second = base64.b64decode(_import_secret(OLD_HUB)["data"]["import.yaml"]).decode()
+    manifest = {"data": {"import.yaml": _b64(first + "\n---\n" + second)}}
+    pav.secondary.get_secret.side_effect = None
+    pav.secondary.get_secret.return_value = manifest
+    spoke = FakeSpoke(OLD_HUB)
+    spoke.patch_namespaced_secret = Mock(side_effect=spoke.patch_namespaced_secret)
+
+    with patch.object(pav, "_build_managed_cluster_clients", return_value=(spoke, spoke)), patch(
+        "modules.post_activation.wait_for_condition", return_value=True
+    ):
+        assert pav._force_klusterlet_reconnect("a", "ctx-a", "https://api.a:6443", NEW_HUB) is True
+
+    assert spoke.patch_namespaced_secret.call_count == 1
+    assert spoke.hub_server == NEW_HUB
