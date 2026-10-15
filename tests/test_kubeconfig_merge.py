@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib.constants import DEFAULT_KUBECONFIG_SIZE, kubeconfig_size_limit
+from lib.constants import DEFAULT_KUBECONFIG_SIZE, kubeconfig_size_limit, kubeconfig_size_override_ignored
 from lib.exceptions import SwitchoverError
 from lib.kubeconfig_merge import kubeconfig_paths, load_merged_kubeconfig
 
@@ -113,30 +113,28 @@ def test_a_duplicate_mapping_key_aborts_instead_of_keeping_the_last(tmp_path):
         load_merged_kubeconfig(dup, DEFAULT_KUBECONFIG_SIZE)
 
 
-def test_a_constructor_error_is_sanitized_and_never_quotes_the_value(tmp_path):
-    """`!!int <token>` raises a plain ValueError quoting the scalar, not a YAMLError."""
-    bad = _write(tmp_path / "tag.yaml", "users:\n- name: u\n  user: {token: !!int SUPERSECRETTOKEN}\n")
-    with pytest.raises(SwitchoverError) as exc:
-        load_merged_kubeconfig(bad, DEFAULT_KUBECONFIG_SIZE)
-    assert "kubeconfig_load_failed (yaml_invalid)" in str(exc.value)
-    assert "SUPERSECRET" not in str(exc.value)
-    assert exc.value.__cause__ is None and exc.value.__context__ is None
-
-
-def test_yaml_merge_keys_are_accepted_and_explicit_keys_override_them(tmp_path):
-    merged_doc = _write(
-        tmp_path / "merge.yaml",
-        "base: &base {server: https://merged:6443, insecure-skip-tls-verify: false}\n"
+MERGES = [
+    pytest.param(
+        "base: &base {server: https://merged:6443}\n"
         "clusters:\n- name: k\n  cluster:\n    <<: *base\n    server: https://explicit:6443\n",
-    )
-    merged = load_merged_kubeconfig(merged_doc, DEFAULT_KUBECONFIG_SIZE)
-    assert merged["clusters"][0]["cluster"]["server"] == "https://explicit:6443"
+        id="override-beside-merge",
+    ),
+    pytest.param(
+        "b: &b {server: https://b:6443}\na: &a {<<: *b, server: https://a:6443}\n"
+        "clusters: [{name: k, cluster: {<<: *a}}]\n",
+        id="chained-anchors",
+    ),
+    pytest.param("users:\n- name: u\n  user: {<<: {<<: {token: first, token: second}}}\n", id="nested-inline"),
+    pytest.param("a: &a {x: 1}\nb: &b {y: 1}\nm:\n  <<: *a\n  <<: *b\n", id="repeated-merge-key"),
+]
 
 
-def test_a_duplicate_explicit_key_beside_a_merge_is_still_refused(tmp_path):
-    dup = _write(tmp_path / "dup.yaml", "b: &b {x: 1}\nm:\n  <<: *b\n  y: 1\n  y: 2\n")
-    with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(duplicate_yaml_key\)"):
-        load_merged_kubeconfig(dup, DEFAULT_KUBECONFIG_SIZE)
+@pytest.mark.parametrize("content", MERGES)
+def test_yaml_merge_keys_are_refused(tmp_path, content):
+    """A `<<` merge's override order is parser-specific; an endpoint must not depend on it."""
+    doc = _write(tmp_path / "merge.yaml", content)
+    with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(yaml_invalid\).*merge keys are not supported"):
+        load_merged_kubeconfig(doc, DEFAULT_KUBECONFIG_SIZE)
 
 
 @pytest.mark.parametrize("section", ["clusters", "contexts", "users"])
@@ -193,40 +191,67 @@ def test_kubectl_written_empty_context_fields_are_accepted(tmp_path):
     assert [c["name"] for c in load_merged_kubeconfig(doc, DEFAULT_KUBECONFIG_SIZE)["contexts"]] == ["x", "y"]
 
 
-def test_a_repeated_merge_key_is_refused(tmp_path):
-    dup = _write(tmp_path / "dup.yaml", "a: &a {x: 1}\nb: &b {y: 1}\nm:\n  <<: *a\n  <<: *b\n")
-    with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(duplicate_yaml_key\)"):
-        load_merged_kubeconfig(dup, DEFAULT_KUBECONFIG_SIZE)
-
-
-def test_a_duplicate_key_inside_an_inline_merge_source_is_refused(tmp_path):
-    dup = _write(tmp_path / "dup.yaml", "users:\n- name: u\n  user: {<<: {token: first, token: second}}\n")
-    with pytest.raises(SwitchoverError, match=r"kubeconfig_load_failed \(duplicate_yaml_key\)"):
-        load_merged_kubeconfig(dup, DEFAULT_KUBECONFIG_SIZE)
-
-
 def test_a_huge_limit_never_preallocates_or_crashes(tmp_path):
     small = _write(tmp_path / "small.yaml", _doc("a"))
     assert load_merged_kubeconfig(small, 2**62)["contexts"][0]["name"] == "a"
+
+
+def test_a_pipe_is_bounded_without_preallocating(tmp_path):
+    """A FIFO (`KUBECONFIG=<(oc config view --raw)`) has no size to stat; the read is chunked."""
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    body = yaml.safe_dump(_doc("piped")).encode()
+
+    def feed():
+        with open(fifo, "wb") as writer:
+            writer.write(body)
+
+    import threading
+
+    thread = threading.Thread(target=feed)
+    thread.start()
+    try:
+        assert load_merged_kubeconfig(str(fifo), 2**62)["contexts"][0]["name"] == "piped"
+    finally:
+        thread.join(timeout=5)
+
+
+CONSTRUCTOR_ERRORS = [
+    pytest.param("users:\n- name: u\n  user: {token: !!int SUPERSECRETTOKEN}\n", id="int-value"),
+    pytest.param("users:\n- name: u\n  user: {token: !!bool SUPERSECRETTOKEN}\n", id="bool-keyerror"),
+    pytest.param("users:\n- name: u\n  user: {token: !!int ''}\n", id="empty-int-indexerror"),
+    pytest.param("users:\n- name: u\n  user: {token: !!float ''}\n", id="empty-float-indexerror"),
+    pytest.param("users:\n- name: u\n  user: {token: !!timestamp SUPERSECRET-99-99}\n", id="timestamp"),
+]
+
+
+@pytest.mark.parametrize("content", CONSTRUCTOR_ERRORS)
+def test_any_constructor_error_is_a_sanitized_yaml_invalid(tmp_path, content):
+    with pytest.raises(SwitchoverError) as exc:
+        load_merged_kubeconfig(_write(tmp_path / "c.yaml", content), DEFAULT_KUBECONFIG_SIZE)
+    assert "kubeconfig_load_failed (yaml_invalid)" in str(exc.value)
+    assert "SUPERSECRET" not in str(exc.value).upper()
+    assert exc.value.__cause__ is None and exc.value.__context__ is None
 
 
 def test_no_failure_carries_the_original_exception(tmp_path):
     """The original parser/constructor exception (whose text or Mark buffer can hold key
     material) is never attached, not even as an implicit __context__."""
     for name, content in [
-        ("int.yaml", "users:\n- name: u\n  user: {token: !!int SUPERSECRETTOKEN}\n"),
         ("bad.yaml", "users:\n- {name: u, user: {token: SUPERSECRET\n"),
         ("dup.yaml", "users:\n- name: u\n  user: {token: SUPERSECRET, token: x}\n"),
+        ("merge.yaml", "a: &a {token: SUPERSECRET}\nusers: [{name: u, user: {<<: *a}}]\n"),
     ]:
         with pytest.raises(SwitchoverError) as exc:
             load_merged_kubeconfig(_write(tmp_path / name, content), DEFAULT_KUBECONFIG_SIZE)
         assert exc.value.__cause__ is None and exc.value.__context__ is None, name
 
 
-def test_a_disabling_override_is_reported(caplog):
-    with caplog.at_level("WARNING", logger="acm_switchover"):
-        assert kubeconfig_size_limit("0") == DEFAULT_KUBECONFIG_SIZE
-    assert "ACM_KUBECONFIG_MAX_SIZE" in caplog.text
+@pytest.mark.parametrize(
+    ("raw", "ignored"), [(None, False), ("4096", False), ("0", True), ("-1", True), ("10MB", True)]
+)
+def test_an_override_that_cannot_be_honoured_is_detected(raw, ignored):
+    assert kubeconfig_size_override_ignored(raw) is ignored
 
 
 def test_absent_sections_and_an_absent_user_are_accepted(tmp_path):

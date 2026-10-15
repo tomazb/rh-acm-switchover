@@ -110,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - every file is bounded by the 10 MiB limit, which `ACM_KUBECONFIG_MAX_SIZE` can no longer
     disable (`0` and negative values now mean the default, and the internal `max_size=0` bypass is
     gone);
-  - YAML with duplicate keys and structurally invalid documents are refused;
+  - YAML with duplicate keys, YAML merge keys (`<<`) and structurally invalid documents are refused;
   - any failure aborts the step with a sanitized reason code (`kubeconfig_load_failed (missing)` and
     so on), without parser text or key material.
 

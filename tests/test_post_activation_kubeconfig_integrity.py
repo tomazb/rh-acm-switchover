@@ -155,6 +155,18 @@ def test_a_valid_kubeconfig_still_runs_the_klusterlet_gate(tmp_path, state, monk
     assert [ctx["name"] for ctx in kubeconfig_data["contexts"]] == ["secondary-ctx"]
 
 
+def test_an_ignored_size_override_is_reported_through_the_run_logger(tmp_path, state, monkeypatch, caplog):
+    """The warning is emitted at load time (not at import), so it reaches the run's handlers."""
+    monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "good.yaml", _kubeconfig()))
+    monkeypatch.setenv("ACM_KUBECONFIG_MAX_SIZE", "0")
+    pav = _pav(state)
+
+    with caplog.at_level("WARNING", logger="acm_switchover"):
+        pav._load_kubeconfig_data()
+
+    assert "ACM_KUBECONFIG_MAX_SIZE must be a positive byte count" in caplog.text
+
+
 SECRET_TOKEN = "sha256~SUPERSECRETTOKENVALUE"
 PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----MIIEpAIBAAKCAQEAsecretkeymaterial"
 

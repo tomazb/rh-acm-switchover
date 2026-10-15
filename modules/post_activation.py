@@ -55,6 +55,7 @@ from lib.constants import (
     SECRET_VISIBILITY_TIMEOUT,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
+    kubeconfig_size_override_ignored,
 )
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
@@ -1420,6 +1421,12 @@ class PostActivationVerification:
         invalid or structurally malformed file aborts the klusterlet step before any
         cluster is read; the size limit cannot be bypassed.
         """
+        if kubeconfig_size_override_ignored(os.environ.get("ACM_KUBECONFIG_MAX_SIZE")):
+            logger.warning(
+                "ACM_KUBECONFIG_MAX_SIZE must be a positive byte count; using the default %d bytes "
+                "(the kubeconfig size limit can no longer be disabled)",
+                MAX_KUBECONFIG_SIZE,
+            )
         return load_merged_kubeconfig(os.environ.get("KUBECONFIG"), MAX_KUBECONFIG_SIZE)
 
     def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:

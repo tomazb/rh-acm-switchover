@@ -146,13 +146,20 @@ def kubeconfig_size_limit(raw: Optional[str]) -> int:
         value = int(raw)
     except ValueError:
         value = 0
-    if value > 0:
-        return value
-    # An override can no longer disable the limit (formerly `0` or negative meant unlimited).
-    logging.getLogger("acm_switchover").warning(
-        "ACM_KUBECONFIG_MAX_SIZE must be a positive byte count; using the default %d bytes", DEFAULT_KUBECONFIG_SIZE
-    )
-    return DEFAULT_KUBECONFIG_SIZE
+    return value if value > 0 else DEFAULT_KUBECONFIG_SIZE
+
+
+def kubeconfig_size_override_ignored(raw: Optional[str]) -> bool:
+    """True when ACM_KUBECONFIG_MAX_SIZE is set but cannot be honoured (it never disables the limit).
+
+    Reported by the caller at load time, through the run's configured logging.
+    """
+    if raw is None:
+        return False
+    try:
+        return int(raw) <= 0
+    except ValueError:
+        return True
 
 
 MAX_KUBECONFIG_SIZE = kubeconfig_size_limit(os.environ.get("ACM_KUBECONFIG_MAX_SIZE"))

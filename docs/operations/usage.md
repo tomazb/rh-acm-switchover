@@ -357,7 +357,9 @@ The local kubeconfig that Python uses to find managed-cluster contexts is loaded
 fail-closed. Every file named in `KUBECONFIG` (or `~/.kube/config` when
 `KUBECONFIG` is unset) must exist, be readable, be at most the size limit
 (10 MiB; `ACM_KUBECONFIG_MAX_SIZE` can raise or lower it but not disable it),
-parse as YAML without duplicate keys, and have a valid kubeconfig structure. The
+parse as YAML without duplicate keys or `<<` merge keys, and have a valid
+kubeconfig structure (an absent or `null` section and an empty `user`/`cluster`
+in a context are accepted as kubectl writes them). The
 secondary-hub context must also resolve to an API server. Otherwise the
 klusterlet step fails with `kubeconfig_load_failed (<reason>)` (reason one of
 `missing`, `unreadable`, `oversized`, `yaml_invalid`, `duplicate_yaml_key`,

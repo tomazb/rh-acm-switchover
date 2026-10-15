@@ -21,18 +21,16 @@ from lib.exceptions import SwitchoverError
 DEFAULT_KUBECONFIG_PATH = "~/.kube/config"
 _SECTIONS = (("clusters", "cluster"), ("contexts", "context"), ("users", "user"))
 _MERGE_TAG = "tag:yaml.org,2002:merge"
-# A YAML constructor raises these for a malformed scalar (e.g. `!!int <token>` is a ValueError
-# whose message quotes the scalar) or for pathological nesting; they are input errors.
-_CONSTRUCTOR_ERRORS = (ValueError, TypeError, AttributeError, RecursionError, OverflowError)
+_READ_CHUNK = 64 * 1024
 
 
 def kubeconfig_paths(kubeconfig_env: Optional[str]) -> List[str]:
     """The files to merge, in merge order.
 
-    KUBECONFIG entries are taken left to right exactly as the Kubernetes client loader
-    takes them (no whitespace trimming); empty entries are skipped and a repeated entry is
-    read once, at its first position. The default path is used only when KUBECONFIG is
-    unset or names no file, and is never appended to a named list.
+    KUBECONFIG entries are taken left to right without whitespace trimming, as the
+    Kubernetes client loader splits them; empty entries are skipped and a repeated entry
+    is read once, at its first position. The default path is used only when KUBECONFIG is
+    unset or names no file (design section 1), and is never appended to a named list.
     """
     paths: List[str] = []
     for entry in (kubeconfig_env or "").split(":"):
@@ -77,9 +75,11 @@ def _load_document(path: str, size_limit: int) -> Dict[str, Any]:
         document = yaml.load(text, Loader=_UniqueKeyLoader)  # nosec B506 - SafeLoader subclass
     except _DuplicateKey as exc:
         failure = _failure("duplicate_yaml_key", path, _position(exc.mark))
+    except _MergeKey as exc:
+        failure = _failure("yaml_invalid", path, _position(exc.mark) + " (YAML merge keys are not supported)")
     except yaml.YAMLError as exc:
         failure = _failure("yaml_invalid", path, _position(getattr(exc, "problem_mark", None)))
-    except _CONSTRUCTOR_ERRORS:
+    except Exception:  # noqa: BLE001 - any constructor error (`!!int <v>`, `!!bool <v>`, `!!int ''`) quotes input
         failure = _failure("yaml_invalid", path)
     if failure is not None:
         raise failure
@@ -88,25 +88,31 @@ def _load_document(path: str, size_limit: int) -> Dict[str, Any]:
 
 
 def _read_bounded(path: str, size_limit: int) -> bytes:
-    """Read at most size_limit bytes; one byte more is `oversized` (inclusive limit)."""
+    """Read at most size_limit bytes; one byte more is `oversized` (inclusive limit).
+
+    Chunked, so no read ever asks for more than one chunk (a large limit never
+    pre-allocates, and a pipe or FIFO is bounded the same way as a regular file).
+    """
     code = None
+    chunks: List[bytes] = []
+    total = 0
     try:
         with open(path, "rb") as handle:
-            # Bounded by the real file size, so a large limit never pre-allocates; a file
-            # that grows between the stat and the read still fails the length check.
-            want = min(size_limit, os.fstat(handle.fileno()).st_size) + 1
-            raw = handle.read(want)
-            if len(raw) == want and want <= size_limit:
-                raw += handle.read(size_limit + 1 - want)
+            while total <= size_limit:
+                chunk = handle.read(min(_READ_CHUNK, size_limit + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
     except FileNotFoundError:
         code = "missing"
     except OSError:
         code = "unreadable"
     if code is not None:
         raise _failure(code, path)
-    if len(raw) > size_limit:
+    if total > size_limit:
         raise _failure("oversized", path, f" (limit {size_limit} bytes)")
-    return raw
+    return b"".join(chunks)
 
 
 def _position(mark: Any) -> str:
@@ -121,33 +127,27 @@ class _DuplicateKey(Exception):
         self.mark = mark
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """SafeLoader that refuses a repeated mapping key instead of keeping the last value.
+class _MergeKey(Exception):
+    def __init__(self, mark: Any) -> None:
+        super().__init__("merge key")
+        self.mark = mark
 
-    `<<` merges keep YAML semantics (explicit keys override merged ones), but a repeated
-    `<<` key and a repeated key inside an inline merge source are refused too.
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a repeated mapping key instead of keeping the last value,
+    and refuses `<<` merge keys.
+
+    Merge keys are refused because their override order is parser-specific: a kubeconfig
+    whose endpoint depends on it could resolve differently here than in client-go, which
+    is the ambiguity this loader exists to close. Every mapping that holds a merge key is
+    constructed here before PyYAML flattens it, so a nested or anchored merge is caught.
     """
 
     def construct_mapping(self, node, deep=False):
-        self._refuse_duplicate_keys(node, deep)
-        for key_node, value_node in node.value:
-            if key_node.tag != _MERGE_TAG:
-                continue
-            sources = value_node.value if isinstance(value_node, yaml.SequenceNode) else [value_node]
-            for source in sources:
-                if isinstance(source, yaml.MappingNode):
-                    self._refuse_duplicate_keys(source, deep)
-        return super().construct_mapping(node, deep=deep)
-
-    def _refuse_duplicate_keys(self, node, deep):
         seen = set()
-        merges = 0
         for key_node, _value_node in node.value:
             if key_node.tag == _MERGE_TAG:
-                merges += 1
-                if merges > 1:
-                    raise _DuplicateKey(key_node.start_mark)
-                continue
+                raise _MergeKey(key_node.start_mark)
             key = self.construct_object(key_node, deep=deep)
             try:
                 if key in seen:
@@ -155,6 +155,7 @@ class _UniqueKeyLoader(yaml.SafeLoader):
                 seen.add(key)
             except TypeError:
                 pass  # an unhashable key is refused by the base constructor
+        return super().construct_mapping(node, deep=deep)
 
 
 def _validate(document: Any, path: str) -> None:
