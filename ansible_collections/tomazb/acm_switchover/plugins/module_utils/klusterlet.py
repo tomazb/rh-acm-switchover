@@ -50,10 +50,6 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_f
     select_context_entries,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_snapshot import (
-    REASON_CLIENT_ENDPOINT_MISMATCH as SNAPSHOT_CLIENT_ENDPOINT_MISMATCH,
-)
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_snapshot import (
-    REASON_TLS_VERIFICATION_UNPROVEN,
     SnapshotError,
     SpokeSnapshot,
     build_api_client,
@@ -342,7 +338,13 @@ def ordered_bounded_map(
         if isinstance(real, dict):
             placeholder = results[index] or {}
             reported = {key: value for key, value in real.items() if not key.startswith("_")}
+            # The cluster stays a timeout failure; the worker's own outcome is kept beside it.
+            reported["completed_status"] = real.get("status")
+            if real.get("reason"):
+                reported["completed_reason"] = real["reason"]
             reported.update({key: placeholder[key] for key in ("status", "reason") if key in placeholder})
+            if isinstance(reported.get("steps"), dict):
+                reported["steps"] = _mark_pending_not_run(reported["steps"])
             reported["completed_after_timeout"] = True
             results[index] = reported
     return [item for item in results if item is not None]
@@ -451,8 +453,8 @@ def _bound_spoke_client(
     try:
         api = factory(snapshot, material_dir, api_url, request_timeout)
     except SnapshotError as exc:
-        unproven = exc.reason in (SNAPSHOT_CLIENT_ENDPOINT_MISMATCH, REASON_TLS_VERIFICATION_UNPROVEN)
-        raise _Refusal("unverified" if unproven else "failed", exc.reason) from None
+        # Same status as Python for every snapshot refusal: unproven, never inspected.
+        raise _Refusal("unverified", exc.reason) from None
     except Exception as exc:  # noqa: BLE001 - loader errors can quote credentials
         raise _Refusal("failed", f"client_construction_failed ({exc.__class__.__name__})") from None
     # Defense in depth: whatever built the client, it must be bound to the proven endpoint.

@@ -464,3 +464,36 @@ def test_a_cleanup_failure_never_masks_the_primary_error(tmp_path, spoke_dir, ve
     with pytest.raises(SwitchoverError, match="endpoint_mismatch_unverified"):
         _run(pav, Spoke("https://api.new-hub.example:443"))
     assert "Could not remove klusterlet credential material" in caplog.text
+
+
+@pytest.mark.parametrize("field", ["ca.crt", "client.crt", "client.key", "token"])
+def test_a_change_between_selection_and_the_probe_is_never_seen(tmp_path, spoke_dir, verifier, monkeypatch, field):
+    """PR 3 #1: the stage between snapshot capture and the first probe client."""
+    import modules.post_activation as post_activation_module
+
+    (spoke_dir / "client.crt").write_bytes(CERT)
+    (spoke_dir / "client.key").write_bytes(KEY)
+    users = [
+        {
+            "name": "admin",
+            "user": {
+                "tokenFile": "creds/token",
+                "client-certificate": "creds/client.crt",
+                "client-key": "creds/client.key",
+            },
+        }
+    ]
+    pav, _state = verifier(_write_kubeconfig(tmp_path, users=users), [_managed_cluster("a")])
+    built = Constructions(monkeypatch)
+    real_build = post_activation_module.build_snapshot
+
+    def capture_then_tamper(*args, **kwargs):
+        snapshot = real_build(*args, **kwargs)
+        (spoke_dir / field).write_bytes(b"REPLACED\n")
+        return snapshot
+
+    monkeypatch.setattr(post_activation_module, "build_snapshot", capture_then_tamper)
+    _run(pav, Spoke(NEW_HUB))
+
+    assert [record["bearer"] for record in built.records] == ["Bearer captured-token"]
+    assert built.records[0]["ca"] == CA

@@ -11,7 +11,7 @@ import pytest
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.kubeconfig_file import (
     KubeconfigFileError,
     load_kubeconfig_file,
-    select_context,
+    select_context_entries,
 )
 
 VECTORS = json.loads(
@@ -86,34 +86,36 @@ def _document(tmp_path, text=TWO_CONTEXTS):
 
 
 def test_a_named_context_selects_its_cluster_entry(tmp_path):
-    name, cluster = select_context(_document(tmp_path), "spoke-admin")
+    name, cluster, _user, _reference = select_context_entries(_document(tmp_path), "spoke-admin")
     assert name == "spoke-admin"
     assert cluster["cluster"]["server"] == "https://api.spoke:6443"
 
 
 def test_a_missing_named_context_is_refused(tmp_path):
     with pytest.raises(KubeconfigFileError) as excinfo:
-        select_context(_document(tmp_path), "spoke")
+        select_context_entries(_document(tmp_path), "spoke")
     assert excinfo.value.reason == "context_missing"
 
 
 def test_an_omitted_context_without_current_context_is_ambiguous(tmp_path):
     with pytest.raises(KubeconfigFileError) as excinfo:
-        select_context(_document(tmp_path), None)
+        select_context_entries(_document(tmp_path), None)
     assert excinfo.value.reason == "context_ambiguous"
 
 
 @pytest.mark.parametrize("current", ["''", "nope", "1"])
 def test_an_omitted_context_with_an_unusable_current_context_is_ambiguous(tmp_path, current):
     with pytest.raises(KubeconfigFileError) as excinfo:
-        select_context(_document(tmp_path, TWO_CONTEXTS + f"current-context: {current}\n"), None)
+        select_context_entries(_document(tmp_path, TWO_CONTEXTS + f"current-context: {current}\n"), None)
     assert excinfo.value.reason == "context_ambiguous"
 
 
 def test_an_omitted_context_uses_a_current_context_naming_one_context(tmp_path):
-    name, cluster = select_context(_document(tmp_path, TWO_CONTEXTS + "current-context: other-admin\n"), None)
+    name, cluster, _user, _reference = select_context_entries(
+        _document(tmp_path, TWO_CONTEXTS + "current-context: other-admin\n"), None
+    )
     assert (name, cluster["name"]) == ("other-admin", "other")
 
 
 def test_a_context_naming_no_cluster_entry_selects_no_cluster(tmp_path):
-    assert select_context(_document(tmp_path), "dangling") == ("dangling", None)
+    assert select_context_entries(_document(tmp_path), "dangling")[:2] == ("dangling", None)

@@ -952,9 +952,36 @@ def test_a_late_worker_is_a_timeout_failure_reporting_its_real_outcome():
             "reason": "worker_timeout",
             "changed": True,
             "steps": {"x": "ok"},
+            "completed_status": "remediated",
             "completed_after_timeout": True,
         }
     ]
+
+
+def test_a_late_refusal_keeps_its_reason_and_unrun_steps():
+    release = threading.Event()
+
+    def late_refusal(cluster_name: str) -> dict:
+        release.wait(5)
+        return {
+            "cluster": cluster_name,
+            "status": "unverified",
+            "reason": "credential_symlink",
+            "steps": {"a": "pending"},
+        }
+
+    timer = _release_later(release)
+    try:
+        results = ordered_bounded_map(
+            ["c"], workers=1, fn=late_refusal, future_timeout=0.001, timeout_result=_worker_timeout_result
+        )
+    finally:
+        release.set()
+        timer.cancel()
+
+    assert results[0]["status"] == "failed" and results[0]["reason"] == "worker_timeout"
+    assert (results[0]["completed_status"], results[0]["completed_reason"]) == ("unverified", "credential_symlink")
+    assert results[0]["steps"] == {"a": "not_run"}
 
 
 def _record_wait_timeouts(monkeypatch) -> list:

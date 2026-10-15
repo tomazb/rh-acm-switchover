@@ -197,7 +197,9 @@ def test_concurrent_construction_gives_each_worker_its_own_material(impl, tmp_pa
         assert {index: bearer for index, (bearer, _) in results.items()} == {
             index: f"Bearer token-{index}" for index in range(16)
         }
-        assert len({ca for _, ca in results.values()}) == 16
+        # Identical content is materialized once (content-addressed) and shared, never rewritten.
+        assert len({ca for _, ca in results.values()}) == 1
+        assert len(os.listdir(private)) == 1
     finally:
         impl.remove_private_dir(private)
 
@@ -307,5 +309,34 @@ def test_basic_auth_is_proven_after_construction(impl, tmp_path):
         assert (
             configuration.auth_settings()["BearerToken"]["value"] == "Basic " + base64.b64encode(b"admin:pw").decode()
         )
+    finally:
+        impl.remove_private_dir(private)
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_a_relative_credential_path_without_a_known_source_is_refused(impl, tmp_path):
+    """Never resolved against the process working directory."""
+    with pytest.raises(impl.SnapshotError) as excinfo:
+        impl.build_snapshot(
+            "c", {"server": SERVER, "certificate-authority": "ca.crt"}, None, {"token": "t"}, None, "u", LIMIT
+        )
+    assert (excinfo.value.reason, excinfo.value.entry) == ("credential_unreadable", "cluster")
+
+
+@pytest.mark.parametrize("impl", IMPLEMENTATIONS)
+def test_an_uppercase_scheme_still_gets_its_ca(impl, tmp_path):
+    snapshot = impl.build_snapshot(
+        "c",
+        {"server": "HTTPS://api.spoke.example:6443", "certificate-authority-data": base64.b64encode(CA).decode()},
+        str(tmp_path),
+        {"token": "t"},
+        str(tmp_path),
+        "u",
+        LIMIT,
+    )
+    private = impl.new_private_dir()
+    try:
+        configuration = impl.build_api_client(snapshot, private, SERVER).configuration
+        assert configuration.ssl_ca_cert and os.path.dirname(configuration.ssl_ca_cert) == private
     finally:
         impl.remove_private_dir(private)

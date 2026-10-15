@@ -285,12 +285,6 @@ def load_kubeconfig_file(path: str, size_limit: int = KUBECONFIG_SIZE_LIMIT) -> 
     return resolve_duplicates(parse_kubeconfig_text(_read_bounded(path, size_limit)))
 
 
-def select_context(document: dict, context: str | None) -> tuple[str, dict | None]:
-    """``(context_name, cluster_entry_or_None)``; see ``select_context_entries``."""
-    name, cluster, _user, _reference = select_context_entries(document, context)
-    return name, cluster
-
-
 def select_context_entries(document: dict, context: str | None) -> tuple[str, dict | None, dict | None, str | None]:
     """Amendment §4: ``(context, cluster_entry, user_entry, user_reference)`` for the mapped context.
 

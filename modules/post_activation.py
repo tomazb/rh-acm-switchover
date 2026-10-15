@@ -72,6 +72,7 @@ from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
 from lib.kubeconfig_merge import load_merged_kubeconfig_with_sources
 from lib.kubeconfig_snapshot import (
+    REASON_CLIENT_CONSTRUCTION_FAILED,
     SnapshotError,
     SpokeSnapshot,
     build_api_client,
@@ -1364,7 +1365,7 @@ class PostActivationVerification:
             SnapshotError: a sanitized refusal; no client is returned and nothing is read
         """
         if self._spoke_material_dir is None:
-            raise SnapshotError("client_construction_failed")
+            raise SnapshotError(REASON_CLIENT_CONSTRUCTION_FAILED)
         api_client = build_api_client(snapshot, self._spoke_material_dir, api_url)
         return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
 
@@ -1382,7 +1383,7 @@ class PostActivationVerification:
                 cluster.get("cluster") or {},
                 self._source_dir("clusters", cluster_name),
                 (user.get("user") or {}) if user is not None else None,
-                self._source_dir("users", user_name) if user_name else "",
+                self._source_dir("users", user_name) if user_name else None,
                 user_name,
                 MAX_KUBECONFIG_SIZE,
                 source=self._kubeconfig_sources.get(("contexts", context_name), ""),
@@ -1401,9 +1402,10 @@ class PostActivationVerification:
             )
             raise
 
-    def _source_dir(self, section: str, name: Optional[str]) -> str:
+    def _source_dir(self, section: str, name: Optional[str]) -> Optional[str]:
+        """The entry's own source directory, or None: a relative credential path is then refused."""
         source = self._kubeconfig_sources.get((section, name or ""))
-        return os.path.dirname(source) if source else os.getcwd()
+        return os.path.dirname(source) if source else None
 
     def _expected_hub_endpoint(self, cluster_name: str) -> Tuple[Optional[str], Optional[str]]:
         """The expected hub endpoint for one cluster (amendment §2.4), or the reason it is unusable.

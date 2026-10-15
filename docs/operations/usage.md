@@ -435,8 +435,9 @@ run cannot change who the tool authenticates as:
 - a user with an `exec` credential plugin or an `auth-provider` is refused
   (`exec_credential_unsupported`, `auth_provider_unsupported`): their credentials are
   produced when the client is built, outside anything that was checked. A context that
-  names a user that does not exist is refused (`credential_unsupported`), never turned into
-  an anonymous client;
+  names a user that does not exist, a user without a usable credential (a token, a basic
+  username/password pair, or a client certificate with its key), or a malformed basic pair
+  is refused (`credential_unsupported`): an anonymous client is never built;
 - TLS verification must be provable: `insecure-skip-tls-verify` must be absent or the
   boolean `false` (the Kubernetes client treats the string `"false"` as true), and an `http`
   server, `tls-server-name` or `proxy-url` is refused (`tls_verification_unproven`).

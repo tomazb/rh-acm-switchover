@@ -1796,10 +1796,11 @@ class TestKlusterletParallelVerification:
         ]
 
         kube_data = {
+            "users": [{"name": "u", "user": {"token": "t"}}],
             "contexts": [
-                {"name": "ctx-c1", "context": {"cluster": "kc1"}},
-                {"name": "ctx-c2", "context": {"cluster": "kc2"}},
-                {"name": "ctx-c3", "context": {"cluster": "kc3"}},
+                {"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}},
+                {"name": "ctx-c2", "context": {"cluster": "kc2", "user": "u"}},
+                {"name": "ctx-c3", "context": {"cluster": "kc3", "user": "u"}},
             ],
             "clusters": [
                 {"name": "kc1", "cluster": {"server": "https://api.c1:6443"}},
@@ -1836,7 +1837,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
@@ -1869,7 +1871,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
@@ -1906,7 +1909,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
@@ -1938,7 +1942,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
@@ -1972,6 +1977,7 @@ class TestKlusterletParallelVerification:
         ]
         # A context named exactly like the cluster must not be selected.
         kube_data = {
+            "users": [{"name": "u", "user": {"token": "t"}}],
             "contexts": [{"name": "orphan", "context": {"cluster": "korphan"}}],
             "clusters": [{"name": "korphan", "cluster": {"server": "https://api.orphan:6443"}}],
         }
@@ -1999,7 +2005,8 @@ class TestKlusterletParallelVerification:
         ]
 
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
@@ -2023,7 +2030,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
         caplog.set_level(logging.INFO, logger="acm_switchover")
@@ -2074,7 +2082,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
         wait_calls = 0
@@ -2123,7 +2132,8 @@ class TestKlusterletParallelVerification:
             },
         ]
         kube_data = {
-            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1", "user": "u"}}],
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
         wait_calls = 0

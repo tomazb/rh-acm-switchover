@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 import errno
+import hashlib
 import os
 import shutil
 import stat
@@ -25,7 +26,10 @@ import tempfile
 import threading
 from typing import Any, NamedTuple
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.endpoint_identity import normalized_equal
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.endpoint_identity import (
+    REASON_CLIENT_ENDPOINT_MISMATCH,
+    normalized_equal,
+)
 
 REASON_TLS_VERIFICATION_UNPROVEN = "tls_verification_unproven"
 REASON_EXEC_CREDENTIAL_UNSUPPORTED = "exec_credential_unsupported"
@@ -37,7 +41,6 @@ REASON_CREDENTIAL_NOT_REGULAR = "credential_not_regular"
 REASON_CREDENTIAL_EMPTY = "credential_empty"
 REASON_CREDENTIAL_OVERSIZED = "credential_oversized"
 REASON_CLIENT_CONSTRUCTION_FAILED = "client_construction_failed"
-REASON_CLIENT_ENDPOINT_MISMATCH = "client_endpoint_mismatch"
 REASON_CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
 
 _READ_CHUNK = 64 * 1024
@@ -123,6 +126,16 @@ def capture_file(path: str, size_limit: int) -> bytes:
     return b"".join(chunks)
 
 
+def _resolve(base_dir: str | None, path: str) -> str:
+    """A credential path, relative ones against the entry's own source directory only."""
+    if os.path.isabs(path):
+        return path
+    if not base_dir:
+        # Never the process working directory: the entry's source is unknown.
+        raise SnapshotError(REASON_CREDENTIAL_UNREADABLE)
+    return os.path.join(base_dir, path)
+
+
 def _field_content(entry: dict[str, Any], field: str, base_dir: str, size_limit: int) -> bytes | None:
     data_key = f"{field}-data"
     if data_key in entry:
@@ -130,7 +143,9 @@ def _field_content(entry: dict[str, Any], field: str, base_dir: str, size_limit:
         if not isinstance(value, str):
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE)
         try:
-            content = base64.b64decode(value, validate=True)
+            # Line-wrapped data is valid (kubectl accepts it); anything else outside the
+            # alphabet is refused rather than silently discarded.
+            content = base64.b64decode("".join(value.split()), validate=True)
         except (binascii.Error, ValueError):
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE) from None
         if not content:
@@ -141,7 +156,7 @@ def _field_content(entry: dict[str, Any], field: str, base_dir: str, size_limit:
         path = entry[field]
         if not isinstance(path, str) or not path:
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE)
-        return capture_file(os.path.join(base_dir, path), size_limit)
+        return capture_file(_resolve(base_dir, path), size_limit)
     return None
 
 
@@ -158,7 +173,7 @@ def _token(user: dict[str, Any], base_dir: str, size_limit: int) -> str | None:
         path = user["tokenFile"]
         if not isinstance(path, str) or not path:
             raise SnapshotError(REASON_CREDENTIAL_UNREADABLE)
-        raw = capture_file(os.path.join(base_dir, path), size_limit)
+        raw = capture_file(_resolve(base_dir, path), size_limit)
         try:
             token = raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -206,6 +221,13 @@ def build_snapshot(
         token = _token(user_body, user_base_dir, size_limit)
     except SnapshotError as exc:
         raise SnapshotError(exc.reason, "user") from None
+    username, password = user_body.get("username"), user_body.get("password")
+    has_pair = username is not None and password is not None
+    if (contents["cert"] is None) != (contents["key"] is None):
+        raise SnapshotError(REASON_CREDENTIAL_UNSUPPORTED, "user")
+    if token is None and not has_pair and contents["cert"] is None:
+        # No credential at all would be an anonymous client: never built (amendment §6).
+        raise SnapshotError(REASON_CREDENTIAL_UNSUPPORTED, "user")
     return SpokeSnapshot(
         context_name=context_name,
         server=cluster["server"],
@@ -213,8 +235,8 @@ def build_snapshot(
         cert=contents["cert"],
         key=contents["key"],
         token=token,
-        username=user_body.get("username"),
-        password=user_body.get("password"),
+        username=username,
+        password=password,
         source=source,
     )
 
@@ -262,7 +284,16 @@ def remove_private_dir(path: str) -> None:
 
 
 def _write_private(directory: str, content: bytes) -> str:
-    descriptor, path = tempfile.mkstemp(dir=directory)
+    """A ``0600`` file holding ``content`` in the private directory, written once per content.
+
+    Files are named by their content's digest and published with an atomic rename, so every
+    client of a run built from the same snapshot reuses one file, and no reader ever sees a
+    partly written one.
+    """
+    path = os.path.join(directory, hashlib.sha256(content).hexdigest())
+    if os.path.isfile(path):
+        return path
+    descriptor, staging = tempfile.mkstemp(dir=directory)
     try:
         os.fchmod(descriptor, 0o600)
         view = memoryview(content)
@@ -271,6 +302,7 @@ def _write_private(directory: str, content: bytes) -> str:
             view = view[written:]
     finally:
         os.close(descriptor)
+    os.replace(staging, path)
     return path
 
 
@@ -282,7 +314,9 @@ def materialize(snapshot: SpokeSnapshot, private_dir: str) -> dict[str, Any]:
     """
     if not os.path.isabs(private_dir):
         raise SnapshotError(REASON_CLIENT_CONSTRUCTION_FAILED)
-    cluster: dict[str, Any] = {"server": snapshot.server}
+    # The loader reads CA/cert/key only for a lowercase "https" host; the scheme is validated
+    # case-insensitively, so it is written in its canonical form.
+    cluster: dict[str, Any] = {"server": "https://" + snapshot.server[len("https://") :]}
     user: dict[str, Any] = {}
     if snapshot.ca is not None:
         cluster["certificate-authority"] = _write_private(private_dir, snapshot.ca)
