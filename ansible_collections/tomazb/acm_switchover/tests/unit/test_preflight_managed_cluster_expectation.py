@@ -16,11 +16,42 @@ import pytest
 import yaml
 from ansible.module_utils import basic
 from ansible.module_utils.basic import AnsibleModule as RealAnsibleModule
+from ansible.parsing.dataloader import DataLoader
+from ansible.template import Templar
 from yaml_contract_helpers import _when_text
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_migration_evidence as module
 
+try:  # ansible-core 2.19+ templates only strings marked as trusted.
+    from ansible.template import trust_as_template
+except ImportError:  # pragma: no cover - ansible-core < 2.19
+
+    def trust_as_template(value):
+        return value
+
+
 ROLE_TASKS = pathlib.Path(__file__).resolve().parents[2] / "roles" / "preflight" / "tasks"
+WAIT_FOR_RESTORE = (
+    pathlib.Path(__file__).resolve().parents[2] / "roles" / "activation" / "tasks" / "wait_for_restore.yml"
+)
+
+
+def _holds(conditions, variables) -> bool:
+    """Evaluate a task's `when` list (or an assert's `that`) the way Ansible does: all must hold."""
+    templar = Templar(loader=DataLoader(), variables=variables)
+    conditions = conditions if isinstance(conditions, list) else [conditions]
+    return all(templar.template(trust_as_template("{{ (%s) | bool }}" % c)) is True for c in conditions)
+
+
+def _find(tasks, predicate):
+    stack = list(tasks)
+    while stack:
+        task = stack.pop(0)
+        if predicate(task):
+            return task
+        for key in ("block", "rescue", "always"):
+            stack.extend(task.get(key) or [])
+    raise AssertionError("task not found")
 
 
 class _Exit(SystemExit):
@@ -92,10 +123,55 @@ class TestPrimaryManagedClusterDiscovery:
         assert "primary" in params["kubeconfig"] and "primary" in params["context"]
         assert not [t for t in self.tasks if (t.get("kubernetes.core.k8s_info") or {}).get("kind") == "ManagedCluster"]
 
-    def test_an_executing_run_always_reads_the_live_primary(self):
-        when = _when_text(self.read)
-        assert "== 'execute'" in when and "acm_primary_managed_clusters_info is not defined" in when
-        assert "restore_only" in when
+    @pytest.mark.parametrize(
+        ("restore_only", "mode", "seeded", "reads"),
+        [
+            (False, "execute", False, True),
+            (False, "execute", True, True),
+            (False, "dry_run", False, True),
+            (False, "dry_run", True, False),
+            (False, "validate", True, False),
+            (True, "execute", False, False),
+            (True, "dry_run", False, False),
+        ],
+    )
+    def test_the_read_condition_truth_table(self, restore_only, mode, seeded, reads):
+        """An executing run always reads; only a non-live fixture may stand in; restore-only never reads."""
+        variables = {
+            "acm_switchover_operation": {"restore_only": restore_only},
+            "acm_switchover_execution": {"mode": mode},
+        }
+        if seeded:
+            variables["acm_primary_managed_clusters_info"] = {"read_status": "ok", "resources": []}
+        assert _holds(self.read["when"], variables) is reads
+
+    @pytest.mark.parametrize(
+        ("restore_only", "mode", "seeded", "refused"),
+        [
+            (False, "execute", True, True),
+            (False, "execute", False, False),
+            (False, "dry_run", True, False),
+            (False, "validate", True, False),
+            (True, "execute", True, False),
+        ],
+    )
+    def test_an_executing_run_refuses_a_pre_supplied_read(self, restore_only, mode, seeded, refused):
+        """A registered read never overrides an extra var of the same name, so an executing run
+        refuses a pre-supplied one before the read instead of deriving from it."""
+        guard = _find(
+            self.tasks,
+            lambda t: t.get("name") == "Refuse a pre-supplied primary ManagedCluster read in an executing run",
+        )
+        assert self.tasks.index(guard) < self.tasks.index(self.read)
+        variables = {
+            "acm_switchover_operation": {"restore_only": restore_only},
+            "acm_switchover_execution": {"mode": mode},
+        }
+        if seeded:
+            variables["acm_primary_managed_clusters_info"] = {"read_status": "ok", "resources": []}
+        applies = _holds(guard["when"], variables)
+        passes = _holds(guard["ansible.builtin.assert"]["that"], variables)
+        assert (applies and not passes) is refused
 
 
 class TestDerivation:
@@ -128,3 +204,25 @@ class TestDerivation:
 
     def test_a_refused_derivation_is_a_critical_preflight_result(self):
         assert "preflight-managed-cluster-inventory" in self.text
+
+
+@pytest.mark.parametrize(
+    ("minimum", "names", "enforce", "polls"),
+    [
+        (0, [], False, False),
+        (0, ["cluster-a"], True, True),
+        # #340 E2: a waived name check (enforce false) still waits for a non-empty inventory.
+        (0, ["cluster-a"], False, True),
+        (1, [], False, True),
+        (2, ["cluster-a"], False, True),
+    ],
+)
+def test_the_full_restore_wait_gate_truth_table(minimum, names, enforce, polls):
+    tasks = yaml.safe_load(WAIT_FOR_RESTORE.read_text()) or []
+    gate = _find(tasks, lambda t: t.get("ansible.builtin.include_tasks") == "poll_managed_clusters.yml")
+    variables = {
+        "acm_switchover_operation": {"method": "full"},
+        "_acm_mc_check": {"min_managed_clusters": minimum, "expected_names": names, "enforce": enforce},
+        "_acm_mc_state": "pending",
+    }
+    assert _holds(gate["when"], variables) is polls

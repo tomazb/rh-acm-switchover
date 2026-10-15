@@ -146,6 +146,17 @@ expectation. Post-activation additionally requires every non-local cluster to be
 and Joined. That is a later, intentionally stronger readiness predicate: clusters
 reconnect after activation, and it is not structurally guaranteed to fail.
 
+A member without a name is malformed in both phases. Activation never counts it as the proof
+that the destination is non-empty.
+
+A resume over completed activation evidence (`restore.completed_at` journaled) revalidates
+the completion proof and does not re-read the ManagedCluster inventory. That is the R4-04
+resume contract, and this amendment does not change it. On that path a refusal can appear
+first at post-activation only after a real change in destination state, or for a journal
+completed under the earlier permissive rule. Such journals exist only from unreleased R4-04
+builds: R4-04 is still under `[Unreleased]`. Post-activation still refuses in both cases, so
+the outcome is fail-closed and never a false success.
+
 ### Waiver audit (Q8)
 
 Unchanged. The waiver remains journaled with `actor`, `reason`, optional `request_id`,

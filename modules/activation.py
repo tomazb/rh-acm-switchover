@@ -1284,8 +1284,15 @@ class SecondaryActivation:
             raise FatalError(f"ManagedCluster inventory read failed ({outcome.status.value}: {outcome.reason})")
         names = []
         for mc in outcome.items:
-            name = mc.get("metadata", {}).get("name")
-            if name and name != LOCAL_CLUSTER_NAME:
+            metadata = mc.get("metadata") if isinstance(mc, dict) else None
+            name = metadata.get("name") if isinstance(metadata, dict) else None
+            if not isinstance(name, str) or not name:
+                # A nameless member is never counted, so it can never be the proof that the
+                # destination is non-empty (post-activation's malformed_inventory, #340 E2).
+                raise FatalError(
+                    "ManagedCluster inventory is malformed (malformed_inventory): a ManagedCluster has no name"
+                )
+            if name != LOCAL_CLUSTER_NAME:
                 names.append(name)
         return not outcome.items, names
 

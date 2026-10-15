@@ -234,3 +234,17 @@ def test_activation_never_accepts_an_inventory_post_activation_structurally_refu
     assert (python["ready"], python["code"]) == (collection["ready"], collection["code"])
     if python_accepts:
         assert python["ready"], (inventory, names, waived, minimum, python["code"])
+
+
+@pytest.mark.parametrize("member", [{}, {"metadata": {}}, {"metadata": {"name": ""}}, {"metadata": None}])
+@pytest.mark.parametrize(("names", "waived"), EXPECTATIONS)
+def test_a_nameless_destination_member_is_refused_by_both_phases_in_both_forms(tmp_path, member, names, waived):
+    """A member without a name is malformed at post-activation, so activation never counts it as
+    the proof that the destination is non-empty (#340 E2), in either form factor."""
+    items = [member]
+    assert _python_activation_accepts(tmp_path, items, names, waived, 0) is False
+    assert _collection_activation_accepts(items, names, waived, 0) is False
+    for readiness in (py_readiness, col_readiness):
+        with pytest.raises(Exception) as exc:
+            readiness(items=items, expected_names=names, min_managed_clusters=0, names_waived=waived)
+        assert exc.value.code == "malformed_inventory"

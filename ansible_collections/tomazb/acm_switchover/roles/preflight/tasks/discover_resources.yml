@@ -172,7 +172,22 @@
 
 # #340 E1: the expected ManagedCluster set is derived from this read, so it is one strict LIST
 # (read_status plus resources). An executing run always reads the live primary; a pre-seeded
-# read serves only dry_run/validate fixtures.
+# read serves only dry_run/validate fixtures. A registered result never overrides an extra var,
+# inventory var or play var of the same name, so an executing run refuses one outright rather
+# than derive from it (preflight discovery runs once per play, so it cannot be our own read).
+- name: Refuse a pre-supplied primary ManagedCluster read in an executing run
+  ansible.builtin.assert:
+    that:
+      - acm_primary_managed_clusters_info is not defined
+    fail_msg: >-
+      acm_primary_managed_clusters_info is supplied externally. An executing run derives the
+      expected ManagedClusters only from a live strict read of the primary hub; remove it from
+      the extra vars, inventory and play vars.
+    quiet: true
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+
 - name: Read primary ManagedClusters strictly
   tomazb.acm_switchover.acm_k8s_read_outcome:
     read_mode: list

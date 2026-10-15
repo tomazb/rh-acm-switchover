@@ -538,6 +538,24 @@ class TestMinManagedClusters:
 
         act._verify_managed_clusters_restored()
 
+    @pytest.mark.parametrize("member", [{}, {"metadata": {}}, {"metadata": {"name": ""}}, {"metadata": None}])
+    def test_a_nameless_member_is_malformed_never_the_non_empty_proof(
+        self, mock_secondary_client, mock_state_manager, member
+    ):
+        """#340 E2: a member without a name refuses like post-activation's malformed_inventory;
+        it never stands in for a non-empty destination under a waiver and a zero floor."""
+        mock_secondary_client.list_custom_resources.return_value = [member]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        with pytest.raises(FatalError, match="malformed_inventory"):
+            act._verify_managed_clusters_restored()
+
     def test_zero_floor_without_recorded_names_allows_an_empty_hub(self, mock_secondary_client, mock_state_manager):
         """Unchanged: nothing recorded and a zero floor permit an empty destination."""
         mock_secondary_client.list_custom_resources.return_value = []

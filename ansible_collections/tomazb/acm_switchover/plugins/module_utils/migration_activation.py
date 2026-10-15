@@ -832,8 +832,15 @@ def _managed_cluster_inventory(mc_read: Any) -> Tuple[bool, List[str]]:
     items = strict_list(mc_read, "ManagedCluster inventory")
     names = []
     for item in items:
-        name = (item.get("metadata") or {}).get("name") if isinstance(item, dict) else None
-        if name and name != LOCAL_CLUSTER_NAME:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if not isinstance(name, str) or not name:
+            # A nameless member is never counted, so it can never be the proof that the
+            # destination is non-empty (post-activation's malformed_inventory, #340 E2).
+            raise ActivationRefused(
+                "ManagedCluster inventory is malformed (malformed_inventory): a ManagedCluster has no name"
+            )
+        if name != LOCAL_CLUSTER_NAME:
             names.append(name)
     return not items, names
 
