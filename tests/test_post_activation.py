@@ -67,6 +67,7 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
 
 
 HERMETIC_HUB_SERVER = "https://api.new-hub.example:6443"
+SPOKE_URL = "https://api.test-cluster:6443"
 
 
 @pytest.fixture(autouse=True)
@@ -166,6 +167,7 @@ class TestPostActivationVerification:
             has_observability=False,
         )
         api_client = Mock(name="api_client")
+        api_client.configuration.host = "https://API.spoke:6443"
         core_v1 = Mock(name="core_v1")
         apps_v1 = Mock(name="apps_v1")
 
@@ -175,12 +177,36 @@ class TestPostActivationVerification:
         ) as new_client:
             with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
                 with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
-                    result = verify._build_managed_cluster_clients("managed-context")
+                    result = verify._build_managed_cluster_clients("managed-context", "https://api.spoke:6443")
 
         new_client.assert_called_once_with(context="managed-context", persist_config=False)
         core_ctor.assert_called_once_with(api_client=api_client)
         apps_ctor.assert_called_once_with(api_client=api_client)
         assert result == (core_v1, apps_v1)
+
+    @pytest.mark.parametrize(
+        "host", ["https://api.spoke:443", "http://api.spoke:6443", "https://api.other:6443", None, "api.spoke:6443"]
+    )
+    def test_a_client_bound_to_another_endpoint_is_never_returned(
+        self, mock_secondary_client, mock_state_manager, host
+    ):
+        """Amendment §2.7: the loader re-reads files, so the built client must be bound to the proven endpoint."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+        api_client = Mock(name="api_client")
+        api_client.configuration.host = host
+
+        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client):
+            with patch("modules.post_activation.client.CoreV1Api") as core_ctor:
+                with patch("modules.post_activation.client.AppsV1Api") as apps_ctor:
+                    with pytest.raises(post_activation_module._ClientEndpointMismatch):
+                        verify._build_managed_cluster_clients("managed-context", "https://api.spoke:6443")
+
+        core_ctor.assert_not_called()
+        apps_ctor.assert_not_called()
 
     def test_klusterlet_verification_never_bypasses_the_kubeconfig_size_limit(
         self, mock_secondary_client, mock_state_manager, hermetic_kubeconfig
@@ -211,6 +237,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -284,6 +311,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -305,6 +333,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -327,6 +356,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -425,6 +455,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {"conditions": [{"type": "ManagedClusterConditionAvailable", "status": "False"}]},
             }
         ]
@@ -795,6 +826,7 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -938,10 +970,10 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is True
-        verify._build_managed_cluster_clients.assert_called_once_with("test-context")
+        verify._build_managed_cluster_clients.assert_called_once_with("test-context", SPOKE_URL)
         mock_secondary_client.get_secret.assert_called_once_with(namespace="test-cluster", name="test-cluster-import")
         mock_v1.delete_namespaced_secret.assert_not_called()
         mock_v1.patch_namespaced_secret.assert_called_once()
@@ -970,7 +1002,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1002,7 +1034,7 @@ data:
         mock_v1.patch_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is False
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1034,7 +1066,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1071,7 +1103,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context") is True
+            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
 
         create = mock_v1.create_namespaced_secret.call_args
         assert create.kwargs["namespace"] == "open-cluster-management-agent"
@@ -1108,7 +1140,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context") is True
+            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
 
         body = mock_v1.create_namespaced_secret.call_args.kwargs["body"]
         api = ApiClient()
@@ -1159,7 +1191,7 @@ stringData:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            assert verify._force_klusterlet_reconnect("test-cluster", "test-context") is True
+            assert verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL) is True
 
         body = mock_v1.create_namespaced_secret.call_args.kwargs["body"]
         assert ApiClient().sanitize_for_serialization(body) == yaml.safe_load(import_docs)
@@ -1193,7 +1225,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is True
         mock_v1.delete_namespaced_secret.assert_not_called()
@@ -1224,7 +1256,7 @@ data:
         mock_apps_v1 = Mock()
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is True
         mock_v1.patch_namespaced_secret.assert_called_once()
@@ -1258,7 +1290,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=True):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is False
         mock_v1.patch_namespaced_secret.assert_not_called()
@@ -1270,7 +1302,7 @@ data:
         verify = self._make_verify(mock_secondary_client, mock_state_manager)
         mock_secondary_client.get_secret.return_value = None
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is False
 
@@ -1299,7 +1331,7 @@ data:
         mock_v1.create_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is False
         mock_apps_v1.patch_namespaced_deployment.assert_not_called()
@@ -1328,7 +1360,7 @@ data:
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 
         with patch("modules.post_activation.wait_for_condition", return_value=False):
-            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context", SPOKE_URL)
 
         assert result is False
         mock_apps_v1.patch_namespaced_deployment.assert_not_called()
@@ -1342,7 +1374,7 @@ data:
         call_log = []
         call_lock = threading.Lock()
 
-        def fake_build_clients(context_name):
+        def fake_build_clients(context_name, api_url):
             mock_v1 = Mock(name=f"v1-{context_name}")
             mock_apps_v1 = Mock(name=f"apps_v1-{context_name}")
             with call_lock:
@@ -1372,7 +1404,9 @@ data:
             contexts = ["ctx-cluster-a", "ctx-cluster-b"]
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
-                    executor.submit(verify._force_klusterlet_reconnect, f"cluster-{i}", ctx)
+                    executor.submit(
+                        verify._force_klusterlet_reconnect, f"cluster-{i}", ctx, f"https://api.cluster-{i}:6443"
+                    )
                     for i, ctx in enumerate(contexts)
                 ]
                 results = [f.result() for f in as_completed(futures)]
@@ -1411,6 +1445,7 @@ class TestPostActivationVerificationIntegration:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -1668,7 +1703,7 @@ class TestKlusterletParallelVerification:
             },
         ]
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(
                 pav,
                 "_load_kubeconfig_data",
@@ -1713,12 +1748,12 @@ class TestKlusterletParallelVerification:
 
         c2_results = iter(["wrong_hub", "verified"])
 
-        def fake_check(ctx, name, hub):
+        def fake_check(ctx, name, hub, api_url):
             if name == "c2":
-                return next(c2_results)
-            return {"c1": "verified", "c3": "unreachable"}[name]
+                return next(c2_results), None
+            return {"c1": "verified", "c3": "unreachable"}[name], None
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_check_klusterlet_connection", side_effect=fake_check):
                     with patch.object(pav, "_force_klusterlet_reconnect", return_value=True) as mock_fix:
@@ -1743,13 +1778,13 @@ class TestKlusterletParallelVerification:
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
                     with patch.object(
                         pav,
                         "_check_klusterlet_connection",
-                        side_effect=["wrong_hub", "wrong_hub"],
+                        side_effect=[("wrong_hub", None), ("wrong_hub", None)],
                     ):
                         with patch(
                             "modules.post_activation.wait_for_condition",
@@ -1784,13 +1819,13 @@ class TestKlusterletParallelVerification:
                     return True
             return False
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
                     with patch.object(
                         pav,
                         "_check_klusterlet_connection",
-                        side_effect=["wrong_hub", "wrong_hub", "verified"],
+                        side_effect=[("wrong_hub", None), ("wrong_hub", None), ("verified", None)],
                     ):
                         with patch(
                             "modules.post_activation.wait_for_condition",
@@ -1813,13 +1848,13 @@ class TestKlusterletParallelVerification:
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_force_klusterlet_reconnect", return_value=False):
                     with patch.object(
                         pav,
                         "_check_klusterlet_connection",
-                        side_effect=["wrong_hub", "wrong_hub"],
+                        side_effect=[("wrong_hub", None), ("wrong_hub", None)],
                     ):
                         with patch(
                             "modules.post_activation.wait_for_condition",
@@ -1828,17 +1863,30 @@ class TestKlusterletParallelVerification:
                             with pytest.raises(SwitchoverError, match="Klusterlet remediation failed"):
                                 pav._verify_klusterlet_connections()
 
-    def test_no_hub_api_server_fails_instead_of_skipping(self, mock_secondary_client, mock_state_manager):
-        """GLM-H3 (#349): an undeterminable new-hub endpoint fails the gate before any cluster work."""
+    @pytest.mark.parametrize("reason", ["expected_endpoint_unavailable", "expected_endpoint_malformed"])
+    def test_an_unusable_expected_hub_endpoint_fails_without_inspecting(
+        self, mock_secondary_client, mock_state_manager, reason
+    ):
+        """Amendment §2.4: no usable import-secret endpoint is `unverified`; no spoke client is built."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
 
-        with patch.object(pav, "_get_hub_api_server", return_value=""):
-            with patch.object(pav, "_load_kubeconfig_data", return_value={"contexts": [], "clusters": [], "users": []}):
-                with patch.object(pav, "_check_klusterlet_connection") as mock_check:
-                    with pytest.raises(SwitchoverError, match="new hub API server"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=(None, reason)):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_build_managed_cluster_clients") as build:
+                    with pytest.raises(SwitchoverError, match=rf"c1 \({reason}\)"):
                         pav._verify_klusterlet_connections()
 
-        mock_check.assert_not_called()
+        build.assert_not_called()
 
     def test_unloadable_kubeconfig_fails_instead_of_skipping(self, mock_secondary_client, mock_state_manager):
         """GLM-H3 (#349): a load failure propagates; no cluster is checked."""
@@ -1853,23 +1901,29 @@ class TestKlusterletParallelVerification:
 
         mock_check.assert_not_called()
 
-    def test_cluster_without_api_url(self, mock_secondary_client, mock_state_manager):
-        """Clusters without managedClusterClientConfigs get empty api_url."""
+    def test_cluster_without_api_url_fails_without_any_context_lookup(self, mock_secondary_client, mock_state_manager):
+        """Decision 3: no usable API URL is `endpoint_unavailable` - never a name-only context guess."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "orphan"}, "spec": {}},
         ]
+        # A context named exactly like the cluster must not be selected.
+        kube_data = {
+            "contexts": [{"name": "orphan", "context": {"cluster": "korphan"}}],
+            "clusters": [{"name": "korphan", "cluster": {"server": "https://api.orphan:6443"}}],
+        }
 
-        kube_data = {"contexts": [], "clusters": []}
+        with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+            with patch("modules.post_activation.select_spoke_context") as select:
+                with patch.object(pav, "_expected_hub_endpoint") as expected:
+                    with patch.object(pav, "_build_managed_cluster_clients") as build:
+                        with pytest.raises(SwitchoverError, match=r"orphan \(endpoint_unavailable\)"):
+                            pav._verify_klusterlet_connections()
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
-            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_find_context_by_api_url", return_value="") as mock_find:
-                    pav._verify_klusterlet_connections()
-
-        # Called with empty api_url
-        mock_find.assert_called_once_with(kube_data, "", "orphan")
+        select.assert_not_called()
+        expected.assert_not_called()
+        build.assert_not_called()
 
     def test_check_cluster_exception_fails_verification(self, mock_secondary_client, mock_state_manager):
         """Unexpected per-cluster probe exceptions should fail post-activation."""
@@ -1887,16 +1941,15 @@ class TestKlusterletParallelVerification:
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_find_context_by_api_url", return_value="ctx-c1"):
-                    with patch.object(
-                        pav,
-                        "_check_klusterlet_connection",
-                        side_effect=RuntimeError("boom"),
-                    ):
-                        with pytest.raises(SwitchoverError, match="Klusterlet verification failed"):
-                            pav._verify_klusterlet_connections()
+                with patch.object(
+                    pav,
+                    "_check_klusterlet_connection",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with pytest.raises(SwitchoverError, match="Klusterlet verification failed"):
+                        pav._verify_klusterlet_connections()
 
     def test_initial_check_timeout_fails_closed(self, mock_secondary_client, mock_state_manager, caplog):
         """Timed-out initial klusterlet checks must fail post-activation."""
@@ -1913,9 +1966,9 @@ class TestKlusterletParallelVerification:
         }
         caplog.set_level(logging.INFO, logger="acm_switchover")
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_check_klusterlet_connection", return_value="verified"):
+                with patch.object(pav, "_check_klusterlet_connection", return_value=("verified", None)):
                     with patch(
                         "modules.post_activation.wait",
                         side_effect=lambda futures, timeout: (set(), set(futures)),
@@ -1940,11 +1993,12 @@ class TestKlusterletParallelVerification:
 
         kube_data = {"contexts": [], "clusters": []}
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_find_context_by_api_url", return_value=""):
+                with patch.object(pav, "_check_klusterlet_connection") as mock_check:
                     pav._verify_klusterlet_connections()
 
+        mock_check.assert_not_called()
         assert "unreachable or uninspectable" in caplog.text
         assert "no context available" not in caplog.text
 
@@ -1972,17 +2026,17 @@ class TestKlusterletParallelVerification:
                 return set(), futures
             return futures, set()
 
-        def slow_reconnect(_cluster_name, _context_name):
+        def slow_reconnect(_cluster_name, _context_name, _api_url):
             time.sleep(0.05)
             remediation_exited.set()
             return True
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(
                     pav,
                     "_check_klusterlet_connection",
-                    side_effect=["wrong_hub", "verified"],
+                    side_effect=[("wrong_hub", None), ("verified", None)],
                 ):
                     with patch.object(pav, "_force_klusterlet_reconnect", side_effect=slow_reconnect):
                         with patch("modules.post_activation.wait", side_effect=fake_wait):
@@ -2020,12 +2074,12 @@ class TestKlusterletParallelVerification:
                 return set(), futures
             return futures, set()
 
-        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+        with patch.object(pav, "_expected_hub_endpoint", return_value=("https://hub:6443", None)):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(
                     pav,
                     "_check_klusterlet_connection",
-                    side_effect=["wrong_hub", "verified"],
+                    side_effect=[("wrong_hub", None), ("verified", None)],
                 ):
                     with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
                         with patch("modules.post_activation.wait", side_effect=fake_wait):
@@ -2119,124 +2173,6 @@ class TestKubeconfigLoading:
 
 
 # ========================================================================
-# 3. Context lookup by API URL (_find_context_by_api_url)
-# ========================================================================
-@pytest.mark.unit
-class TestFindContextByApiUrl:
-    """Tests for _find_context_by_api_url hostname matching and fallback."""
-
-    def test_hostname_match(self, mock_secondary_client, mock_state_manager):
-        """Should match context by API URL hostname."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "clusters": [
-                {
-                    "name": "kc-prod",
-                    "cluster": {"server": "https://api.prod.example.com:6443"},
-                },
-            ],
-            "contexts": [
-                {"name": "admin@prod", "context": {"cluster": "kc-prod"}},
-            ],
-        }
-
-        result = pav._find_context_by_api_url(kube_data, "https://api.prod.example.com:6443", "prod")
-        assert result == "admin@prod"
-
-    def test_hostname_match_ignores_port(self, mock_secondary_client, mock_state_manager):
-        """Port differences should not prevent a match."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "clusters": [
-                {
-                    "name": "kc-a",
-                    "cluster": {"server": "https://api.a.example.com:6443"},
-                },
-            ],
-            "contexts": [
-                {"name": "ctx-a", "context": {"cluster": "kc-a"}},
-            ],
-        }
-
-        result = pav._find_context_by_api_url(kube_data, "https://api.a.example.com:443", "cluster-a")
-        assert result == "ctx-a"
-
-    def test_no_match_returns_empty(self, mock_secondary_client, mock_state_manager):
-        """No matching cluster should return empty string."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "clusters": [
-                {
-                    "name": "kc-x",
-                    "cluster": {"server": "https://api.x.example.com:6443"},
-                },
-            ],
-            "contexts": [
-                {"name": "ctx-x", "context": {"cluster": "kc-x"}},
-            ],
-        }
-
-        result = pav._find_context_by_api_url(kube_data, "https://api.unknown.example.com:6443", "unknown")
-        assert result == ""
-
-    def test_empty_api_url_name_fallback_success(self, mock_secondary_client, mock_state_manager):
-        """Empty api_url should fall back to cached name-based context matching."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {"contexts": [{"name": "prod-cluster"}]}
-        with patch("modules.post_activation.config.list_kube_config_contexts") as mock_list:
-            result = pav._find_context_by_api_url(kube_data, "", "prod-cluster")
-
-        assert result == "prod-cluster"
-        mock_list.assert_not_called()
-
-    def test_empty_api_url_name_fallback_no_match(self, mock_secondary_client, mock_state_manager):
-        """Empty api_url with no cached matching context name should return empty."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {"contexts": [{"name": "other-ctx"}]}
-        with patch("modules.post_activation.config.list_kube_config_contexts") as mock_list:
-            result = pav._find_context_by_api_url(kube_data, "", "my-cluster")
-
-        assert result == ""
-        mock_list.assert_not_called()
-
-    def test_empty_api_url_without_cached_contexts_does_not_read_global_config(
-        self, mock_secondary_client, mock_state_manager
-    ):
-        """Missing cached contexts should return empty without reading global config."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        with patch("modules.post_activation.config.list_kube_config_contexts") as mock_list:
-            result = pav._find_context_by_api_url({}, "", "my-cluster")
-
-        assert result == ""
-        mock_list.assert_not_called()
-
-    def test_cluster_in_kubeconfig_but_no_context_using_it(self, mock_secondary_client, mock_state_manager):
-        """Cluster matched by URL but no context references it should return empty."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "clusters": [
-                {
-                    "name": "orphan-cluster",
-                    "cluster": {"server": "https://api.orphan:6443"},
-                },
-            ],
-            "contexts": [
-                {"name": "ctx-other", "context": {"cluster": "different-cluster"}},
-            ],
-        }
-
-        result = pav._find_context_by_api_url(kube_data, "https://api.orphan:6443", "orphan")
-        assert result == ""
-
-
-# ========================================================================
 # 4. Klusterlet connection check (_check_klusterlet_connection)
 # ========================================================================
 @pytest.mark.unit
@@ -2267,7 +2203,7 @@ class TestCheckKlusterletConnection:
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.return_value = self._make_secret("https://api.newhub.com:6443")
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443", SPOKE_URL)
         assert result == "verified"
 
     def test_wrong_hub_when_mismatch(self, mock_secondary_client, mock_state_manager):
@@ -2275,7 +2211,7 @@ class TestCheckKlusterletConnection:
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.return_value = self._make_secret("https://api.oldhub.com:6443")
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443", SPOKE_URL)
         assert result == "wrong_hub"
 
     def test_fallback_to_bootstrap_secret(self, mock_secondary_client, mock_state_manager):
@@ -2291,7 +2227,7 @@ class TestCheckKlusterletConnection:
 
         mock_v1.read_namespaced_secret.side_effect = side_effect
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443", SPOKE_URL)
         assert result == "verified"
         assert mock_v1.read_namespaced_secret.call_count == 2
         assert all("_request_timeout" in call.kwargs for call in mock_v1.read_namespaced_secret.call_args_list)
@@ -2301,7 +2237,7 @@ class TestCheckKlusterletConnection:
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.side_effect = ApiException(status=404)
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
 
         assert result == "unreachable"
         assert mock_v1.read_namespaced_secret.call_count == 2
@@ -2312,7 +2248,7 @@ class TestCheckKlusterletConnection:
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.side_effect = ApiException(status=status)
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
 
         assert result == "failed"
 
@@ -2327,7 +2263,7 @@ class TestCheckKlusterletConnection:
 
         mock_v1.read_namespaced_secret.side_effect = side_effect
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
 
         assert result == "failed"
 
@@ -2338,7 +2274,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": ""}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_invalid_yaml_in_secret(self, mock_secondary_client, mock_state_manager):
@@ -2348,7 +2284,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(b"{{{{bad yaml").decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_invalid_base64_in_secret(self, mock_secondary_client, mock_state_manager):
@@ -2358,7 +2294,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": "abc"}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_empty_clusters(self, mock_secondary_client, mock_state_manager):
@@ -2369,7 +2305,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_clusters_mapping(self, mock_secondary_client, mock_state_manager):
@@ -2380,7 +2316,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_non_dict_cluster_entry(self, mock_secondary_client, mock_state_manager):
@@ -2391,19 +2327,19 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
-    def test_unreachable_on_non_string_server_url(self, mock_secondary_client, mock_state_manager):
-        """Should return 'unreachable' when server URL is not a string."""
+    def test_non_string_server_url_is_malformed_not_skipped(self, mock_secondary_client, mock_state_manager):
+        """A present server that is not a string is `unverified` (`endpoint_malformed`), never a skip."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         inner = yaml.dump({"clusters": [{"name": "hub", "cluster": {"server": ["https://hub:6443"]}}]})
         secret = Mock()
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
-        assert result == "unreachable"
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
+        assert (result, reason) == ("unverified", "endpoint_malformed")
 
     def test_failed_on_config_exception(self, mock_secondary_client, mock_state_manager):
         """Client construction failures should return a failed probe result."""
@@ -2412,7 +2348,7 @@ class TestCheckKlusterletConnection:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         pav._build_managed_cluster_clients = Mock(side_effect=kube_config.ConfigException("no context"))
 
-        result = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "failed"
 
     def test_failed_on_generic_client_exception(self, mock_secondary_client, mock_state_manager):
@@ -2420,7 +2356,7 @@ class TestCheckKlusterletConnection:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         pav._build_managed_cluster_clients = Mock(side_effect=RuntimeError("connection refused"))
 
-        result = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "failed"
 
     def test_failed_on_non_404_api_exception(self, mock_secondary_client, mock_state_manager):
@@ -2428,7 +2364,7 @@ class TestCheckKlusterletConnection:
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.side_effect = ApiException(status=403)
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "failed"
 
     def test_unreachable_on_none_kubeconfig_data(self, mock_secondary_client, mock_state_manager):
@@ -2439,7 +2375,7 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(b"").decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
     def test_unreachable_on_non_dict_cluster_info(self, mock_secondary_client, mock_state_manager):
@@ -2450,19 +2386,66 @@ class TestCheckKlusterletConnection:
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
         assert result == "unreachable"
 
-    def test_unreachable_on_empty_server_url(self, mock_secondary_client, mock_state_manager):
-        """Should return 'unreachable' when server URL in embedded kubeconfig is empty."""
+    def test_empty_server_url_is_malformed_not_skipped(self, mock_secondary_client, mock_state_manager):
+        """A present empty server is `unverified` (`endpoint_malformed`), never a skip (amendment §2.3)."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         inner = yaml.dump({"clusters": [{"name": "hub", "cluster": {"server": ""}}]})
         secret = Mock()
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
 
-        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
-        assert result == "unreachable"
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
+        assert (result, reason) == ("unverified", "endpoint_malformed")
+
+    def test_missing_server_key_remains_unreachable(self, mock_secondary_client, mock_state_manager):
+        """An absent server is the documented skip (amendment §2.3), distinct from a malformed one."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        inner = yaml.dump({"clusters": [{"name": "hub", "cluster": {"certificate-authority-data": "x"}}]})
+        secret = Mock()
+        secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
+        assert (result, reason) == ("unreachable", None)
+
+    @pytest.mark.parametrize(
+        ("observed", "expected"),
+        [
+            ("https://api.newhub.com:443", "https://api.newhub.com:6443"),
+            ("https://api.newhub.com", "https://api.newhub.com:6443"),
+            ("http://api.newhub.com:6443", "https://api.newhub.com:6443"),
+            ("https://api.newhub.com:6443/proxy", "https://api.newhub.com:6443"),
+            ("https://[2001:db8::2]:6443", "https://[2001:db8::1]:6443"),
+        ],
+    )
+    def test_a_same_host_or_legacy_equal_mismatch_is_unverified_not_wrong_hub(
+        self, mock_secondary_client, mock_state_manager, observed, expected
+    ):
+        """Decision 2: a pair the old hostname compare called equal is operator review, never remediation."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        mock_v1.read_namespaced_secret.return_value = self._make_secret(observed)
+
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", expected, SPOKE_URL)
+        assert (result, reason) == ("unverified", "endpoint_mismatch_unverified")
+
+    def test_default_port_and_case_differences_verify(self, mock_secondary_client, mock_state_manager):
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        mock_v1.read_namespaced_secret.return_value = self._make_secret("https://API.NewHub.com/")
+
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:443", SPOKE_URL)
+        assert (result, reason) == ("verified", None)
+
+    def test_a_client_bound_elsewhere_is_unverified_with_zero_reads(self, mock_secondary_client, mock_state_manager):
+        """Amendment §2.7: `client_endpoint_mismatch` happens after construction and before any read."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        pav._build_managed_cluster_clients = Mock(side_effect=post_activation_module._ClientEndpointMismatch())
+
+        result, reason = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443", SPOKE_URL)
+        assert (result, reason) == ("unverified", "client_endpoint_mismatch")
+        pav._build_managed_cluster_clients.assert_called_once_with("ctx-c1", SPOKE_URL)
 
 
 # ========================================================================
@@ -2764,7 +2747,7 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.side_effect = ApiException(status=500)
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
         assert result is False
 
     def test_generic_exception_returns_false(self, mock_secondary_client, mock_state_manager):
@@ -2773,7 +2756,7 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.side_effect = RuntimeError("connection reset")
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
         assert result is False
 
     def test_missing_import_yaml_data_returns_false(self, mock_secondary_client, mock_state_manager):
@@ -2782,81 +2765,8 @@ class TestForceKlusterletReconnectException:
 
         mock_secondary_client.get_secret.return_value = {"data": {"import.yaml": ""}}
 
-        result = pav._force_klusterlet_reconnect("c1", "ctx-c1")
+        result = pav._force_klusterlet_reconnect("c1", "ctx-c1", "https://api.c1:6443")
         assert result is False
-
-
-# ========================================================================
-# 9. Hub API server discovery (_get_hub_api_server)
-# ========================================================================
-@pytest.mark.unit
-class TestGetHubApiServer:
-    """Tests for _get_hub_api_server."""
-
-    def test_successful_extraction(self, mock_secondary_client, mock_state_manager):
-        """Should extract API server URL from kubeconfig matching secondary context."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "contexts": [
-                {"name": "secondary-ctx", "context": {"cluster": "hub-cluster"}},
-            ],
-            "clusters": [
-                {
-                    "name": "hub-cluster",
-                    "cluster": {"server": "https://api.hub.example.com:6443"},
-                },
-            ],
-        }
-
-        result = pav._get_hub_api_server(kube_data)
-
-        assert result == "https://api.hub.example.com:6443"
-
-    def test_empty_kubeconfig(self, mock_secondary_client, mock_state_manager):
-        """Empty kubeconfig should return empty string."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        result = pav._get_hub_api_server({})
-
-        assert result == ""
-
-    def test_missing_context(self, mock_secondary_client, mock_state_manager):
-        """No matching context should return empty string."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "contexts": [{"name": "other-ctx", "context": {"cluster": "other-cluster"}}],
-            "clusters": [{"name": "other-cluster", "cluster": {"server": "https://other:6443"}}],
-        }
-
-        result = pav._get_hub_api_server(kube_data)
-
-        assert result == ""
-
-    def test_a_non_string_server_is_not_an_endpoint(self, mock_secondary_client, mock_state_manager):
-        """A server that is not a string resolves to "" (the caller then fails the gate)."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "contexts": [{"name": "secondary-ctx", "context": {"cluster": "hub-cluster"}}],
-            "clusters": [{"name": "hub-cluster", "cluster": {"server": 6443}}],
-        }
-
-        assert pav._get_hub_api_server(kube_data) == ""
-
-    def test_context_found_but_cluster_missing(self, mock_secondary_client, mock_state_manager):
-        """Context references a cluster not in clusters list should return empty."""
-        pav = _make_pav(mock_secondary_client, mock_state_manager)
-
-        kube_data = {
-            "contexts": [{"name": "secondary-ctx", "context": {"cluster": "ghost-cluster"}}],
-            "clusters": [{"name": "different-cluster", "cluster": {"server": "https://x:6443"}}],
-        }
-
-        result = pav._get_hub_api_server(kube_data)
-
-        assert result == ""
 
 
 # -- R4-04 Task 9: strict post-activation completion evidence ----------------------------------

@@ -1,10 +1,10 @@
 """GLM-H3 / R4-06 PR 1 (#349): klusterlet verification never silently skips on a bad kubeconfig.
 
-A kubeconfig that cannot be loaded and validated, or a new-hub endpoint that cannot be
-determined from it, fails post-activation instead of skipping the wrong-hub gate: verify()
-returns False, no spoke cluster is read or mutated, and the verify_klusterlet_connections
-step is not checkpointed, so a resume runs it again. These tests drive the real loader over
-real files; nothing in the load path is mocked.
+A kubeconfig that cannot be loaded and validated, or (R4-06 PR 2) a cluster whose expected
+hub endpoint cannot be determined from its import secret, fails post-activation instead of
+skipping the wrong-hub gate: verify() returns False, no spoke cluster is read or mutated, and
+the verify_klusterlet_connections step is not checkpointed, so a resume runs it again. These
+tests drive the real loader over real files; nothing in the load path is mocked.
 """
 
 import copy
@@ -103,16 +103,48 @@ def test_a_per_file_failure_never_degrades_to_an_empty_merge(tmp_path, state, mo
     check.assert_not_called()
 
 
-def test_an_undeterminable_new_hub_endpoint_fails_instead_of_skipping(tmp_path, state, monkeypatch):
-    """GLM-H3 1: the expected hub endpoint comes from the validated merge; absent, the gate fails."""
-    monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "other.yaml", _kubeconfig(hub_context="some-other-ctx")))
+SPOKE_CONTEXT = {"name": "spoke-a-admin", "context": {"cluster": "spoke-a", "user": "admin"}}
+SPOKE_CLUSTER = {"name": "spoke-a", "cluster": {"server": "https://api.spoke-a.example:6443"}}
+
+
+def _with_spoke():
+    data = _kubeconfig(extra_contexts=(SPOKE_CONTEXT,))
+    data["clusters"].append(SPOKE_CLUSTER)
+    return data
+
+
+def test_an_undeterminable_expected_hub_endpoint_fails_and_is_not_checkpointed(tmp_path, state, monkeypatch):
+    """R4-06 PR 2 (amendment §2.4): the expected hub is the cluster's import-secret server.
+
+    Without an import secret the cluster is `unverified` (`expected_endpoint_unavailable`):
+    the step fails before any spoke client exists and a resume runs it again. The operator's
+    secondary-context server is no longer consulted at all.
+    """
+    monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "spoke.yaml", _with_spoke()))
+    pav = _pav(state)
+    pav.secondary.get_secret.return_value = None
+
+    with patch.object(pav, "_verify_managed_clusters_connected"), patch.object(
+        pav, "_build_managed_cluster_clients"
+    ) as build:
+        with pytest.raises(SwitchoverError, match=r"spoke-a \(expected_endpoint_unavailable\)"):
+            pav._verify_cluster_connections()
+
+    assert not state.is_step_completed(STEP)
+    build.assert_not_called()
+
+
+def test_the_operator_hub_context_is_no_longer_required(tmp_path, state, monkeypatch):
+    """The secondary context's own server was the PR 1 expected endpoint; it no longer gates anything."""
+    data = _with_spoke()
+    data["contexts"][0]["name"] = "some-other-ctx"
+    monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "spoke.yaml", data))
     pav = _pav(state)
 
-    with patch.object(pav, "_check_klusterlet_targets") as check:
-        with pytest.raises(SwitchoverError, match="new hub API server"):
-            pav._verify_klusterlet_connections()
+    with patch.object(pav, "_check_klusterlet_targets", return_value=([], [], ["spoke-a"], [], [], [])) as check:
+        pav._verify_klusterlet_connections()
 
-    check.assert_not_called()
+    check.assert_called_once()
 
 
 def test_verify_reports_failure_when_the_klusterlet_gate_cannot_run(tmp_path, monkeypatch):
@@ -147,11 +179,11 @@ def test_a_valid_kubeconfig_still_runs_the_klusterlet_gate(tmp_path, state, monk
     monkeypatch.setenv("KUBECONFIG", _write(tmp_path / "good.yaml", _kubeconfig()))
     pav = _pav(state)
 
-    with patch.object(pav, "_check_klusterlet_targets", return_value=(["spoke-a"], [], [], [], [])) as check:
+    with patch.object(pav, "_check_klusterlet_targets", return_value=(["spoke-a"], [], [], [], [], [])) as check:
         pav._verify_klusterlet_connections()
 
-    _, kubeconfig_data, hub = check.call_args.args
-    assert hub == HUB
+    targets, kubeconfig_data = check.call_args.args
+    assert targets == [("spoke-a", "https://api.spoke-a.example:6443", None)]
     assert [ctx["name"] for ctx in kubeconfig_data["contexts"]] == ["secondary-ctx"]
 
 

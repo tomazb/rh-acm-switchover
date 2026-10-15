@@ -9,7 +9,6 @@ import binascii
 import json
 import logging
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, nullcontext
@@ -34,6 +33,7 @@ from lib.constants import (
     KLUSTERLET_RESULT_FAILED,
     KLUSTERLET_RESULT_NO_CONTEXT,
     KLUSTERLET_RESULT_UNREACHABLE,
+    KLUSTERLET_RESULT_UNVERIFIED,
     KLUSTERLET_RESULT_VERIFIED,
     KLUSTERLET_RESULT_WORKER_TIMEOUT,
     KLUSTERLET_RESULT_WRONG_HUB,
@@ -56,6 +56,18 @@ from lib.constants import (
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
     kubeconfig_size_override_ignored,
+)
+from lib.endpoint_identity import (
+    REASON_CLIENT_ENDPOINT_MISMATCH,
+    REASON_EXPECTED_ENDPOINT_MALFORMED,
+    REASON_EXPECTED_ENDPOINT_UNAVAILABLE,
+    REASON_NO_CONTEXT,
+    classify_hub,
+    managed_cluster_url,
+    normalized_equal,
+    parse_endpoint,
+    redact,
+    select_spoke_context,
 )
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
@@ -839,36 +851,59 @@ class PostActivationVerification:
 
         logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
-    def _klusterlet_cluster_targets(self) -> List[Tuple[str, str]]:
-        """Build (cluster_name, api_url) pairs for non-local managed clusters."""
+    def _klusterlet_cluster_targets(self) -> List[Tuple[str, Optional[str], Optional[str]]]:
+        """``(cluster_name, api_url, url_reason)`` for every non-local managed cluster.
+
+        The URL is the first non-empty ``managedClusterClientConfigs[].url`` (amendment
+        §2.5 rule 1); without a usable one ``api_url`` is None and ``url_reason`` says why.
+        """
 
         cluster_targets = []
         for managed_cluster in self._get_managed_clusters():
             name = managed_cluster.get("metadata", {}).get("name")
             if not name or name == LOCAL_CLUSTER_NAME:
                 continue
-            client_configs = managed_cluster.get("spec", {}).get("managedClusterClientConfigs", [])
-            api_url = client_configs[0].get("url", "") if client_configs else ""
-            cluster_targets.append((name, api_url))
+            api_url, url_reason = managed_cluster_url(managed_cluster)
+            cluster_targets.append((name, api_url, url_reason))
         return cluster_targets
 
     def _check_klusterlet_target(
         self,
         kubeconfig_data: Dict,
-        new_hub_server: str,
         cluster_name: str,
-        cluster_api_url: str,
-    ) -> Tuple[str, str, Optional[str]]:
-        try:
-            context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
-            if not context_name:
-                return (cluster_name, KLUSTERLET_RESULT_NO_CONTEXT, None)
+        cluster_api_url: Optional[str],
+        url_reason: Optional[str],
+    ) -> Tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
+        """``(cluster, result, context, expected_hub, api_url, reason)`` for one cluster.
 
-            result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
-            return (cluster_name, result, context_name)
+        Every refusal before the spoke client exists - no usable URL, an ambiguous or
+        near-matching context, an unusable expected endpoint - leaves the cluster
+        uninspected (amendment §2.5, §2.4). There is no name-only fallback.
+        """
+        try:
+            if cluster_api_url is None:
+                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, None, None, None, url_reason)
+            context_name, context_reason = select_spoke_context(kubeconfig_data, cluster_api_url)
+            if context_name is None:
+                if context_reason == REASON_NO_CONTEXT:
+                    return (cluster_name, KLUSTERLET_RESULT_NO_CONTEXT, None, None, None, None)
+                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, None, None, None, context_reason)
+            logger.debug(
+                "Matched cluster %s to context %s via API URL %s",
+                cluster_name,
+                context_name,
+                redact(cluster_api_url),
+            )
+            expected_hub, expected_reason = self._expected_hub_endpoint(cluster_name)
+            if expected_hub is None:
+                return (cluster_name, KLUSTERLET_RESULT_UNVERIFIED, context_name, None, None, expected_reason)
+            result, reason = self._check_klusterlet_connection(
+                context_name, cluster_name, expected_hub, cluster_api_url
+            )
+            return (cluster_name, result, context_name, expected_hub, cluster_api_url, reason)
         except Exception as exc:
-            logger.debug("Error checking klusterlet for %s: %s", cluster_name, exc)
-            return (cluster_name, KLUSTERLET_RESULT_FAILED, None)
+            logger.debug("Error checking klusterlet for %s: %s", cluster_name, type(exc).__name__)
+            return (cluster_name, KLUSTERLET_RESULT_FAILED, None, None, None, None)
 
     def _collect_klusterlet_future_results(self, future_fallbacks: Dict, operation: str) -> List[tuple]:
         done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
@@ -899,10 +934,17 @@ class PostActivationVerification:
 
     def _check_klusterlet_targets(
         self,
-        cluster_targets: List[Tuple[str, str]],
+        cluster_targets: List[Tuple[str, Optional[str], Optional[str]]],
         kubeconfig_data: Dict,
-        new_hub_server: str,
-    ) -> Tuple[List[str], List[Tuple[str, Optional[str]]], List[str], List[str], List[str]]:
+    ) -> Tuple[
+        List[str],
+        List[Tuple[str, str, str, str]],
+        List[str],
+        List[str],
+        List[str],
+        List[Tuple[str, str]],
+    ]:
+        """Classify every cluster: verified, wrong_hub, skipped, timed out, failed, unverified."""
         logger.info(
             "Checking klusterlet connections for %d cluster(s) in parallel...",
             len(cluster_targets),
@@ -913,6 +955,7 @@ class PostActivationVerification:
         unreachable = []
         timed_out = []
         failed = []
+        unverified = []
 
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
@@ -920,20 +963,26 @@ class PostActivationVerification:
                 executor.submit(
                     self._check_klusterlet_target,
                     kubeconfig_data,
-                    new_hub_server,
                     name,
                     api_url,
-                ): (name, KLUSTERLET_RESULT_WORKER_TIMEOUT, None)
-                for name, api_url in cluster_targets
+                    url_reason,
+                ): (name, KLUSTERLET_RESULT_WORKER_TIMEOUT, None, None, None, None)
+                for name, api_url, url_reason in cluster_targets
             }
-            for cluster_name, result, context_name in self._collect_klusterlet_future_results(
-                check_future_fallbacks,
-                "checking",
-            ):
+            for (
+                cluster_name,
+                result,
+                context_name,
+                expected_hub,
+                api_url,
+                reason,
+            ) in self._collect_klusterlet_future_results(check_future_fallbacks, "checking"):
                 if result == KLUSTERLET_RESULT_VERIFIED:
                     verified.append(cluster_name)
                 elif result == KLUSTERLET_RESULT_WRONG_HUB:
-                    wrong_hub.append((cluster_name, context_name))
+                    wrong_hub.append((cluster_name, context_name, expected_hub, api_url))
+                elif result == KLUSTERLET_RESULT_UNVERIFIED:
+                    unverified.append((cluster_name, reason or "unverified"))
                 elif result == KLUSTERLET_RESULT_WORKER_TIMEOUT:
                     timed_out.append(cluster_name)
                 elif result == KLUSTERLET_RESULT_FAILED:
@@ -943,21 +992,21 @@ class PostActivationVerification:
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
-        return verified, wrong_hub, unreachable, timed_out, failed
+        return verified, wrong_hub, unreachable, timed_out, failed, unverified
 
-    def _fix_klusterlet_target(self, cluster_name: str, context_name: str) -> Tuple[str, bool]:
-        success = self._force_klusterlet_reconnect(cluster_name, context_name)
+    def _fix_klusterlet_target(self, cluster_name: str, context_name: str, api_url: str) -> Tuple[str, bool]:
+        success = self._force_klusterlet_reconnect(cluster_name, context_name, api_url)
         return (cluster_name, success)
 
-    def _fix_wrong_hub_klusterlets(self, wrong_hub: List[Tuple[str, str]]) -> Tuple[List[str], List[str]]:
+    def _fix_wrong_hub_klusterlets(self, wrong_hub: List[Tuple[str, str, str, str]]) -> Tuple[List[str], List[str]]:
         fixed = []
         fix_failed = []
 
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
             fix_future_fallbacks = {
-                executor.submit(self._fix_klusterlet_target, name, context_name): (name, False)
-                for name, context_name in wrong_hub
+                executor.submit(self._fix_klusterlet_target, name, context_name, api_url): (name, False)
+                for name, context_name, _expected_hub, api_url in wrong_hub
             }
             for cluster_name, success in self._collect_klusterlet_future_results(
                 fix_future_fallbacks,
@@ -976,32 +1025,32 @@ class PostActivationVerification:
 
     def _recheck_klusterlet_target(
         self,
-        new_hub_server: str,
         cluster_name: str,
         context_name: str,
+        expected_hub: str,
+        api_url: str,
     ) -> Tuple[str, str]:
         try:
-            result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+            result, _reason = self._check_klusterlet_connection(context_name, cluster_name, expected_hub, api_url)
             return (cluster_name, result)
         except Exception as exc:
-            logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, exc)
+            logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, type(exc).__name__)
             return (cluster_name, KLUSTERLET_RESULT_UNREACHABLE)
 
     def _remediated_klusterlet_state(
         self,
-        wrong_hub: List[Tuple[str, str]],
-        new_hub_server: str,
+        wrong_hub: List[Tuple[str, str, str, str]],
     ) -> Tuple[List[str], List[str]]:
         current_wrong_hub = []
         current_unverified = []
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
             recheck_future_fallbacks = {
-                executor.submit(self._recheck_klusterlet_target, new_hub_server, name, context_name): (
+                executor.submit(self._recheck_klusterlet_target, name, context_name, expected_hub, api_url): (
                     name,
                     KLUSTERLET_RESULT_UNREACHABLE,
                 )
-                for name, context_name in wrong_hub
+                for name, context_name, expected_hub, api_url in wrong_hub
             }
             for cluster_name, result in self._collect_klusterlet_future_results(
                 recheck_future_fallbacks,
@@ -1018,8 +1067,7 @@ class PostActivationVerification:
 
     def _wait_for_remediated_klusterlets(
         self,
-        wrong_hub: List[Tuple[str, str]],
-        new_hub_server: str,
+        wrong_hub: List[Tuple[str, str, str, str]],
     ) -> Tuple[List[str], List[str]]:
         post_remediation_state: Dict[str, List[str]] = {
             "wrong_hub": [],
@@ -1027,10 +1075,7 @@ class PostActivationVerification:
         }
 
         def recheck_remediated_clusters() -> WaitConditionResult:
-            current_wrong_hub, current_unverified = self._remediated_klusterlet_state(
-                wrong_hub,
-                new_hub_server,
-            )
+            current_wrong_hub, current_unverified = self._remediated_klusterlet_state(wrong_hub)
             post_remediation_state["wrong_hub"] = current_wrong_hub
             post_remediation_state["unverified"] = current_unverified
 
@@ -1053,15 +1098,11 @@ class PostActivationVerification:
         )
         return post_remediation_state["wrong_hub"], post_remediation_state["unverified"]
 
-    def _remediate_wrong_hub_klusterlets(
-        self,
-        wrong_hub: List[Tuple[str, str]],
-        new_hub_server: str,
-    ) -> None:
+    def _remediate_wrong_hub_klusterlets(self, wrong_hub: List[Tuple[str, str, str, str]]) -> None:
         logger.warning(
             "Klusterlet connected to wrong hub for %d cluster(s): %s - attempting to fix...",
             len(wrong_hub),
-            ", ".join([cluster_name for cluster_name, _ in wrong_hub]),
+            ", ".join([cluster_name for cluster_name, _, _, _ in wrong_hub]),
         )
 
         fixed, fix_failed = self._fix_wrong_hub_klusterlets(wrong_hub)
@@ -1078,10 +1119,7 @@ class PostActivationVerification:
                 ", ".join(fix_failed),
             )
 
-        post_remediation_wrong_hub, post_remediation_unverified = self._wait_for_remediated_klusterlets(
-            wrong_hub,
-            new_hub_server,
-        )
+        post_remediation_wrong_hub, post_remediation_unverified = self._wait_for_remediated_klusterlets(wrong_hub)
 
         fatal_messages = []
         if fix_failed:
@@ -1110,35 +1148,34 @@ class PostActivationVerification:
         1. Patching or creating the bootstrap-hub-kubeconfig secret on the managed cluster
         2. Restarting the klusterlet deployment
 
-        If a managed cluster has no matching kubeconfig context, that cluster is
-        skipped with a log message (non-fatal). The gate itself never skips: a
-        kubeconfig that cannot be loaded and validated, or a new-hub endpoint that
-        cannot be determined from it, raises SwitchoverError before any cluster is
-        read, so verify() fails and this step is not checkpointed (GLM-H3, #349).
-        If a wrong-hub klusterlet is remediated, the post-remediation re-check is
-        strict: failed remediation, persistent wrong-hub state, or an unverifiable
+        Endpoint identity (R4-06, amendment 2026-10-15 §2): each cluster's spoke context
+        is the one whose server normalizes equal to the ManagedCluster's own API URL
+        (no name-only fallback), and the expected hub is the server in that cluster's
+        ``<cluster>-import`` bootstrap kubeconfig - the value remediation writes. A
+        cluster with no matching context at all is skipped (non-fatal). A cluster that
+        cannot be proven - no usable API URL, an ambiguous or near-matching context, an
+        unusable expected endpoint, a client bound elsewhere, or an observed hub that
+        differs only in scheme, port or path - is ``unverified``: never inspected or
+        mutated past that point, never reported verified, and it fails the step before
+        any remediation in the run, as ``failed`` and timeouts do. A kubeconfig that
+        cannot be loaded and validated raises before any cluster is read (#349), so
+        verify() fails and the step is not checkpointed. A remediated cluster's re-check
+        is strict: failed remediation, persistent wrong-hub state, or an unverifiable
         re-check fails post-activation instead of reporting success.
         """
 
         logger.info("Verifying klusterlet connections to new hub...")
 
         kubeconfig_data = self._load_kubeconfig_data()
-        new_hub_server = self._get_hub_api_server(kubeconfig_data)
-        if not new_hub_server:
-            raise SwitchoverError(
-                f"Cannot determine the new hub API server from kubeconfig context {self.secondary.context!r}; "
-                "the klusterlet wrong-hub verification cannot run"
-            )
 
         cluster_targets = self._klusterlet_cluster_targets()
         if not cluster_targets:
             logger.info("No managed clusters to verify klusterlet connections")
             return
 
-        verified, wrong_hub, unreachable, timed_out, failed = self._check_klusterlet_targets(
+        verified, wrong_hub, unreachable, timed_out, failed, unverified = self._check_klusterlet_targets(
             cluster_targets,
             kubeconfig_data,
-            new_hub_server,
         )
 
         if verified:
@@ -1147,12 +1184,22 @@ class PostActivationVerification:
                 len(verified),
                 ", ".join(verified),
             )
+        # Every cluster is classified before any remediation; any cluster that is not
+        # proven blocks remediation for all of them (amendment §2.8).
+        blocking = []
         if timed_out:
-            raise SwitchoverError(f"Klusterlet verification timed out for cluster(s): {', '.join(timed_out)}")
+            blocking.append(f"Klusterlet verification timed out for cluster(s): {', '.join(timed_out)}")
         if failed:
-            raise SwitchoverError(f"Klusterlet verification failed for cluster(s): {', '.join(failed)}")
+            blocking.append(f"Klusterlet verification failed for cluster(s): {', '.join(failed)}")
+        if unverified:
+            blocking.append(
+                "Klusterlet hub connection could not be verified (operator review required) for cluster(s): "
+                + ", ".join(f"{name} ({reason})" for name, reason in unverified)
+            )
+        if blocking:
+            raise SwitchoverError("; ".join(blocking))
         if wrong_hub:
-            self._remediate_wrong_hub_klusterlets(wrong_hub, new_hub_server)
+            self._remediate_wrong_hub_klusterlets(wrong_hub)
         if unreachable:
             logger.info(
                 "Klusterlet verification skipped for %d cluster(s) (unreachable or uninspectable): %s",
@@ -1160,7 +1207,7 @@ class PostActivationVerification:
                 ", ".join(unreachable),
             )
 
-    def _force_klusterlet_reconnect(self, cluster_name: str, context_name: str) -> bool:
+    def _force_klusterlet_reconnect(self, cluster_name: str, context_name: str, api_url: str) -> bool:
         """
         Force a managed cluster's klusterlet to reconnect to the new hub.
 
@@ -1178,6 +1225,8 @@ class PostActivationVerification:
         Args:
             cluster_name: Name of the ManagedCluster
             context_name: Kubeconfig context to use for connecting to the cluster
+            api_url: The ManagedCluster API URL the context was proven against; the
+                client must be bound to it before anything is written
 
         Returns:
             True if successful, False otherwise
@@ -1192,7 +1241,7 @@ class PostActivationVerification:
 
             # Build isolated per-context clients once; all steps share the same
             # ApiClient so no further global kubeconfig mutation is needed.
-            v1, apps_v1 = self._build_managed_cluster_clients(context_name)
+            v1, apps_v1 = self._build_managed_cluster_clients(context_name, api_url)
 
             # Step 2: Apply the import manifest to update the bootstrap secret
             bootstrap_namespace = self._apply_import_manifest(v1, import_yaml, cluster_name)
@@ -1204,27 +1253,60 @@ class PostActivationVerification:
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
 
+        except _ClientEndpointMismatch:
+            logger.warning(
+                "Not reconnecting klusterlet for %s: its client is not bound to the proven endpoint (%s)",
+                cluster_name,
+                REASON_CLIENT_ENDPOINT_MISMATCH,
+            )
+            return False
         except Exception as e:
             logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
             return False
 
-    def _build_managed_cluster_clients(self, context_name: str) -> tuple:
+    def _build_managed_cluster_clients(self, context_name: str, api_url: str) -> tuple:
         """Build isolated per-context CoreV1Api and AppsV1Api for a managed cluster.
 
         Creates an ApiClient bound to the named context without mutating global
         kubernetes configuration. Safe to call from concurrent threads.
 
+        The client loader re-reads the KUBECONFIG files, so before anything uses the
+        client its host must normalize equal to the endpoint the validated merge proved
+        (amendment §2.7). Otherwise no client is returned and nothing is read or written.
+
         Args:
             context_name: Kubeconfig context name
+            api_url: The ManagedCluster API URL the context was proven against
 
         Returns:
             Tuple of (CoreV1Api, AppsV1Api) bound to the named context
 
         Raises:
             config.ConfigException: If context does not exist in kubeconfig
+            _ClientEndpointMismatch: If the built client is bound to another endpoint
         """
         api_client = config.new_client_from_config(context=context_name, persist_config=False)
+        if not normalized_equal(getattr(api_client.configuration, "host", None), api_url):
+            raise _ClientEndpointMismatch()
         return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
+
+    def _expected_hub_endpoint(self, cluster_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """The expected hub endpoint for one cluster (amendment §2.4), or the reason it is unusable.
+
+        It is the ``server`` of the ``bootstrap-hub-kubeconfig`` Secret carried in the
+        cluster's ``<cluster>-import`` secret on the new hub: the value remediation writes,
+        so a successful repair re-verifies. Returns ``(server, None)``, or ``(None,
+        expected_endpoint_unavailable | expected_endpoint_malformed)``.
+        """
+        import_yaml = self._get_import_secret(cluster_name)
+        if not import_yaml:
+            return None, REASON_EXPECTED_ENDPOINT_UNAVAILABLE
+        found, server = _bootstrap_server_from_import(import_yaml)
+        if not found:
+            return None, REASON_EXPECTED_ENDPOINT_UNAVAILABLE
+        if parse_endpoint(server)[0] is None:
+            return None, REASON_EXPECTED_ENDPOINT_MALFORMED
+        return server, None
 
     def _get_import_secret(self, cluster_name: str) -> Optional[str]:
         """Get and decode the import secret from the new hub.
@@ -1398,22 +1480,6 @@ class PostActivationVerification:
         except ApiException as e:
             logger.warning("Failed to restart klusterlet on %s: %s", cluster_name, e)
 
-    def _get_hub_api_server(self, kubeconfig_data: Dict) -> str:
-        """The new hub's API server URL from the validated kubeconfig merge, or "".
-
-        The hub client was built from the same KUBECONFIG and the secondary context, so a
-        missing context, cluster or server means the merge cannot identify the new hub.
-        """
-        for ctx in kubeconfig_data.get("contexts", []):
-            if ctx.get("name") == self.secondary.context:
-                cluster_name = (ctx.get("context") or {}).get("cluster")
-                for cluster in kubeconfig_data.get("clusters", []):
-                    if cluster.get("name") == cluster_name:
-                        server = (cluster.get("cluster") or {}).get("server")
-                        return server if isinstance(server, str) else ""
-                return ""
-        return ""
-
     def _load_kubeconfig_data(self) -> Dict:
         """Load, validate and merge every KUBECONFIG file once, or raise SwitchoverError.
 
@@ -1429,63 +1495,9 @@ class PostActivationVerification:
             )
         return load_merged_kubeconfig(os.environ.get("KUBECONFIG"), MAX_KUBECONFIG_SIZE)
 
-    def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:
-        """
-        Find a kubeconfig context that matches the given API server URL.
-
-        This is smarter than name-based matching because context names often
-        differ from ManagedCluster names (e.g., "admin@prod1" vs "prod1").
-
-        Args:
-            kubeconfig_data: Parsed kubeconfig as dict
-            api_url: The API server URL from ManagedCluster spec
-            cluster_name: The ManagedCluster name (for fallback and logging)
-
-        Returns:
-            Context name if found, empty string otherwise
-        """
-        if not api_url:
-            # Fallback to name-based matching if no API URL
-            logger.debug("No API URL for %s, trying name-based matching", cluster_name)
-            for ctx in kubeconfig_data.get("contexts", []):
-                if ctx.get("name") == cluster_name:
-                    return cluster_name
-            return ""
-
-        # Normalize the API URL for comparison (extract host)
-        api_host = re.sub(r"https://([^:/]+).*", r"\1", api_url)
-
-        # Build a map of cluster server URL -> cluster name
-        cluster_servers = {}
-        for cluster in kubeconfig_data.get("clusters", []):
-            server = cluster.get("cluster", {}).get("server", "")
-            if server:
-                server_host = re.sub(r"https://([^:/]+).*", r"\1", server)
-                cluster_servers[server_host] = cluster.get("name")
-
-        # Find which kubeconfig cluster matches this API URL
-        matching_cluster = cluster_servers.get(api_host)
-        if not matching_cluster:
-            logger.debug("No kubeconfig cluster matches API URL %s", api_url)
-            return ""
-
-        # Find the context that uses this cluster
-        for ctx in kubeconfig_data.get("contexts", []):
-            if ctx.get("context", {}).get("cluster") == matching_cluster:
-                context_name = ctx.get("name", "")
-                logger.debug(
-                    "Matched cluster %s to context %s via API URL %s",
-                    cluster_name,
-                    context_name,
-                    api_url,
-                )
-                return context_name
-
-        return ""
-
     def _check_klusterlet_connection(  # noqa: C901
-        self, context_name: str, cluster_name: str, expected_hub: str
-    ) -> str:
+        self, context_name: str, cluster_name: str, expected_hub: str, api_url: str
+    ) -> Tuple[str, Optional[str]]:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
 
@@ -1496,20 +1508,25 @@ class PostActivationVerification:
         Args:
             context_name: Kubeconfig context name to use for connecting
             cluster_name: ManagedCluster name (for logging)
-            expected_hub: Expected hub API server URL
+            expected_hub: Expected hub API server URL (amendment §2.4)
+            api_url: The ManagedCluster API URL the context was proven against
 
         Returns:
-            "verified" if connected to correct hub
-            "wrong_hub" if connected to different hub
-            "unreachable" for expected non-fatal skip cases
-            "failed" for client/API/probe failures that must fail closed
+            ``(result, reason)``: "verified" if connected to the expected hub; "wrong_hub"
+            only for a genuinely different host (amendment §2.3); "unverified" with a
+            reason for anything that cannot be proven; "unreachable" for the documented
+            non-fatal skips (no hub secret, no server, unreadable embedded kubeconfig);
+            "failed" for client/API/probe failures that must fail closed.
         """
         try:
             # Build an isolated per-context client; does not mutate global config.
-            v1, _ = self._build_managed_cluster_clients(context_name)
+            v1, _ = self._build_managed_cluster_clients(context_name, api_url)
+        except _ClientEndpointMismatch:
+            logger.debug("Klusterlet client for %s is not bound to the proven endpoint", cluster_name)
+            return KLUSTERLET_RESULT_UNVERIFIED, REASON_CLIENT_ENDPOINT_MISMATCH
         except Exception as e:
-            logger.debug("Failed to build klusterlet client for %s: %s", cluster_name, e)
-            return KLUSTERLET_RESULT_FAILED
+            logger.debug("Failed to build klusterlet client for %s: %s", cluster_name, type(e).__name__)
+            return KLUSTERLET_RESULT_FAILED, None
 
         # Get the hub-kubeconfig-secret
         try:
@@ -1520,8 +1537,8 @@ class PostActivationVerification:
             )
         except ApiException as e:
             if e.status != 404:
-                logger.debug("Failed to read hub-kubeconfig-secret for %s: %s", cluster_name, e)
-                return KLUSTERLET_RESULT_FAILED
+                logger.debug("Failed to read hub-kubeconfig-secret for %s: status=%s", cluster_name, e.status)
+                return KLUSTERLET_RESULT_FAILED, None
             try:
                 secret = v1.read_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
@@ -1530,66 +1547,90 @@ class PostActivationVerification:
                 )
             except ApiException as bootstrap_exc:
                 if bootstrap_exc.status == 404:
-                    return KLUSTERLET_RESULT_UNREACHABLE
-                logger.debug("Failed to read bootstrap-hub-kubeconfig for %s: %s", cluster_name, bootstrap_exc)
-                return KLUSTERLET_RESULT_FAILED
+                    return KLUSTERLET_RESULT_UNREACHABLE, None
+                logger.debug(
+                    "Failed to read bootstrap-hub-kubeconfig for %s: status=%s", cluster_name, bootstrap_exc.status
+                )
+                return KLUSTERLET_RESULT_FAILED, None
             except Exception as bootstrap_exc:
-                logger.debug("Failed to read bootstrap-hub-kubeconfig for %s: %s", cluster_name, bootstrap_exc)
-                return KLUSTERLET_RESULT_FAILED
+                logger.debug(
+                    "Failed to read bootstrap-hub-kubeconfig for %s: %s", cluster_name, type(bootstrap_exc).__name__
+                )
+                return KLUSTERLET_RESULT_FAILED, None
         except Exception as e:
-            logger.debug("Failed to read hub-kubeconfig-secret for %s: %s", cluster_name, e)
-            return KLUSTERLET_RESULT_FAILED
+            logger.debug("Failed to read hub-kubeconfig-secret for %s: %s", cluster_name, type(e).__name__)
+            return KLUSTERLET_RESULT_FAILED, None
 
-        # Decode and parse kubeconfig from secret
-        secret_kubeconfig = (secret.data or {}).get("kubeconfig", "")
-        if not secret_kubeconfig:
-            return KLUSTERLET_RESULT_UNREACHABLE
+        found, klusterlet_hub = _observed_hub_server(secret)
+        if not found:
+            # Absent or unreadable: the documented non-fatal skip (amendment §2.3).
+            return KLUSTERLET_RESULT_UNREACHABLE, None
 
-        # Extract server URL from kubeconfig using proper YAML parsing.
+        result, reason = classify_hub(expected_hub, klusterlet_hub)
+        logger.debug(
+            "Cluster %s klusterlet hub %s, expected %s: %s%s",
+            cluster_name,
+            redact(klusterlet_hub),
+            redact(expected_hub),
+            result,
+            f" ({reason})" if reason else "",
+        )
+        return result, reason
+
+
+class _ClientEndpointMismatch(Exception):
+    """The client loader bound a spoke client to an endpoint the validated merge did not prove."""
+
+
+def _observed_hub_server(secret: Any) -> Tuple[bool, Any]:
+    """``(present, server)`` from a spoke hub-kubeconfig secret (amendment §2.3).
+
+    Absent (no data, no ``kubeconfig``, no clusters, no ``server`` key) and unreadable
+    (undecodable or unparseable embedded YAML, a non-mapping cluster) are ``(False, None)``:
+    Python's documented skip. A present ``server`` of any value is returned as-is for
+    validation, so a null, empty or non-string server is malformed, not skipped.
+    """
+    secret_kubeconfig = (getattr(secret, "data", None) or {}).get("kubeconfig", "")
+    if not secret_kubeconfig:
+        return False, None
+    try:
+        kubeconfig_data = yaml.safe_load(base64.b64decode(secret_kubeconfig).decode("utf-8"))
+    except Exception:  # noqa: BLE001 - unreadable embedded YAML is the documented skip
+        return False, None
+    if not isinstance(kubeconfig_data, dict):
+        return False, None
+    clusters = kubeconfig_data.get("clusters")
+    if not isinstance(clusters, list) or not clusters or not isinstance(clusters[0], dict):
+        return False, None
+    cluster_info = clusters[0].get("cluster")
+    if not isinstance(cluster_info, dict) or "server" not in cluster_info:
+        return False, None
+    return True, cluster_info["server"]
+
+
+def _bootstrap_server_from_import(import_yaml: str) -> Tuple[bool, Any]:
+    """``(present, server)`` for the bootstrap-hub-kubeconfig Secret in an import manifest."""
+    try:
+        documents = list(yaml.safe_load_all(import_yaml))
+    except Exception:  # noqa: BLE001 - an unreadable manifest has no usable endpoint
+        return False, None
+    for document in documents:
+        if not isinstance(document, dict) or document.get("kind") != "Secret":
+            continue
+        if (document.get("metadata") or {}).get("name") != "bootstrap-hub-kubeconfig":
+            continue
+        encoded = (document.get("data") or {}).get("kubeconfig")
+        if not isinstance(encoded, str) or not encoded:
+            return False, None
         try:
-            kubeconfig_yaml = base64.b64decode(secret_kubeconfig).decode("utf-8")
-            kubeconfig_data = yaml.safe_load(kubeconfig_yaml)
-            if not kubeconfig_data:
-                return KLUSTERLET_RESULT_UNREACHABLE
-            # Server URL is in clusters[0].cluster.server
-            clusters = kubeconfig_data.get("clusters", [])
-            if not clusters:
-                return KLUSTERLET_RESULT_UNREACHABLE
-            # Verify clusters[0] is a dict before accessing it
-            if not isinstance(clusters[0], dict):
-                return KLUSTERLET_RESULT_UNREACHABLE
-            cluster_info = clusters[0].get("cluster", {})
-            # Verify cluster_info is a dict before accessing server
-            if not isinstance(cluster_info, dict):
-                return KLUSTERLET_RESULT_UNREACHABLE
-            klusterlet_hub = cluster_info.get("server", "")
-            if not isinstance(klusterlet_hub, str) or not klusterlet_hub:
-                return KLUSTERLET_RESULT_UNREACHABLE
-        # Malformed embedded kubeconfig data is an expected non-fatal skip, not a failed probe.
-        except (
-            ValueError,
-            UnicodeDecodeError,
-            binascii.Error,
-            yaml.YAMLError,
-            AttributeError,
-            TypeError,
-            LookupError,
-        ):
-            return KLUSTERLET_RESULT_UNREACHABLE
-
-        # Compare hostnames (ignore port differences)
-        expected_host = re.sub(r"https://([^:/]+).*", r"\1", expected_hub)
-        klusterlet_host = re.sub(r"https://([^:/]+).*", r"\1", klusterlet_hub)
-
-        if expected_host == klusterlet_host:
-            logger.debug(
-                "Cluster %s klusterlet verified (API server endpoint matched expected)",
-                cluster_name,
-            )
-            return KLUSTERLET_RESULT_VERIFIED
-        else:
-            logger.debug(
-                "Cluster %s klusterlet not verified (API server endpoint did not match expected)",
-                cluster_name,
-            )
-            return KLUSTERLET_RESULT_WRONG_HUB
+            kubeconfig_data = yaml.safe_load(base64.b64decode(encoded).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return False, None
+        clusters = kubeconfig_data.get("clusters") if isinstance(kubeconfig_data, dict) else None
+        if not isinstance(clusters, list) or not clusters or not isinstance(clusters[0], dict):
+            return False, None
+        cluster_info = clusters[0].get("cluster")
+        if not isinstance(cluster_info, dict) or "server" not in cluster_info:
+            return False, None
+        return True, cluster_info["server"]
+    return False, None
