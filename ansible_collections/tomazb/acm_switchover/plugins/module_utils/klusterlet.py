@@ -320,8 +320,8 @@ def _prove_target(
     managed_cluster_reader: ManagedClusterReader,
     secondary_client: CoreV1Client,
     request_timeout: int | float | None,
-) -> tuple[str, str, str, dict]:
-    """Amendment §2.4/§2.6: ``(context, api_url, expected_hub, import_secret_data)``, or raise.
+) -> tuple[str, str, str, str]:
+    """Amendment §2.4/§2.6: ``(context, api_url, expected_hub, import_yaml_b64)``, or raise.
 
     Everything here happens before any spoke client exists: a fresh ManagedCluster read,
     the URL rule, the expected hub from the import secret, the mapped file's validation,
@@ -347,7 +347,7 @@ def _prove_target(
         present, expected_hub = False, None
     if not present:
         raise _Refusal("unverified", REASON_EXPECTED_ENDPOINT_UNAVAILABLE)
-    if parse_endpoint(expected_hub)[0] is None:
+    if not isinstance(expected_hub, str) or parse_endpoint(expected_hub)[0] is None:
         raise _Refusal("unverified", REASON_EXPECTED_ENDPOINT_MALFORMED)
 
     try:
