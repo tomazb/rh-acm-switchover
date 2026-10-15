@@ -172,10 +172,11 @@ All in `modules/post_activation.py`:
 
 - **Operator docs:**
   - `docs/operations/usage.md`: the new outcomes, reasons and recovery for
-    `endpoint_unavailable`;
+    `endpoint_unavailable`, and Python's expected-endpoint source change (amendment
+    §2.2 "Scope of this guarantee", §2.4);
   - the collection `docs/variable-reference.md`: the worker cap and the mapping identity
     rule;
-  - `CHANGELOG.md` `[Unreleased]`.
+  - `CHANGELOG.md` `[Unreleased]`, including the expected-endpoint source change.
 - **By-design differences:** the parity matrix, the behavior map, `coexistence.md`, the
   CLI migration map, and the scenario and test-migration catalogs record the input-model
   differences, with no status change.
@@ -268,7 +269,9 @@ All in `modules/post_activation.py`:
   (`tests/unit/test_compatibility_contract.py`) allows only the `min` and `current`
   lanes.
   - Add a separate `kubernetes-min-client` job to `.github/workflows/ci-cd.yml`. It runs
-    on Python 3.11, pins `kubernetes==28.*`, and runs the real-loader snapshot,
+    on Python 3.11, pins the **lowest published release satisfying the declared floor
+    `kubernetes>=28.0.0`**, resolved and asserted by the smoke check rather than
+    `28.*`, which would float to the newest 28.x. It runs the real-loader snapshot,
     credential, token, TLS and cleanup regressions from both form factors (root tests
     plus the collection unit tests for `kubeconfig_snapshot`).
   - Artifact names include the client version, so the job's uploads cannot collide

@@ -70,6 +70,14 @@ The two pass a pair as equal under different conditions:
 - `legacy_equal(a, b) = py_legacy_host(a) == py_legacy_host(b) or col_legacy_host(a) == col_legacy_host(b)`.
 - Either comparator having called the pair equal is enough. This is the only reading under
   which no pair that either form factor used to verify can newly become `wrong_hub`.
+- **Scope of this guarantee.** It holds for a fixed (expected, observed) pair. §2.4
+  changes Python's expected-endpoint *source* to the import-secret server, so Python now
+  compares a different pair and some clusters' classification can change.
+  - Usually this removes a false `wrong_hub`.
+  - In the reverse case, Python remediates a genuinely different-host cluster, exactly as
+    the collection already does.
+  - PR 2 records the change in `usage.md` and the CHANGELOG and pins the new source with a
+    test.
   For example, Python's unanchored regex turns `HTTPS://hub/https://other:6443` into
   `HTTPS://hub/other`, so it called that URL equal to `HTTPS://hub/other`. The
   collection regex calls the pair unequal. For pairs whose canonical hosts differ, the
