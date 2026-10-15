@@ -233,6 +233,33 @@ batch is changed, and the wrong-hub peers report
 attempted mutations. Refusal results carry a `detail` field with the mapped path and
 entry locations, never file content.
 
+Spoke clients are built from a snapshot of the mapped context, captured once per module
+invocation; the mapped files are not read again. The selected user and cluster must meet
+these rules, or the cluster is unverified before any client exists:
+
+- every file-backed credential (`certificate-authority`, `client-certificate`,
+  `client-key`, `tokenFile`) is read once, when the cluster is selected, and must be a
+  regular, non-empty file within the kubeconfig size limit. A symbolic link, directory,
+  empty, oversized or unreadable file is refused (`credential_symlink`,
+  `credential_not_regular`, `credential_empty`, `credential_oversized`,
+  `credential_unreadable`). Relative paths resolve against the file that defined the entry;
+- an inline `token` wins over `tokenFile`. A token file is read as strict UTF-8 with
+  trailing whitespace removed. An empty token, an empty `*-data` field, or `*-data` that is
+  not valid base64 is refused;
+- a user with an `exec` credential plugin or an `auth-provider` is refused
+  (`exec_credential_unsupported`, `auth_provider_unsupported`): their credentials are
+  produced when the client is built, outside anything that was checked. A context that
+  names a user that does not exist is refused (`credential_unsupported`), never turned into
+  an anonymous client;
+- TLS verification must be provable: `insecure-skip-tls-verify` must be absent or the
+  boolean `false` (the Kubernetes client treats the string `"false"` as true), and an `http`
+  server, `tls-server-name` or `proxy-url` is refused (`tls_verification_unproven`).
+
+A worker that misses `timeouts.klusterlet_worker_seconds` is still a failure, but the
+module waits for it and reports what it really did (`changed`, `steps`,
+`completed_after_timeout: true`); the private credential directory is removed only after
+every worker has finished.
+
 Klusterlet worker future timeouts are treated as failed cluster results even when
 `klusterlet.strict_remediation` is `false`, because a timed-out worker means the
 module could not establish the cluster's post-switchover state.

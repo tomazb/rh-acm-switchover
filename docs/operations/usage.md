@@ -417,6 +417,36 @@ remediated for being pending. If any cluster in the batch is unproven, no
 cluster is changed: genuine wrong-hub peers report
 `remediation_blocked_by_unproven_cluster`.
 
+**Spoke client credentials.** Every client for a managed cluster is built from a
+snapshot of the selected kubeconfig context, captured once per run (per module invocation
+in the collection) and never re-read, so a credential file replaced or deleted during the
+run cannot change who the tool authenticates as:
+
+- every file-backed credential (`certificate-authority`, `client-certificate`,
+  `client-key`, `tokenFile`) is read once, when the cluster is selected, and must be a
+  regular, non-empty file within the kubeconfig size limit. A symbolic link, directory,
+  empty, oversized or unreadable file is refused (`credential_symlink`,
+  `credential_not_regular`, `credential_empty`, `credential_oversized`,
+  `credential_unreadable`). Relative paths resolve against the file that defined the entry;
+- an inline `token` wins over `tokenFile`. A token file is read as strict UTF-8 with
+  trailing whitespace removed. An empty token, an empty `*-data` field, or `*-data` that is
+  not valid base64 is refused;
+- a user with an `exec` credential plugin or an `auth-provider` is refused
+  (`exec_credential_unsupported`, `auth_provider_unsupported`): their credentials are
+  produced when the client is built, outside anything that was checked. A context that
+  names a user that does not exist is refused (`credential_unsupported`), never turned into
+  an anonymous client;
+- TLS verification must be provable: `insecure-skip-tls-verify` must be absent or the
+  boolean `false` (the Kubernetes client treats the string `"false"` as true), and an `http`
+  server, `tls-server-name` or `proxy-url` is refused (`tls_verification_unproven`).
+
+A refused credential makes that cluster unverified before any client exists. The captured
+certificates and key are written to `0600` files in a private `0700` temporary directory
+for the duration of the step (the collection: of the module invocation) and the directory
+is removed afterwards, including on failure, once every worker has finished. The token is
+passed in memory. Captured credential content never appears in logs, results or the state
+file.
+
 Recovery:
 
 - `endpoint_unavailable`: the ManagedCluster has not registered its API URL yet.
@@ -430,6 +460,9 @@ Recovery:
   tool, then re-run.
 - `expected_endpoint_unavailable`: the new hub has no usable import secret for
   the cluster yet. Wait for the import controller to create it, then re-run.
+- A credential reason (`exec_credential_unsupported`, `tls_verification_unproven`, and
+  so on): give the tool a kubeconfig context for that cluster with a static credential
+  (a token, or a client certificate and key) and verifiable TLS, then re-run.
 
 The local kubeconfig that Python uses to find managed-cluster contexts is loaded
 fail-closed. Every file named in `KUBECONFIG` (or `~/.kube/config` when
