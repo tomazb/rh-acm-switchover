@@ -134,6 +134,7 @@ class Retry:
         self.patches = []
         self.restarts = []
         self.classifications = []
+        self.polls = []
         self.hub_state = "wrong"
         self.repair = "denied"
         self.finalization = False
@@ -158,9 +159,10 @@ class Retry:
     def forbid_network(*_args, **_kwargs):
         raise AssertionError("network forbidden in non-live regression")
 
-    @staticmethod
-    def poll_once(_description=None, condition_fn=None, **_kwargs):
-        return condition_fn().done
+    def poll_once(self, _description=None, condition_fn=None, **kwargs):
+        done = condition_fn().done
+        self.polls.append((_description or kwargs.get("description"), done, len(self.spoke_reads)))
+        return done
 
     @staticmethod
     def no_prior_phase(*_args):
@@ -234,7 +236,9 @@ def _names(stored):
     return [s["name"] for s in stored["completed_steps"]]
 
 
-@pytest.mark.parametrize("fallback", [False, True], ids=["initial-ready", "initial-timeout-fallback"])
+@pytest.mark.parametrize(
+    "fallback", [False, True], ids=["completed-connectivity-direct-gate", "initial-timeout-fallback"]
+)
 def test_legacy_marker_reaches_wrong_hub_gate_before_any_completion(tmp_path, monkeypatch, fallback):
     retry = Retry(tmp_path, monkeypatch, fallback=fallback)
     assert LEGACY in _names(retry.stored()) and CURRENT not in _names(retry.stored())
@@ -257,6 +261,36 @@ def test_legacy_marker_reaches_wrong_hub_gate_before_any_completion(tmp_path, mo
     assert sorted(retry.patches) == NAMES
     assert CURRENT not in _names(stored)
     assert stored["config"]["migration_backups"]["post_activation"]["completed_at"] is None
+
+
+@pytest.mark.parametrize("hub_state", ["wrong", "correct"])
+def test_first_ready_poll_precedes_legacy_gate_and_cannot_authorize_wrong_hub(tmp_path, monkeypatch, hub_state):
+    retry = Retry(tmp_path, monkeypatch)
+    raw = retry.stored()
+    raw["completed_steps"] = [step for step in raw["completed_steps"] if step["name"] != "verify_clusters_connected"]
+    assert LEGACY in _names(raw) and CURRENT not in _names(raw)
+    retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    retry.hub_state = hub_state
+
+    result = retry.run()
+
+    # The initial real readiness predicate ran and accepted the strict inventory
+    # before any spoke was inspected. Joined/Available alone cannot earn v2.
+    assert retry.polls[0] == ("ManagedCluster connections", True, 0)
+    assert "verify_clusters_connected" in _names(retry.stored())
+    if hub_state == "wrong":
+        assert result is False
+        assert len(retry.spoke_reads) == 4
+        assert set(retry.classifications) == {"wrong_hub"}
+        _assert_refused(retry)
+    else:
+        assert result is True and retry.finalization
+        assert len(retry.spoke_reads) == 2
+        assert retry.classifications == ["verified", "verified"]
+        assert retry.patches == retry.restarts == []
+        assert _names(retry.stored()).count(CURRENT) == 1
+        assert retry.polls[1] == ("ManagedCluster connections", True, 2)
+        assert retry.stored()["config"]["migration_backups"]["post_activation"]["completed_at"]
 
 
 def _assert_refused(retry):
