@@ -19,7 +19,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/primary_prep.py` | `roles/primary_prep/` | 3 |
 | `modules/activation.py` | `roles/activation/` | 3 |
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
-| `modules/finalization.py` | `roles/finalization/` | 3 |
+| `modules/finalization.py` | `roles/finalization/`; Python Backup continuity baseline/polls and integrity fallback use the shared strict reader. Collection `verify_backups.yml` independently checks the persisted enable timestamp and clean completion. | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
 | `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently; the MultiClusterHub substep adds operator-identity capture and owner-chain Pod classification, orchestrated by `roles/decommission/tasks/delete_multiclusterhub.yml` — see the guarded-delete and identity rows below, the *MultiClusterObservability teardown boundary* paragraph, and the *MultiClusterHub identity ownership split* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |

@@ -102,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python finalization Backup continuity now requires a positively complete strict inventory
+  before recording or reusing a Backup name. Failed polls retain the existing baseline
+  and retry within the existing wait; the integrity fallback also uses strict inventory.
+  This prevents a baseline LIST 404 followed by a recovered old Backup from certifying
+  continuity (#342). Existing stored names and completed checkpoints are not migrated.
+
 - Strict LIST readers in Python and the Collection reject non-string pagination
   continuations (#345). Malformed pages cannot become complete inventories or bypass
   deletion safety checks; accumulated items and revisions are discarded. Missing, null
