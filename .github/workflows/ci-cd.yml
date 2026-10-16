@@ -71,13 +71,15 @@ jobs:
 
   kubernetes-min-client-cli:
     # #358 (operator decision 2026-10-16): the Python CLI declares `kubernetes>=29.0.0` in the
-    # root requirements.txt. 28.1.0, the lowest 28.x final release, requires urllib3<2 and so
-    # cannot coexist with the root `urllib3>=2.6.3,<3`; the second step proves that conflict,
-    # so the documented reason for the floor cannot silently go stale. The client is then
-    # pinned to exactly the floor by a constraints file while the COMPLETE, unmodified root
-    # requirements are installed, and the real-loader klusterlet snapshot, credential, TLS and
-    # endpoint regressions plus the root suite run on it. tests/test_ci_guardrails.py ties
-    # this job's pin to requirements.txt and the compatibility authority.
+    # root requirements.txt. Every release below that floor (28.1.0 is the only 28.x final)
+    # requires urllib3<2 and so cannot coexist with the root `urllib3>=2.6.3,<3`; the second
+    # step proves that for the whole range below the floor, so the documented reason for the
+    # floor cannot silently go stale. pip is pinned for the proofs because they read its
+    # resolver message. The client is then pinned to exactly the floor by a constraints file
+    # while the COMPLETE, unmodified root requirements are installed, and the root suite
+    # (including the real-loader klusterlet snapshot, credential, TLS and endpoint
+    # regressions) runs on it. tests/test_ci_guardrails.py ties this job to requirements.txt
+    # and the compatibility authority.
     name: Kubernetes client minimum, Python CLI (29.0.0)
     runs-on: ubuntu-latest
 
@@ -92,22 +94,22 @@ jobs:
 
     - name: Prove the declared floor is a published final release
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install "pip==26.2.1"
         pip download --no-deps --dest "$RUNNER_TEMP/kubernetes-floor" "kubernetes==29.0.0"
 
-    - name: Prove the release below the floor conflicts with the root urllib3 requirement
+    - name: Prove every release below the floor conflicts with the root urllib3 requirement
       run: |
         grep -v -E '^kubernetes' requirements.txt > "$RUNNER_TEMP/requirements-without-kubernetes.txt"
         set +e
-        output=$(pip install --dry-run --ignore-installed -r "$RUNNER_TEMP/requirements-without-kubernetes.txt" "kubernetes==28.1.0" 2>&1)
+        output=$(pip install --dry-run --ignore-installed -r "$RUNNER_TEMP/requirements-without-kubernetes.txt" "kubernetes>=28.0.0,<29.0.0" 2>&1)
         status=$?
         set -e
         echo "$output"
         if [ "$status" -eq 0 ]; then
-          echo "kubernetes 28.1.0 now resolves with the root requirements; the documented reason for the 29.0.0 floor is stale" >&2
+          echo "a kubernetes release below 29.0.0 now resolves with the root requirements; the documented reason for the floor is stale" >&2
           exit 1
         fi
-        if ! echo "$output" | grep -q "kubernetes 28.1.0 depends on urllib3<2"; then
+        if ! echo "$output" | grep -q "ResolutionImpossible" || ! echo "$output" | grep -q -E "kubernetes [0-9.]+ depends on urllib3<2"; then
           echo "the resolution failed for another reason; the proof is inconclusive" >&2
           exit 1
         fi
@@ -122,18 +124,10 @@ jobs:
       run: |
         python -c "import kubernetes, urllib3; from packaging.version import Version; assert kubernetes.__version__ == '29.0.0', kubernetes.__version__; assert Version('2.6.3') <= Version(urllib3.__version__) < Version('3'), urllib3.__version__; print('kubernetes', kubernetes.__version__, 'urllib3', urllib3.__version__)"
 
-    - name: Run the real-loader regressions on the floor client
-      run: |
-        python -m pytest -v \
-          tests/test_r4_06_snapshot_parity.py \
-          tests/test_post_activation_snapshot.py \
-          tests/test_r4_06_endpoint_parity.py \
-          tests/test_r4_06_kubeconfig_parity.py \
-          --junitxml=pytest-results-kubernetes-min-client-cli-29.0.0.xml
-
     - name: Run the root suite on the floor client
       run: |
-        python -m pytest tests/ --ignore=tests/release -q -m "not e2e" -n auto --dist worksteal
+        python -m pytest tests/ --ignore=tests/release -q -m "not e2e" -n auto --dist worksteal \
+          --junitxml=pytest-results-kubernetes-min-client-cli-29.0.0.xml
 
     - name: Archive pytest results
       if: always()
@@ -148,10 +142,14 @@ jobs:
     # The Ansible Collection declares `kubernetes>=28.0.0` in its own requirements.txt. There
     # is no 28.0.0 final release, so the lowest client that floor admits is 28.1.0; the first
     # step proves that, so the pin cannot silently drift. This environment is resolved from
-    # the collection's own requirements only (plus ansible-core at the declared floor lane and
-    # the test runner); the root requirements, whose urllib3 floor 28.1.0 cannot satisfy, are
-    # never installed here. tests/test_ci_guardrails.py ties this job's pin to the
-    # collection requirements and the compatibility authority.
+    # the collection's own requirements only, plus ansible-core and Python of the foundation
+    # workflow's `min` lane, its Galaxy dependencies and the test runner; the root
+    # requirements, whose urllib3 floor 28.1.0 cannot satisfy, are never installed here.
+    # After the collection unit suite, the shared R4-06 parity harness runs the collection's
+    # real-loader snapshot, credential, TLS and endpoint cases on the same client; that
+    # harness also imports the Python CLI's `lib` package, so tenacity and rich are added for
+    # that step only, under the same client constraint. tests/test_ci_guardrails.py ties this
+    # job to the collection requirements, the `min` lane and the compatibility authority.
     name: Kubernetes client minimum, Collection (28.1.0)
     runs-on: ubuntu-latest
 
@@ -166,7 +164,7 @@ jobs:
 
     - name: Prove 28.1.0 is the lowest final release satisfying the declared floor
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install "pip==26.2.1"
         # Affirmative evidence first: the index answers and 28.1.0 exists.
         pip download --no-deps --dest "$RUNNER_TEMP/kubernetes-min" "kubernetes==28.1.0"
         # Then the below-floor query must fail for exactly one reason: no matching release.
@@ -190,6 +188,10 @@ jobs:
         pip install -r ansible_collections/tomazb/acm_switchover/requirements.txt -c "$RUNNER_TEMP/kubernetes-floor-constraint.txt" "ansible-core==2.16.*" pytest "pytest-xdist>=3.2.1,<4"
         pip check
 
+    - name: Install collection dependencies
+      run: |
+        ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
+
     - name: Assert the resolved client version
       run: |
         python -c "import kubernetes, urllib3; assert kubernetes.__version__ == '28.1.0', kubernetes.__version__; print('kubernetes', kubernetes.__version__, 'urllib3', urllib3.__version__)"
@@ -199,12 +201,23 @@ jobs:
         PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q -n auto --dist worksteal \
           --junitxml=pytest-results-kubernetes-min-client-collection-28.1.0.xml
 
+    - name: Run the R4-06 parity harness on the floor client
+      run: |
+        pip install tenacity rich -c "$RUNNER_TEMP/kubernetes-floor-constraint.txt"
+        pip check
+        python -c "import kubernetes; assert kubernetes.__version__ == '28.1.0', kubernetes.__version__"
+        PYTHONPATH=. python -m pytest -q \
+          tests/test_r4_06_snapshot_parity.py \
+          tests/test_r4_06_endpoint_parity.py \
+          tests/test_r4_06_kubeconfig_parity.py \
+          --junitxml=pytest-results-kubernetes-min-client-collection-parity-28.1.0.xml
+
     - name: Archive pytest results
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: pytest-results-kubernetes-min-client-collection-28.1.0
-        path: pytest-results-kubernetes-min-client-collection-28.1.0.xml
+        path: pytest-results-kubernetes-min-client-collection-*28.1.0.xml
         if-no-files-found: ignore
         retention-days: 7
 
@@ -507,14 +520,15 @@ jobs:
   notify:
     name: Notification
     runs-on: ubuntu-latest
-    needs: [test, kubernetes-min-client, lint, release-framework, security, syntax-check, documentation, integration-test]
+    needs: [test, kubernetes-min-client-cli, kubernetes-min-client-collection, lint, release-framework, security, syntax-check, documentation, integration-test]
     if: always()
     
     steps:
     - name: Check job statuses
       run: |
         echo "Test: ${{ needs.test.result }}"
-        echo "Kubernetes client minimum: ${{ needs.kubernetes-min-client.result }}"
+        echo "Kubernetes client minimum, Python CLI: ${{ needs.kubernetes-min-client-cli.result }}"
+        echo "Kubernetes client minimum, Collection: ${{ needs.kubernetes-min-client-collection.result }}"
         echo "Lint: ${{ needs.lint.result }}"
         echo "Release framework: ${{ needs.release-framework.result }}"
         echo "Security: ${{ needs.security.result }}"

@@ -100,19 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validators require these on standalone and integrated decommission.
 
 
-### Changed
-
-- **Python CLI `kubernetes` floor raised to 29.0.0 (#358).** The root `requirements.txt` now
-  declares `kubernetes>=29.0.0`. The previous `>=28.0.0` was unreachable there: 28.1.0, the lowest
-  final release it admitted, requires `urllib3<2`, while the root also requires
-  `urllib3>=2.6.3,<3`. The Ansible Collection keeps `kubernetes>=28.0.0` (lowest final release
-  28.1.0), so the two form factors now declare different client floors. This is a dependency
-  support boundary only; runtime behaviour and parity are unchanged. CI replaces
-  `kubernetes-min-client` with `kubernetes-min-client-cli`, which installs the complete root
-  requirements at 29.0.0, and `kubernetes-min-client-collection`, which installs only the
-  collection requirements at 28.1.0. New guardrails fail on any disagreement between the
-  declared floors, the CI pins and `docs/compatibility.md`.
-
 ### Fixed
 
 - **Snapshot-built klusterlet spoke clients (R4-06 PR 3, #357; Python + Collection).** Every
@@ -127,8 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client must prove TLS verification, its own credential files, the captured token and the
   proven endpoint. Workers finish before cleanup; a collection worker that misses its deadline
   is still a failure but reports its real `changed` state (`completed_after_timeout`). New CI
-  job `kubernetes-min-client` runs the real-loader regressions on kubernetes 28.1.0 (since
-  split per form factor; see Changed).
+  job `kubernetes-min-client` ran the real-loader regressions on kubernetes 28.1.0; it is now
+  split into `kubernetes-min-client-cli` and `kubernetes-min-client-collection` (see Changed, #358).
 - **Klusterlet endpoint identity (R4-06 PR 2, #355; Python + Collection).** A managed cluster is
   inspected only after its target is proven, and only a genuinely different hub host is
   remediated (`docs/plans/2026-10-15-r4-06-current-base-amendment.md`):
@@ -493,6 +480,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python CLI `kubernetes` floor raised to 29.0.0 (#358).** The root `requirements.txt` now
+  declares `kubernetes>=29.0.0`. The previous `>=28.0.0` was unreachable there: 28.1.0, the lowest
+  final release it admitted, requires `urllib3<2`, while the root also requires
+  `urllib3>=2.6.3,<3`. The Ansible Collection keeps `kubernetes>=28.0.0` (lowest final release
+  28.1.0), so the two form factors now declare different client floors. This is a dependency
+  support boundary only; runtime behaviour and parity are unchanged. CI replaces
+  `kubernetes-min-client` with `kubernetes-min-client-cli`, which installs the complete root
+  requirements at 29.0.0, and `kubernetes-min-client-collection`, which installs only the
+  collection requirements at 28.1.0 and also runs the shared R4-06 parity harness there. New guardrails fail on any disagreement between the
+  declared floors, the CI pins and `docs/compatibility.md`.
 - **Explicit `--min-managed-clusters` / `min_managed_clusters` is now an additional floor (R4-04).**
   It no longer replaces the expected names derived by preflight, and explicit `0` permits an empty
   destination only when no name is expected. Use the audited waiver to lift the name check.

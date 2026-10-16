@@ -3,7 +3,7 @@
 Both form factors must capture the same bytes from the same files, or refuse with the same
 reason, for every case in tests/fixtures/r4_06_credential_vectors.json. The construction
 tests run the real Kubernetes client loader installed in the lane (the Python CLI floor CI job
-runs them against kubernetes 29.0.0; the collection's own snapshot tests run against 28.1.0).
+runs them against kubernetes 29.0.0, and the collection floor CI job against 28.1.0).
 """
 
 import base64

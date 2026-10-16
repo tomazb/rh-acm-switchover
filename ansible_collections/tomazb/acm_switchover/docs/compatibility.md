@@ -97,20 +97,28 @@ a deliberate tightening, not a conflict. There is no `kubernetes` 28.0.0 final r
 the lowest client the collection floor admits is 28.1.0, which requires `urllib3<2`.
 
 The repository-root `requirements.txt` also requires `urllib3>=2.6.3,<3`, which 28.1.0
-cannot satisfy, so the Python CLI declares `kubernetes>=29.0.0`, the lowest release that
-resolves with it.
+cannot satisfy, so the Python CLI declares `kubernetes>=29.0.0`: every release between the
+previous shared floor (28.0.0) and 29.0.0 conflicts with that urllib3 requirement.
 
 Each floor is tested in its own resolved environment:
 
-- `kubernetes-min-client-collection` installs only this collection's `requirements.txt`
-  (plus ansible-core at the `min` lane and the test runner) with the client constrained to
-  exactly 28.1.0. It proves that no lower final release satisfies the floor, runs `pip
-  check`, and runs the collection unit suite, including the real-loader klusterlet snapshot,
-  credential, TLS and endpoint regressions.
+- `kubernetes-min-client-collection` installs only this collection's `requirements.txt`,
+  with the client constrained to exactly 28.1.0, plus ansible-core and Python of the `min`
+  lane, the Galaxy dependencies from `requirements.yml` and the test runner. It proves that
+  no lower final release satisfies the floor, runs `pip check`, and runs the collection
+  unit suite. It then runs the shared R4-06 parity harness
+  (`tests/test_r4_06_snapshot_parity.py`, `test_r4_06_endpoint_parity.py`,
+  `test_r4_06_kubeconfig_parity.py`), which exercises the collection's real-loader
+  klusterlet snapshot, credential, TLS and endpoint cases on 28.1.0. The harness also
+  imports the Python CLI's `lib` package, so that step adds only `tenacity` and `rich`,
+  under the same client constraint.
 - `kubernetes-min-client-cli` installs the complete, unmodified root `requirements.txt` and
   `requirements-dev.txt` with the client constrained to exactly 29.0.0. It proves that
-  28.1.0 conflicts with the root urllib3 requirement, runs `pip check`, and runs the root
-  real-loader regressions and the root suite.
+  every release from 28.0.0 up to the floor conflicts with the root urllib3 requirement,
+  runs `pip check`, and runs the root suite, including the real-loader regressions.
+
+Both jobs pin `pip` for their proof steps, because those steps read pip's resolver
+messages.
 
 `tests/test_ci_guardrails.py` fails when a declared floor, a CI pin or this table disagree.
 
