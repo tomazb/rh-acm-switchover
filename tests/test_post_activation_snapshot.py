@@ -116,7 +116,7 @@ def verifier(tmp_path, monkeypatch):
 
 
 def _managed_cluster(name, url=SPOKE):
-    return {"metadata": {"name": name}, "spec": {"managedClusterClientConfigs": [{"url": url}]}}
+    return {"metadata": {"name": name, "uid": f"{name}-uid"}, "spec": {"managedClusterClientConfigs": [{"url": url}]}}
 
 
 class Constructions:
