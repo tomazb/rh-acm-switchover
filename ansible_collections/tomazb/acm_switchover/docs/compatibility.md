@@ -83,18 +83,36 @@ That is a separate surface and is unaffected by this policy.
 
 ### Python `kubernetes` client
 
-`requirements.txt` declares `kubernetes>=28.0.0`, unified with the repository-root
-`requirements.txt` and the CI lanes. `kubernetes.core` itself requires only
-`>=24.2.0`; the higher floor here is a deliberate tightening, not a conflict.
+The two form factors declare **different** client floors (operator decision on #358,
+2026-10-16). This is a dependency support boundary only; runtime behaviour and parity are
+unchanged.
 
-There is no `kubernetes` 28.0.0 final release, so the lowest client the floor admits is
-28.1.0, which requires `urllib3<2`. The `kubernetes-min-client` job in
-`.github/workflows/ci-cd.yml` installs exactly 28.1.0, proves that no lower final release
-satisfies the floor, and runs the real-loader klusterlet snapshot, credential, TLS and
-endpoint regressions of both form factors against it. The repository-root
-`requirements.txt` also requires `urllib3>=2.6.3`, which 28.1.0 cannot satisfy, so the
-root CLI's effective client floor is 29.0.0; whether to change the declared floor is
-tracked in #358.
+| Form factor | Declared in | Floor | Lowest final release admitted | CI job (`.github/workflows/ci-cd.yml`) |
+| --- | --- | --- | --- | --- |
+| Ansible Collection | `requirements.txt` (this collection) | `kubernetes>=28.0.0` | 28.1.0 | `kubernetes-min-client-collection` |
+| Python CLI | repository-root `requirements.txt` | `kubernetes>=29.0.0` | 29.0.0 | `kubernetes-min-client-cli` |
+
+The collection's `kubernetes.core` itself requires only `>=24.2.0`; the collection floor is
+a deliberate tightening, not a conflict. There is no `kubernetes` 28.0.0 final release, so
+the lowest client the collection floor admits is 28.1.0, which requires `urllib3<2`.
+
+The repository-root `requirements.txt` also requires `urllib3>=2.6.3,<3`, which 28.1.0
+cannot satisfy, so the Python CLI declares `kubernetes>=29.0.0`, the lowest release that
+resolves with it.
+
+Each floor is tested in its own resolved environment:
+
+- `kubernetes-min-client-collection` installs only this collection's `requirements.txt`
+  (plus ansible-core at the `min` lane and the test runner) with the client constrained to
+  exactly 28.1.0. It proves that no lower final release satisfies the floor, runs `pip
+  check`, and runs the collection unit suite, including the real-loader klusterlet snapshot,
+  credential, TLS and endpoint regressions.
+- `kubernetes-min-client-cli` installs the complete, unmodified root `requirements.txt` and
+  `requirements-dev.txt` with the client constrained to exactly 29.0.0. It proves that
+  28.1.0 conflicts with the root urllib3 requirement, runs `pip check`, and runs the root
+  real-loader regressions and the root suite.
+
+`tests/test_ci_guardrails.py` fails when a declared floor, a CI pin or this table disagree.
 
 ## Ansible Automation Platform
 

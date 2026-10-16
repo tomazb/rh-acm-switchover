@@ -26,7 +26,7 @@ The container image includes:
 - **jq** - JSON processor for debugging
 - **curl** - HTTP client for downloads
 - **Python packages**:
-  - `kubernetes>=28.0.0`
+  - `kubernetes>=29.0.0`
   - `PyYAML>=6.0`
   - `rich>=13.0.0`
   - `tenacity>=8.2.0`

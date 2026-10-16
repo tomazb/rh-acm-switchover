@@ -69,14 +69,90 @@ jobs:
         path: htmlcov/
         retention-days: 7
 
-  kubernetes-min-client:
-    # R4-06 PR 3 (amendment 2026-10-15 §6): the real-loader snapshot, credential, TLS and
-    # endpoint regressions of both form factors, against the declared minimum Python
-    # `kubernetes` client. `kubernetes>=28.0.0` has no 28.0.0 final release, so the minimum
-    # is 28.1.0; the first step proves that, so the pin cannot silently drift. 28.1.0
-    # requires urllib3<2: the repository's other runtime dependencies are installed without
-    # the root urllib3 floor (see #358 for the root CLI's effective floor).
-    name: Kubernetes client minimum (28.1.0)
+  kubernetes-min-client-cli:
+    # #358 (operator decision 2026-10-16): the Python CLI declares `kubernetes>=29.0.0` in the
+    # root requirements.txt. 28.1.0, the lowest 28.x final release, requires urllib3<2 and so
+    # cannot coexist with the root `urllib3>=2.6.3,<3`; the second step proves that conflict,
+    # so the documented reason for the floor cannot silently go stale. The client is then
+    # pinned to exactly the floor by a constraints file while the COMPLETE, unmodified root
+    # requirements are installed, and the real-loader klusterlet snapshot, credential, TLS and
+    # endpoint regressions plus the root suite run on it. tests/test_ci_guardrails.py ties
+    # this job's pin to requirements.txt and the compatibility authority.
+    name: Kubernetes client minimum, Python CLI (29.0.0)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Prove the declared floor is a published final release
+      run: |
+        python -m pip install --upgrade pip
+        pip download --no-deps --dest "$RUNNER_TEMP/kubernetes-floor" "kubernetes==29.0.0"
+
+    - name: Prove the release below the floor conflicts with the root urllib3 requirement
+      run: |
+        grep -v -E '^kubernetes' requirements.txt > "$RUNNER_TEMP/requirements-without-kubernetes.txt"
+        set +e
+        output=$(pip install --dry-run --ignore-installed -r "$RUNNER_TEMP/requirements-without-kubernetes.txt" "kubernetes==28.1.0" 2>&1)
+        status=$?
+        set -e
+        echo "$output"
+        if [ "$status" -eq 0 ]; then
+          echo "kubernetes 28.1.0 now resolves with the root requirements; the documented reason for the 29.0.0 floor is stale" >&2
+          exit 1
+        fi
+        if ! echo "$output" | grep -q "kubernetes 28.1.0 depends on urllib3<2"; then
+          echo "the resolution failed for another reason; the proof is inconclusive" >&2
+          exit 1
+        fi
+
+    - name: Install the complete root requirements with the client at the floor
+      run: |
+        echo "kubernetes==29.0.0" > "$RUNNER_TEMP/kubernetes-floor-constraint.txt"
+        pip install -r requirements.txt -r requirements-dev.txt -c "$RUNNER_TEMP/kubernetes-floor-constraint.txt"
+        pip check
+
+    - name: Assert the resolved client and urllib3 versions
+      run: |
+        python -c "import kubernetes, urllib3; from packaging.version import Version; assert kubernetes.__version__ == '29.0.0', kubernetes.__version__; assert Version('2.6.3') <= Version(urllib3.__version__) < Version('3'), urllib3.__version__; print('kubernetes', kubernetes.__version__, 'urllib3', urllib3.__version__)"
+
+    - name: Run the real-loader regressions on the floor client
+      run: |
+        python -m pytest -v \
+          tests/test_r4_06_snapshot_parity.py \
+          tests/test_post_activation_snapshot.py \
+          tests/test_r4_06_endpoint_parity.py \
+          tests/test_r4_06_kubeconfig_parity.py \
+          --junitxml=pytest-results-kubernetes-min-client-cli-29.0.0.xml
+
+    - name: Run the root suite on the floor client
+      run: |
+        python -m pytest tests/ --ignore=tests/release -q -m "not e2e" -n auto --dist worksteal
+
+    - name: Archive pytest results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-results-kubernetes-min-client-cli-29.0.0
+        path: pytest-results-kubernetes-min-client-cli-29.0.0.xml
+        if-no-files-found: ignore
+        retention-days: 7
+
+  kubernetes-min-client-collection:
+    # The Ansible Collection declares `kubernetes>=28.0.0` in its own requirements.txt. There
+    # is no 28.0.0 final release, so the lowest client that floor admits is 28.1.0; the first
+    # step proves that, so the pin cannot silently drift. This environment is resolved from
+    # the collection's own requirements only (plus ansible-core at the declared floor lane and
+    # the test runner); the root requirements, whose urllib3 floor 28.1.0 cannot satisfy, are
+    # never installed here. tests/test_ci_guardrails.py ties this job's pin to the
+    # collection requirements and the compatibility authority.
+    name: Kubernetes client minimum, Collection (28.1.0)
     runs-on: ubuntu-latest
 
     steps:
@@ -108,31 +184,27 @@ jobs:
           exit 1
         fi
 
-    - name: Install the minimum client and the test dependencies
+    - name: Install the collection requirements with the client at the floor
       run: |
-        grep -v -E '^(urllib3|kubernetes)' requirements.txt > "$RUNNER_TEMP/requirements-min-client.txt"
-        pip install -r "$RUNNER_TEMP/requirements-min-client.txt" "kubernetes==28.1.0" pytest
+        echo "kubernetes==28.1.0" > "$RUNNER_TEMP/kubernetes-floor-constraint.txt"
+        pip install -r ansible_collections/tomazb/acm_switchover/requirements.txt -c "$RUNNER_TEMP/kubernetes-floor-constraint.txt" "ansible-core==2.16.*" pytest "pytest-xdist>=3.2.1,<4"
+        pip check
 
     - name: Assert the resolved client version
       run: |
         python -c "import kubernetes, urllib3; assert kubernetes.__version__ == '28.1.0', kubernetes.__version__; print('kubernetes', kubernetes.__version__, 'urllib3', urllib3.__version__)"
 
-    - name: Run the real-loader regressions on the minimum client
+    - name: Run the collection unit suite on the floor client
       run: |
-        python -m pytest -v \
-          tests/test_r4_06_snapshot_parity.py \
-          tests/test_post_activation_snapshot.py \
-          tests/test_r4_06_endpoint_parity.py \
-          tests/test_r4_06_kubeconfig_parity.py \
-          ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_snapshot.py \
-          --junitxml=pytest-results-kubernetes-min-client-28.1.0.xml
+        PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q -n auto --dist worksteal \
+          --junitxml=pytest-results-kubernetes-min-client-collection-28.1.0.xml
 
     - name: Archive pytest results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: pytest-results-kubernetes-min-client-28.1.0
-        path: pytest-results-kubernetes-min-client-28.1.0.xml
+        name: pytest-results-kubernetes-min-client-collection-28.1.0
+        path: pytest-results-kubernetes-min-client-collection-28.1.0.xml
         if-no-files-found: ignore
         retention-days: 7
 

@@ -146,6 +146,12 @@ collection tests each drive a full `ansible-playbook` run, and pinning whole fil
 surface 1 are combined across workers by `pytest-cov` and pytest, so the reporting form is
 unchanged.
 
+The `kubernetes` floor jobs in `ci-cd.yml` (#358) re-run two of these lanes on the declared
+minimum client: `kubernetes-min-client-cli` runs surface 1 on kubernetes 29.0.0 with the
+complete root requirements, and `kubernetes-min-client-collection` runs the collection unit
+directory on kubernetes 28.1.0 with only the collection requirements. Both use the same
+`-n auto --dist worksteal` flags.
+
 Every other pytest lane stays serial, and must not be given `-n` or `--dist`
 (`tests/test_ci_guardrails.py` enforces both directions against the workflows, `run_tests.sh`,
 and `setup.cfg`):
