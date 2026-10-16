@@ -182,7 +182,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 ### Python Configuration
 
 - ✅ **`requirements.txt`**
-  - kubernetes>=28.0.0
+  - kubernetes>=29.0.0
   - PyYAML>=6.0
   - rich>=13.0.0
 

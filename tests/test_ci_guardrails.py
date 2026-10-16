@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-cd.yml"
@@ -208,7 +211,7 @@ def test_collection_ci_covers_every_shipped_playbook_and_runtime_tests():
 def test_collection_ci_installs_kubernetes_runtime_for_live_module_boundary():
     text = COLLECTION_WORKFLOW.read_text()
 
-    assert '"kubernetes>=28.0.0"' in text
+    assert f'"kubernetes>={_declared_kubernetes_floor(COLLECTION_REQUIREMENTS)}"' in text
 
 
 def test_ci_version_check_uses_runtime_version_metadata():
@@ -376,7 +379,9 @@ def test_xdist_runs_only_on_the_documented_parallel_lanes():
 
     parallel = [line for line in ci_lines + collection_lines if is_parallel_lane(line)]
     serial = [line for line in ci_lines + collection_lines if not is_parallel_lane(line)]
-    assert len(parallel) == 3, parallel
+    # Surface 1 and the collection unit directory each run once more at their declared
+    # `kubernetes` floor (#358: kubernetes-min-client-cli / -collection), so 3 + 2 lanes.
+    assert len(parallel) == 5, parallel
     for line in parallel:
         for flag in _PARALLEL_FLAGS:
             assert flag in line, f"{flag!r} missing from parallel lane: {line}"
@@ -558,3 +563,206 @@ def test_release_guard_is_scoped_to_release_items():
     assert RELEASE_SERIAL_ONLY_MESSAGE in " ".join((result.stdout + result.stderr).split())
     # test_options.py holds six helper tests; the guardrail test is the one that must still pass.
     assert "1 passed, 6 errors" in summary and "failed" not in summary, summary
+
+
+# #358: the Python CLI and the Ansible Collection declare different `kubernetes` floors.
+# Each floor is tested in its own resolved environment; these guardrails fail when a
+# declared floor, the CI job that tests it, the compatibility authority or the operator
+# docs disagree. The lowest-final-release values are proven against the package index by
+# the CI jobs themselves.
+ROOT_REQUIREMENTS = REPO_ROOT / "requirements.txt"
+COLLECTION_REQUIREMENTS_PATH = "ansible_collections/tomazb/acm_switchover/requirements.txt"
+COLLECTION_REQUIREMENTS = REPO_ROOT / COLLECTION_REQUIREMENTS_PATH
+COMPATIBILITY_DOC = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover" / "docs" / "compatibility.md"
+ROOT_KUBERNETES_MIN_RELEASE = "29.0.0"
+COLLECTION_KUBERNETES_MIN_RELEASE = "28.1.0"
+FLOOR_CONSTRAINT = '-c "$RUNNER_TEMP/kubernetes-floor-constraint.txt"'
+OPERATOR_DOCS_CITING_ROOT_FLOOR = (
+    REPO_ROOT / "docs" / "getting-started" / "install.md",
+    REPO_ROOT / "docs" / "getting-started" / "container.md",
+    REPO_ROOT / "docs" / "project" / "summary.md",
+    REPO_ROOT / "docs" / "project" / "deliverables.md",
+)
+R4_06_REAL_LOADER_TESTS = (
+    "tests/test_r4_06_snapshot_parity.py",
+    "tests/test_post_activation_snapshot.py",
+    "tests/test_r4_06_endpoint_parity.py",
+    "tests/test_r4_06_kubeconfig_parity.py",
+)
+R4_06_PARITY_HARNESS = (
+    "tests/test_r4_06_snapshot_parity.py",
+    "tests/test_r4_06_endpoint_parity.py",
+    "tests/test_r4_06_kubeconfig_parity.py",
+)
+
+
+def _requirement(path: Path, name: str) -> Requirement:
+    found = []
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            requirement = Requirement(line)
+            if canonicalize_name(requirement.name) == name:
+                found.append(requirement)
+    assert len(found) == 1, f"{path} must declare `{name}` exactly once"
+    return found[0]
+
+
+def _declared_kubernetes_floor(path: Path) -> str:
+    floors = [spec.version for spec in _requirement(path, "kubernetes").specifier if spec.operator == ">="]
+    assert len(floors) == 1, f"{path} must declare exactly one `kubernetes>=X` floor"
+    return floors[0]
+
+
+def _ci_job(job_id: str) -> dict:
+    jobs = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]
+    assert job_id in jobs, f"ci-cd.yml lost the {job_id} job"
+    return jobs[job_id]
+
+
+def _job_lines(job_id: str) -> list:
+    steps = _ci_job(job_id)["steps"]
+    return [
+        " ".join(line.split())
+        for step in steps
+        if step.get("run")
+        for line in _executable_shell(step["run"]).splitlines()
+        if line.strip()
+    ]
+
+
+def _job_python(job_id: str) -> str:
+    versions = [
+        str(step["with"]["python-version"])
+        for step in _ci_job(job_id)["steps"]
+        if str(step.get("uses", "")).startswith("actions/setup-python")
+    ]
+    assert len(versions) == 1
+    return versions[0]
+
+
+def _foundation_min_lane() -> dict:
+    workflow = yaml.safe_load(COLLECTION_WORKFLOW.read_text())
+    lanes = [lane for lane in workflow["jobs"]["foundation"]["strategy"]["matrix"]["include"] if lane["lane"] == "min"]
+    assert len(lanes) == 1
+    return lanes[0]
+
+
+def test_every_workflow_needs_entry_names_an_existing_job():
+    for path in (CI_WORKFLOW, COLLECTION_WORKFLOW):
+        jobs = yaml.safe_load(path.read_text())["jobs"]
+        for job_id, job in jobs.items():
+            needs = job.get("needs", [])
+            for need in [needs] if isinstance(needs, str) else needs:
+                assert need in jobs, f"{path.name}: job {job_id} needs missing job {need}"
+    notify = _ci_job("notify")
+    assert {"kubernetes-min-client-cli", "kubernetes-min-client-collection"} <= set(notify["needs"])
+
+
+def test_declared_floors_and_their_tested_minimum_releases_are_ordered():
+    root_floor = _declared_kubernetes_floor(ROOT_REQUIREMENTS)
+    collection_floor = _declared_kubernetes_floor(COLLECTION_REQUIREMENTS)
+
+    assert root_floor == ROOT_KUBERNETES_MIN_RELEASE
+    assert {str(spec) for spec in _requirement(ROOT_REQUIREMENTS, "urllib3").specifier} == {">=2.6.3", "<3"}
+    assert Version(collection_floor) <= Version(COLLECTION_KUBERNETES_MIN_RELEASE) < Version(root_floor)
+
+
+def test_cli_floor_job_installs_the_complete_root_requirements_at_the_floor():
+    job_id = "kubernetes-min-client-cli"
+    lines = _job_lines(job_id)
+    root_floor = _declared_kubernetes_floor(ROOT_REQUIREMENTS)
+    collection_floor = _declared_kubernetes_floor(COLLECTION_REQUIREMENTS)
+    filtered_copy = "grep -v -E '^kubernetes' requirements.txt > \"$RUNNER_TEMP/requirements-without-kubernetes.txt\""
+    install = f"pip install -r requirements.txt -r requirements-dev.txt {FLOOR_CONSTRAINT}"
+
+    assert f"({root_floor})" in _ci_job(job_id)["name"]
+    # The root requirements are read in exactly two places, both verbatim: the filtered copy
+    # used only by the below-floor proof, and the install, which takes the file unmodified.
+    assert [line for line in lines if re.search(r"requirements(?:-dev)?\.txt", line)] == [
+        filtered_copy,
+        install,
+    ]
+    assert not any(re.search(r"\bsed\b|>>", line) for line in lines)
+    assert lines[lines.index(install) + 1] == "pip check"
+    assert f'echo "kubernetes=={root_floor}" > "$RUNNER_TEMP/kubernetes-floor-constraint.txt"' in lines
+    assert f'pip download --no-deps --dest "$RUNNER_TEMP/kubernetes-floor" "kubernetes=={root_floor}"' in lines
+    proof = [line for line in lines if line.startswith("output=$(pip install --dry-run")]
+    assert proof == [
+        'output=$(pip install --dry-run --ignore-installed -r "$RUNNER_TEMP/requirements-without-kubernetes.txt" '
+        f'"kubernetes>={collection_floor},<{root_floor}" 2>&1)'
+    ]
+    assert any("ResolutionImpossible" in line and "depends on urllib3<2" in line for line in lines)
+    assert any(line.startswith('python -m pip install "pip==') for line in lines)
+    assert any(f"kubernetes.__version__ == '{root_floor}'" in line for line in lines)
+    assert any("Version('2.6.3') <= Version(urllib3.__version__) < Version('3')" in line for line in lines)
+    suite = [line for line in lines if line.startswith("python -m pytest")]
+    assert len(suite) == 1 and suite[0].startswith("python -m pytest tests/ --ignore=tests/release ")
+    assert f"--junitxml=pytest-results-kubernetes-min-client-cli-{root_floor}.xml" in suite[0]
+    for test in R4_06_REAL_LOADER_TESTS:
+        assert (REPO_ROOT / test).is_file() and not test.startswith(("tests/release/", "tests/e2e/"))
+
+
+def test_collection_floor_job_resolves_only_the_collection_requirements():
+    job_id = "kubernetes-min-client-collection"
+    lines = _job_lines(job_id)
+    floor = _declared_kubernetes_floor(COLLECTION_REQUIREMENTS)
+    min_lane = _foundation_min_lane()
+
+    assert f"({COLLECTION_KUBERNETES_MIN_RELEASE})" in _ci_job(job_id)["name"]
+    assert _job_python(job_id) == str(min_lane["python"])
+    tokens = re.findall(r"[^\s\"']*requirements(?:-dev)?\.txt", "\n".join(lines))
+    assert tokens and set(tokens) == {COLLECTION_REQUIREMENTS_PATH}, f"root requirements leak: {tokens}"
+    assert (
+        f"pip install -r {COLLECTION_REQUIREMENTS_PATH} {FLOOR_CONSTRAINT} "
+        f'"ansible-core=={min_lane["ansible_core"]}" pytest "pytest-xdist>=3.2.1,<4"'
+    ) in lines
+    assert lines.count("pip check") == 2
+    assert (
+        f'echo "kubernetes=={COLLECTION_KUBERNETES_MIN_RELEASE}" > "$RUNNER_TEMP/kubernetes-floor-constraint.txt"'
+        in lines
+    )
+    assert any(f'"kubernetes>={floor},<{COLLECTION_KUBERNETES_MIN_RELEASE}"' in line for line in lines)
+    assert any(line.startswith('python -m pip install "pip==') for line in lines)
+    assert "ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml" in lines
+    assert any(f"kubernetes.__version__ == '{COLLECTION_KUBERNETES_MIN_RELEASE}'" in line for line in lines)
+    assert any(
+        line.startswith("PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ ")
+        for line in lines
+    )
+    # The parity harness adds only what importing the CLI's `lib` needs, under the same constraint.
+    assert f"pip install tenacity rich {FLOOR_CONSTRAINT}" in lines
+    harness = [line for line in lines if line.startswith("PYTHONPATH=. python -m pytest -q tests/")]
+    assert len(harness) == 1
+    for test in R4_06_PARITY_HARNESS:
+        assert test in harness[0] and (REPO_ROOT / test).is_file()
+
+
+def test_compatibility_authority_states_both_floors():
+    text = COMPATIBILITY_DOC.read_text()
+    root_floor = _declared_kubernetes_floor(ROOT_REQUIREMENTS)
+    collection_floor = _declared_kubernetes_floor(COLLECTION_REQUIREMENTS)
+
+    assert (
+        f"| Ansible Collection | `requirements.txt` (this collection) | `kubernetes>={collection_floor}` "
+        f"| {COLLECTION_KUBERNETES_MIN_RELEASE} | `kubernetes-min-client-collection` |"
+    ) in text
+    assert (
+        f"| Python CLI | repository-root `requirements.txt` | `kubernetes>={root_floor}` "
+        f"| {ROOT_KUBERNETES_MIN_RELEASE} | `kubernetes-min-client-cli` |"
+    ) in text
+    assert "unified with the repository-root" not in text.lower()
+
+
+def test_operator_docs_cite_the_root_floor():
+    root_floor = _declared_kubernetes_floor(ROOT_REQUIREMENTS)
+    collection_floor = _declared_kubernetes_floor(COLLECTION_REQUIREMENTS)
+
+    for path in OPERATOR_DOCS_CITING_ROOT_FLOOR:
+        text = path.read_text()
+        assert f"kubernetes>={root_floor}" in text, path
+        assert f"kubernetes>={collection_floor}" not in text, f"{path} cites the collection floor as the CLI's"
+
+
+def test_collection_requirements_do_not_claim_a_unified_floor():
+    assert "unified with the repository-root" not in COLLECTION_REQUIREMENTS.read_text().lower()

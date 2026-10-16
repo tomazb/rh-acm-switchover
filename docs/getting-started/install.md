@@ -118,7 +118,7 @@ acm-switchover --help
 The tool requires these Python packages:
 
 ```
-kubernetes>=28.0.0  # Kubernetes API client
+kubernetes>=29.0.0  # Kubernetes API client (Python CLI floor, #358)
 PyYAML>=6.0         # YAML parsing
 rich>=13.0.0        # Rich text formatting (optional)
 tenacity>=8.2.0     # Retry logic

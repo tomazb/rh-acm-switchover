@@ -323,7 +323,7 @@ except Exception as e:
 ## Dependencies
 
 **Python packages:**
-- `kubernetes>=28.0.0` - K8s API client
+- `kubernetes>=29.0.0` - K8s API client
 - `PyYAML>=6.0` - YAML parsing
 - `rich>=13.0.0` - Rich text formatting (future use)
 

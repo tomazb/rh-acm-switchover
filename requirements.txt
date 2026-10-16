@@ -1,4 +1,9 @@
-kubernetes>=28.0.0
+# Python CLI floor (#358). The previous floor, 28.0.0, admitted only 28.1.0 below 29.0.0,
+# and 28.1.0 requires urllib3<2, which the urllib3 floor below excludes. The Ansible
+# Collection keeps its own, lower floor in
+# ansible_collections/tomazb/acm_switchover/requirements.txt. Both floors are tested in
+# separate CI environments (.github/workflows/ci-cd.yml, kubernetes-min-client-*).
+kubernetes>=29.0.0
 PyYAML>=6.0
 rich>=13.0.0
 tenacity>=8.2.0
