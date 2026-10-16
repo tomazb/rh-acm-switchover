@@ -4,6 +4,7 @@ Vectors are declared once and asserted against both implementations. The two
 runtimes share no code; this file is what keeps them equal.
 """
 
+import copy
 import json
 import sys
 import types
@@ -1381,3 +1382,107 @@ def test_the_collection_builtin_group_versions_are_pythons_typed_readers():
     assert client.get_replicaset_strict("op-1", "acm").status is StrictReadStatus.OBJECT_ABSENT
     assert client.get_configmap_advisory("multicluster-engine", "import-controller-config") is None
     client._api_client.call_api.assert_not_called()
+
+
+TOKEN_CANARY = "CONTINUATION-CREDENTIAL-CANARY"
+INVALID_TOKENS = [
+    pytest.param(False, id="false"),
+    pytest.param(0, id="zero"),
+    pytest.param([], id="empty-list"),
+    pytest.param({}, id="empty-mapping"),
+    pytest.param(True, id="true"),
+    pytest.param(1, id="integer"),
+    pytest.param(0.5, id="float"),
+    pytest.param([TOKEN_CANARY], id="nonempty-list"),
+    pytest.param({"token": TOKEN_CANARY}, id="nonempty-mapping"),
+]
+
+
+def _pages(token, later_page):
+    malformed = {"items": [], "metadata": {"resourceVersion": "100", "continue": copy.deepcopy(token)}}
+    if not later_page:
+        return [malformed]
+    return [
+        {"items": [{"metadata": {"name": "prefix"}}], "metadata": {"resourceVersion": "100", "continue": "next"}},
+        malformed,
+    ]
+
+
+def _collection_pages(pages):
+    return _FakeK8sClient(
+        resource=_WIDGET_ROUTE,
+        dynamic=_FakeDynamicClient(discovery=_WIDGETS_SERVED),
+        pages=[_DictResult({"kind": "WidgetList", **page}) for page in copy.deepcopy(pages)],
+    )
+
+
+@pytest.mark.parametrize("token", INVALID_TOKENS)
+@pytest.mark.parametrize("later_page", [False, True], ids=["first-page", "after-prefix"])
+def test_python_rejects_malformed_continuation_without_inventory(token, later_page, caplog):
+    pages = _pages(token, later_page)
+    assert "continue" in pages[-1]["metadata"]
+    assert not isinstance(pages[-1]["metadata"]["continue"], (str, type(None)))
+    client = _python_client(list_effects=pages)
+
+    outcome = client.list_custom_resources_strict("g", "v1", "widgets")
+
+    assert outcome.status is StrictReadStatus.ERROR
+    assert outcome.reason == "malformed_response"
+    assert outcome.items == []
+    assert outcome.resource_version is None
+    assert outcome.proves_absence is False
+    _assert_list_calls_bounded(client, len(pages))
+    assert TOKEN_CANARY not in caplog.text + repr(outcome)
+
+
+@pytest.mark.parametrize("token", INVALID_TOKENS)
+@pytest.mark.parametrize("later_page", [False, True], ids=["first-page", "after-prefix"])
+def test_collection_rejects_malformed_continuation_without_inventory(token, later_page, caplog):
+    pages = _pages(token, later_page)
+    client = _collection_pages(pages)
+    assert client._pages[-1]["metadata"]["continue"] == token
+
+    result = _run_collection(_WIDGET_PARAMS, client=client)
+
+    assert result == {"changed": False, "read_status": "error", "resources": [], "resource_version": None}
+    _assert_collection_list_calls_bounded(client, len(pages))
+    assert TOKEN_CANARY not in caplog.text + json.dumps(result)
+
+
+@pytest.mark.parametrize("metadata", [{}, {"continue": None}, {"continue": ""}], ids=["missing", "null", "empty"])
+def test_valid_exhaustion_preserves_complete_inventory_in_both_forms(metadata):
+    pages = [{"items": [{"metadata": {"name": "a"}}], "metadata": {"resourceVersion": "100", **metadata}}]
+    python = _python_client(list_effects=copy.deepcopy(pages))
+    collection = _collection_pages(pages)
+
+    outcome = python.list_custom_resources_strict("g", "v1", "widgets")
+    result = _run_collection(_WIDGET_PARAMS, client=collection)
+
+    assert outcome.status is StrictReadStatus.ITEMS
+    assert result["read_status"] == "ok"
+    assert outcome.items == result["resources"] == pages[0]["items"]
+    assert outcome.resource_version == result["resource_version"] == "100"
+    _assert_list_calls_bounded(python, 1)
+    _assert_collection_list_calls_bounded(collection, 1)
+
+
+def test_opaque_string_is_forwarded_unchanged_in_both_forms():
+    token = "opaque+/=continuation"
+    pages = [
+        {"items": [], "metadata": {"resourceVersion": "100", "continue": token}},
+        {"items": [{"metadata": {"name": "a"}}], "metadata": {"resourceVersion": "100", "continue": ""}},
+    ]
+    python = _python_client(list_effects=copy.deepcopy(pages))
+    collection = _collection_pages(pages)
+
+    outcome = python.list_custom_resources_strict("g", "v1", "widgets")
+    result = _run_collection(_WIDGET_PARAMS, client=collection)
+
+    assert outcome.status is StrictReadStatus.ITEMS
+    assert result["read_status"] == "ok"
+    assert outcome.items == result["resources"] == pages[1]["items"]
+    assert outcome.resource_version == result["resource_version"] == "100"
+    assert python.custom_api.list_cluster_custom_object.call_args_list[1].kwargs["_continue"] == token
+    assert collection.get_params[1]["_continue"] == token
+    _assert_list_calls_bounded(python, 2)
+    _assert_collection_list_calls_bounded(collection, 2)

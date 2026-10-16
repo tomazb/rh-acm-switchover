@@ -6,6 +6,7 @@ import socket
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.tests.conftest import _ansible_env
@@ -267,6 +268,30 @@ def test_runtime_check_mode_still_reads_without_writes(tmp_path):
     assert "READ_STATUS=ok COUNT=0 CHANGED=False" in output
     assert {"method": "GET", "path": "/api/v1/namespaces/test-ns/pods"} in requests
     assert writes == []
+    assert "changed=0" in output
+
+
+@pytest.mark.parametrize("check_mode", [False, True], ids=["execute", "check-mode"])
+@pytest.mark.parametrize("token", [False, {"token": SENTINEL}], ids=["false", "sensitive-mapping"])
+def test_runtime_malformed_continuation_is_sanitized_and_read_only(tmp_path, token, check_mode):
+    body = {"apiVersion": "v1", "kind": "PodList", "items": [], "metadata": {"resourceVersion": "1", "continue": token}}
+    api = FakeR302API(pod_list_body=body)
+    try:
+        assert api.pod_list_body["metadata"]["continue"] == token
+        completed = _run_module(
+            tmp_path, server=api.url, read_mode="list", kind="Pod", resource_name="pods", check_mode=check_mode
+        )
+        reads = [request for request in api.requests if request["path"] == "/api/v1/namespaces/test-ns/pods"]
+        writes = api.writes
+    finally:
+        api.close()
+
+    output = _output(completed)
+    assert completed.returncode == 0, output
+    assert "READ_STATUS=error COUNT=0 CHANGED=False" in output
+    assert reads == [{"method": "GET", "path": "/api/v1/namespaces/test-ns/pods"}]
+    assert writes == []
+    assert SENTINEL not in output
     assert "changed=0" in output
 
 

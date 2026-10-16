@@ -558,3 +558,14 @@ Accepted residual divergences:
 
 Both form factors share the marker-ownership and resourceVersion-conditional
 patch rules documented above.
+
+### Strict LIST continuation validation (#345)
+
+Python's `list_custom_resources_strict` and the collection's `strict_read` validate
+`metadata.continue` before deciding whether an inventory is complete. Missing, null and
+empty-string values end pagination; a nonempty string is an opaque continuation passed
+unchanged to the next request. Every other type is a malformed response, including false,
+zero, lists and mappings. The whole read fails closed without partial resources or a
+resource version, and the token is not included in diagnostics. These rules also apply to
+read-only previews and native Ansible check mode. Consumers must not complete a checkpoint
+from a failed read. The legacy non-strict readers retain their existing behavior.

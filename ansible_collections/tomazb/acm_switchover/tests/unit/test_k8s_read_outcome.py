@@ -925,6 +925,23 @@ def test_list_mode_page_failure_is_error_and_returns_no_partial_inventory(monkey
     assert result["resource_version"] is None
 
 
+@pytest.mark.parametrize("token", [False, True, 0, 1, [], {}, [SENTINEL], {"token": SENTINEL}])
+@pytest.mark.parametrize("after_prefix", [False, True], ids=["empty-first-page", "after-prefix"])
+def test_malformed_continuation_fails_without_partial_inventory(monkeypatch, token, after_prefix):
+    malformed = _page([])
+    malformed["metadata"]["continue"] = token
+    pages = ([_page([{"metadata": {"name": "prefix"}}], "next")] if after_prefix else []) + [malformed]
+    client = _FakeClient(resource=_PODS_ROUTE, pages=pages)
+
+    result = _run_module(monkeypatch, params=LIST_PARAMS, client=client)
+
+    assert result == {"changed": False, "read_status": "error", "resources": [], "resource_version": None}
+    assert len(client.get_params) == len(pages)
+    assert all(params["limit"] == constants.STRICT_READ_PAGE_LIMIT for params in client.get_params)
+    assert all(params["_request_timeout"] == constants.STRICT_READ_REQUEST_TIMEOUT for params in client.get_params)
+    assert SENTINEL not in json.dumps(result)
+
+
 def test_list_mode_outstanding_continuation_at_exit_is_error(monkeypatch):
     client = _FakeClient(
         resource=_PODS_ROUTE,

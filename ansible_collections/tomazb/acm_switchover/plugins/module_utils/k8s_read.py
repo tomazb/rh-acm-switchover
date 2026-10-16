@@ -110,7 +110,10 @@ def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
     if not isinstance(revision, str) or not revision:
         # A complete read must be describable by a revision; anything else is malformed.
         return None, None, None
-    token = metadata.get("continue") or None
+    token = metadata.get("continue")
+    if token is not None and not isinstance(token, str):
+        return None, None, None
+    token = token or None
     return members, token, revision
 
 

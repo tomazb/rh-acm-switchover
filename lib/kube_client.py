@@ -1185,7 +1185,10 @@ class KubeClient:
                 snapshot_revision = revision
             elif revision != snapshot_revision:
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
-            continue_token = metadata.get("continue") or None
+            continue_token = metadata.get("continue")
+            if continue_token is not None and not isinstance(continue_token, str):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            continue_token = continue_token or None
             if continue_token is None:
                 return StrictReadOutcome.from_items(items, resource_version=snapshot_revision)
 

@@ -102,6 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Strict LIST readers in Python and the Collection reject non-string pagination
+  continuations (#345). Malformed pages cannot become complete inventories or bypass
+  deletion safety checks; accumulated items and revisions are discarded. Missing, null
+  and string continuation handling remains compatible.
+
 - **Snapshot-built klusterlet spoke clients (R4-06 PR 3, #357; Python + Collection).** Every
   spoke client is built from one snapshot of the selected kubeconfig context, captured when the
   cluster is selected and never re-read: credential file contents are read once (`O_NOFOLLOW`,
