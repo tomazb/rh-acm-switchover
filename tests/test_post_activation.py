@@ -564,7 +564,7 @@ class TestPostActivationVerification:
         # verify_klusterlet_connections should be recorded exactly once even when the
         # fallback path runs it before the later optional verification block.
         calls = [call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list]
-        assert calls.count("verify_klusterlet_connections") == 1
+        assert calls.count("verify_klusterlet_connections_v2") == 1
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
@@ -3072,7 +3072,7 @@ class TestPostActivationMigrationEvidence:
 
     def test_resume_reconciles_evidence_despite_completed_step_markers(self, tmp_path):
         named = _VECTOR_CASES["names-evidence-recorded"]["expect"]["result"]["candidate"]
-        steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
+        steps = ("verify_clusters_connected", "verify_klusterlet_connections_v2", "verify_auto_import_cleanup")
         state = _evidence_state(tmp_path, named, steps)
         secondary = _strict_secondary(*EVIDENCE_NAMES)
 
@@ -3085,7 +3085,7 @@ class TestPostActivationMigrationEvidence:
 
     def test_a_failed_revalidation_keeps_the_recorded_evidence(self, tmp_path):
         recorded = _VECTOR_CASES["completion-kept-on-resume"]["input"]["journal"]
-        steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
+        steps = ("verify_clusters_connected", "verify_klusterlet_connections_v2", "verify_auto_import_cleanup")
         state = _evidence_state(tmp_path, recorded, steps)
 
         with patch("modules.post_activation.wait_for_condition", side_effect=_poll_once):
@@ -3121,7 +3121,7 @@ MISSING_EVIDENCE_GUIDANCE = (
 
 _POST_ACTIVATION_STEPS = (
     "verify_clusters_connected",
-    "verify_klusterlet_connections",
+    "verify_klusterlet_connections_v2",
     "verify_auto_import_cleanup",
     "scale_up_observability_components",
     "restart_observatorium_api",
@@ -3327,7 +3327,7 @@ class TestPostActivationEvidenceReviewFindings:
         finalization.assert_called_once()
 
     def test_w2_resume_reconciles_readiness_with_the_bounded_wait(self, tmp_path):
-        steps = ("verify_clusters_connected", "verify_klusterlet_connections", "verify_auto_import_cleanup")
+        steps = ("verify_clusters_connected", "verify_klusterlet_connections_v2", "verify_auto_import_cleanup")
         state = _evidence_state(tmp_path, steps=steps)
         secondary = Mock(name="secondary")
         not_ready = [_ready_mc(LOCAL_CLUSTER_NAME), _ready_mc("cluster-a", "False"), _ready_mc("cluster-b")]

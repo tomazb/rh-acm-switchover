@@ -226,6 +226,27 @@ differences, not parity gaps, and the capability stays `dual-supported`:
 | No matching context | `no_context`, non-fatal skip | not applicable (an unmapped cluster is skipped) |
 | Unreadable embedded hub kubeconfig YAML | `unreachable`, non-fatal skip | `failed` (pre-existing, unchanged) |
 
+### Klusterlet retry checkpoints
+
+The [approved bounded #352 change](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521)
+replaces Python's two unversioned klusterlet step identifiers with
+`verify_klusterlet_connections_v2`. A normal Python post-activation entry rechecks an old
+marker once and preserves it for audit; a later retry with the new marker skips the gate.
+The state and journal schemas are unchanged. The marker retains the gate's documented
+non-fatal skips and is not fresh per-invocation evidence.
+
+The collection has no Python klusterlet substep marker to convert. A partially completed
+`post_activation` phase executes its probe again on retry. A phase in `completed_phases`
+is skipped after the existing journal validity/completion barriers, without another
+probe. These independent checkpoint granularities preserve the shared fail-closed gate
+contract; no parity status or checkpoint interchange is introduced.
+
+Neither behavior certifies unknown historical gate provenance beyond post-activation.
+Python finalization and COMPLETED checkpoints are not automatically rewound or reset.
+Follow the [operator hold](../../../../docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold)
+for the population still owned by open #352. Existing missing-completion rewind guidance
+is not a recovery procedure for unknown marker provenance.
+
 ## Auto-import reset obligation (issue #214, audit C3/C4)
 
 **The cluster is the collection's register** for the auto-import reset

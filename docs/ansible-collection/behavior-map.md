@@ -18,7 +18,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/preflight_coordinator.py` and `modules/preflight/` | `roles/preflight/` | 2 |
 | `modules/primary_prep.py` | `roles/primary_prep/` | 3 |
 | `modules/activation.py` | `roles/activation/` | 3 |
-| `modules/post_activation.py` | `roles/post_activation/` | 3 |
+| `modules/post_activation.py` | `roles/post_activation/`. Python normal-phase retries use `verify_klusterlet_connections_v2`, retaining unversioned history; the collection retries its incomplete whole phase and skips a completed phase after journal barriers. Independent checkpoint formats and the #352 out-of-phase hold are documented in [coexistence](../../ansible_collections/tomazb/acm_switchover/docs/coexistence.md#klusterlet-retry-checkpoints). | 3 |
 | `modules/finalization.py` | `roles/finalization/` | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
 | `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently; the MultiClusterHub substep adds operator-identity capture and owner-chain Pod classification, orchestrated by `roles/decommission/tasks/delete_multiclusterhub.yml` — see the guarded-delete and identity rows below, the *MultiClusterObservability teardown boundary* paragraph, and the *MultiClusterHub identity ownership split* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |

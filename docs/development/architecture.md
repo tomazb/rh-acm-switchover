@@ -444,6 +444,20 @@ readiness from strict inventory reads with a bounded wait and records
 `post_activation.names_verified_at` (or journals a `post_activation`-scoped waiver), and it records
 `post_activation.completed_at` last, after every other post-activation operation succeeded.
 
+Python guards the klusterlet gate with `verify_klusterlet_connections_v2` at both existing
+call sites. The unversioned entry is retained for audit but cannot satisfy this step on
+normal post-activation entry. Existing `StepContext` persists the new marker only after
+an exception-free return; subsequent attempts retain its idempotent skip behavior. This
+keeps the outer state schema, `completed_steps` shape and journal schema unchanged. A
+marker records the gate's defined behavior, including documented non-fatal skips, rather
+than a fresh observation on every invocation.
+
+The [approved #352 scope](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521)
+does not rewind finalization or completed checkpoints. Unknown legacy-marker provenance
+beyond post-activation requires the [operator hold](../operations/usage.md#legacy-python-klusterlet-checkpoint-hold);
+that unresolved population stays owned by open #352. Phase flow and runner eligibility
+are unchanged.
+
 ### Finalization
 
 `modules/finalization.py` completes switchover by:
