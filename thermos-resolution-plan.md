@@ -45,7 +45,72 @@ implementation work after GitHub PR #270. `R3-02` is no longer open
 implementation work after GitHub PR #273. Current open work is owned by the
 remaining SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-10-15
+**Last Updated:** 2026-10-16
+
+## R4-06 Closeout (2026-10-16)
+
+`R4-06` is **merged**. It was delivered serially into `ansible` on 2026-10-15 (UTC merge
+dates). Each PR merged with a merge commit whose second parent is its independently
+validated head. Independent-validation evidence comes from the validator's own reports;
+builder-reported mutation counts are listed separately and are not validator evidence.
+
+| PR | Issue | Scope | Merge | Validated head | Independent validation (validator reports) | Builder-reported kill conditions (PR body) | Hosted checks |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| #351 | #349 | PR 1: fail-closed KUBECONFIG merge and the `GLM-H3` verification-gate fix | `3082b843` | `609b3280` | PASS WITH NON-BLOCKING COMMENTS at `609b3280` (PR comment 6193414762); validator mutations M1-M6, 6/6 killed | 12/12 | 16/16 green in the status rollup (when the validator reported, CodeRabbit's status was "skipped: draft"; it completed its review before merge) |
+| #354 | #353 | Current-base design amendment (operator decisions 2026-10-15) and the PR 2 / PR 3 implementation plan; docs only | `04aeddab` | `6e0a80b0` | PASS WITH NON-BLOCKING COMMENTS at `d2622ba8` (6196009771); scoped revalidation PASS WITH NON-BLOCKING COMMENTS at `6e0a80b0` (6196947425) | n/a (docs only) | 16/16 green |
+| #356 | #355 | PR 2: endpoint identity in both form factors (normalized URL equality, `unverified` near-matches, no name-only fallback, the duplicate-name rule, collection target-identity proof, client-endpoint check, worker cap 32) | `39e0700e` | `7fef6be4` | PASS WITH NON-BLOCKING COMMENTS at `6ab18543` (6199467337), with 21 validator mutations: 20 killed, 1 agreed equivalent; delta revalidation PASS WITH NON-BLOCKING COMMENTS at `7fef6be4` (6200474417), with 8/8 delta mutations killed | 29 defined, 28 killed, 1 equivalent | 16/16 green |
+| #359 | #357 | PR 3: snapshot-built spoke clients in both form factors (credential content captured once per invocation, materialized privately, proven after construction) and the `kubernetes-min-client` CI job | `42e2e136` | `16554b75` | BLOCKED at `e3dc46e0` on bandit B105 only (6202567677), with 21 suite-killed validator mutations, 3 suite-surviving test gaps, 1 more killed only by the validator's own probe, and 4 equivalents (3 agreed with the builder, 1 the validator's own call); scoped revalidation PASS WITH NON-BLOCKING COMMENTS at `16554b75` (6203202798), with 5/5 targeted mutations killed, closing all three test gaps | 56 defined, 51 killed, 5 equivalent | 17/17 green |
+
+Finding dispositions. The original finding rows are kept as historical evidence; the rows
+for `R4-F1`, `R4-F2`, `R4-F3`, `GLM-H3`, `L4`, `SSA-PY2` and `SSA-A6` each gain a pointer
+here.
+
+- `R4-F1` / `GLM-H3`: resolved by #351 (merged 2026-10-15). The kubeconfig load fails
+  closed and the verification step is not checkpointed on failure. **The conditional P1
+  narrows but does not lapse.** Resuming a state file whose `verify_klusterlet_connections`
+  completion marker was written before the fix still skips the wrong-hub gate (#352, open).
+  Before resuming such a state file in a live switchover, do not rely on that gate.
+- `R4-F2`: resolved by #359 (merged 2026-10-15). Within one invocation, every spoke read and
+  mutation client is built from the selection snapshot and no credential file is re-read.
+  This is not a cross-invocation guarantee. The collection's probe, remediate and re-probe
+  are separate module invocations, and each loads the mapped kubeconfig afresh and re-proves
+  target identity (amendment §2.6 rule 4 and §6).
+- `R4-F3`: resolved. Duplicate YAML keys by #351; duplicate entry names by #356.
+- `SSA-PY2` and `L4`: resolved by #356 (merged 2026-10-15). Endpoint matching uses the shared
+  helper `lib/endpoint_identity.py` and its collection mirror. The legacy hostname regex is
+  consolidated there rather than removed: it is kept as `py_legacy_host` and serves only as
+  the legacy veto in `classify_hub`.
+- `SSA-A6`: the upper bound (`KLUSTERLET_MAX_WORKERS = 32`) is delivered by #356. The
+  measured-concurrency scale proof that `SSA-03` acceptance requires is **not** delivered;
+  it is tracked in #360.
+- `SSA-03`: acceptance criteria 1-3 are delivered by `R4-06`. Criterion 4 (scale proof)
+  remains in #360, so the `SSA-03` row stays `planned` with its boundary narrowed to that
+  residual.
+- Nested-field obligation (Revalidation obligations table, `R4-06` row): delivered by #351
+  with the kubectl reading recorded on #349 (comment 6193432496). A context's
+  `cluster`/`user`, when present, must be a string, and `""` means unset and never matches;
+  an absent or `null` section means empty; a present `cluster`/`context`/`user` member must
+  be a mapping. The obligation's "non-empty string" wording is superseded by that reading,
+  so kubectl-written kubeconfigs are not refused.
+
+The conditional-blocker entry `R4-06`/`GLM-H3` in the historical work orders (2026-08-22,
+2026-08-27 and the R3-02 removal) and the R4 entries of the 2026-07-29 priority ranking are
+no longer open work, apart from the narrowed #352 condition above. Those lists are left
+unchanged as evidence of their dates.
+
+Still open and **not** closed by this reconciliation:
+- #350: Python preflight should run the fail-closed kubeconfig load before any mutation
+  (deferred by #351; named in amendment §8);
+- #352: pre-fix `verify_klusterlet_connections` completion markers are trusted on resume
+  (a separate safety issue);
+- #344: also holds two R4-06 PR 1 deferrals (the `ACM_KUBECONFIG_MAX_SIZE` environment-
+  variable constant and a dedicated not-UTF-8 loader test) alongside its R4-04 scope;
+- #358: the root CLI `kubernetes` floor. Operator decision recorded 2026-10-16 (option 1,
+  comment 6209140453); implementation is a separate PR;
+- #360: the `SSA-03` measured-concurrency scale proof;
+- #362: the Python per-run ManagedCluster URL cache, a carry-forward from the #356
+  validation that no issue held before this closeout;
+- the remaining `R4-04` follow-ups #338, #341-#343 and #345-#347.
 
 ## Post-Merge Reconciliation (2026-08-27)
 
@@ -269,7 +334,7 @@ lab-controller, protected-file, issue, or implementation-slice work.
 | `R4-A2`, `R4-A3` | open, scope narrowed | Active form factors are Python and collection only; remove the deleted Bash surface from implementation and tests. |
 | `R4-B2` | partially resolved | PR #224 closed the collection mutation-before-ownership window with the atomic cluster marker; `R4-02` retains the Python residual only. |
 | `R4-E1` | partially resolved | PR #222 covers ordinary exceptions and `KeyboardInterrupt`; `R4-05` retains abrupt process-termination/crash-marker residuals. |
-| `R4-F1` / `GLM-H3` | open, priority elevated | `R4-06`; conditional P1 before relying on the klusterlet wrong-hub gate in a live switchover. |
+| `R4-F1` / `GLM-H3` | resolved by `R4-06` PR 1 (#351, `3082b843`, merged 2026-10-15); historical: open, priority elevated | `R4-06`. Conditional P1 narrowed, not lapsed: before resuming a state file with a pre-fix `verify_klusterlet_connections` completion marker in a live switchover, the wrong-hub gate cannot be relied on (#352, open). |
 
 ### Ownership and priority corrections
 
@@ -701,7 +766,7 @@ worktrees when their slice-specific designs establish no dependency conflict.
 | --- | --- | --- | --- | --- |
 | SSA-01 | merged | SSA-A2, SSA-P2 | PR [#270](https://github.com/tomazb/rh-acm-switchover/pull/270) merged exact validated head `ddfaf067ecee4e624c2232c75571fd3a4fde2cff` as merge commit `1bca9fa464d23a3cfdbf954d770ec52614cc9d5e`, delivering the shared-behavior fail-closed physical-hub distinction guard before any mutation. | Python/collection parity; wrong-context and same-UID safety (required review completed) |
 | SSA-02 | planned | SSA-P1, SSA-PY4 | Strengthen standalone and embedded decommission target/RBAC checks without requiring prior switchover state. | destructive-operation, RBAC, parity, and dry-run review |
-| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). | post-activation parity, timeout, and scale review |
+| SSA-03 | planned | SSA-PY2, SSA-A6 | Make klusterlet endpoint selection unambiguous and bound collection worker concurrency. Extended by `R4-06`: implement against `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md` (§1 fail-closed merge with deterministic KUBECONFIG precedence and sanitized merge errors, §2 duplicate-name rule, §3 full normalized-URL endpoint equality **plus the enumerated fail-closed rejection set for malformed server URLs**, §4 snapshot-built client **whose file-backed credential contents — CA, client certificate, client key, and `tokenFile` — are captured at snapshot time and never re-read during client construction**, and §5 mutation barrier). **R4-06 closeout (2026-10-16):** criteria 1-3 delivered by `R4-06` (#351, #356, #359); remaining work is criterion 4 only, the measured-concurrency scale proof (#360). | post-activation parity, timeout, and scale review |
 | SSA-04 | planned | SSA-R1, SSA-R2 | Require explicit release-profile authorization for live decommission and reject safety-critical adapter overrides. | lab-controller trust boundary and release evidence review |
 | SSA-05 | delivered | delivered Bash lifecycle | PR #223 removed `scripts/argocd-manage.sh`; no active Bash Argo CD state/resume implementation remains. | historical migration and removal evidence retained below; no implementation work remains |
 | SSA-06 | planned | SSA-C1, SSA-C2 | Establish required dependency/secret gates and pin third-party actions and security tools immutably. | CI availability, false-positive, and update-process review |
@@ -847,6 +912,15 @@ worktrees when their slice-specific designs establish no dependency conflict.
   returns `""` with a debug log; multi-match is never detected.
 - Sequence with `R3-03` (Python klusterlet batch-timeout budget): the two are
   adjacent but neither resolves the other.
+
+**Resolution note (2026-10-16)**
+- Criteria 1-3 are delivered by `R4-06`. #356 (merged 2026-10-15) brings normalized endpoint
+  identity, the narrowed zero/multi-match rule and the 32-worker cap; #359 brings
+  snapshot-built clients.
+- Criterion 4 is only partly evidenced. The bound is measured at `workers=1`, values above
+  the cap are refused, and the per-call timeout reaches the reads. No test yet measures
+  concurrent API work at the cap; that remains in #360. The revalidation note above is
+  historical (pre-fix line references).
 
 #### SSA-04: Release Profile Mutation Controls
 
@@ -1979,9 +2053,9 @@ designs exist; implementation plans are still required).
 | R4-E4 | Medium | Python | Locks are state-file-scoped (`lib/utils.py:156`) and host-local; the same physical hubs don't contend across different `--state-file` paths, and a host-local lock cannot contend across Unix users, containers, AAP execution nodes, or hosts either. The design (`docs/plans/2026-07-29-state-integrity-residuals-design.md` §3) makes a per-hub `coordination.k8s.io/v1` Lease keyed on the hub cluster UID the authoritative lock, with a strict post-acquisition UID revalidation barrier; a local flock survives only as a same-host optimization. No implementation is present in this PR. The implementation slice must add namespaced `coordination.k8s.io/leases` `get`/`create`/`update`/`delete` to `deploy/rbac/role.yaml`, `deploy/helm/acm-switchover-rbac`, and `deploy/acm-policies/` together, and a missing Lease permission fails closed rather than running unlocked. |
 | R4-E5 | Medium | Python | `--reset-state` removes the state file before the run lock exists (`acm_switchover.py:1073-1083`); `--force` resets progressed state. |
 | R4-E6 | Low | Python | `_write_state` lacks a parent-directory fsync after `os.replace` (`lib/utils.py:367-384`). |
-| R4-F1 | Medium | Python | Klusterlet-repair kubeconfig merge fails open: unreadable/oversized/YAML-invalid files are debug-skips, and the repair call site passes `max_size=0` (`modules/post_activation.py:1311-1317,1377-1404,1438-1444`); mutations proceed on the partial view. |
-| R4-F2 | Medium | Python | The mutation client is built by re-reading kubeconfig files (`new_client_from_config`, `:1118-1134`) after manual matching — TOCTOU and dual-resolver disagreement. |
-| R4-F3 | Low | Python | Duplicate entry names and duplicate YAML mapping keys silently last-write-win in the manual merge. |
+| R4-F1 | Medium | Python | *Resolved by #351 (merged 2026-10-15); see [R4-06 Closeout](#r4-06-closeout-2026-10-16); #352 residual open. Historical text follows.* Klusterlet-repair kubeconfig merge fails open: unreadable/oversized/YAML-invalid files are debug-skips, and the repair call site passes `max_size=0` (`modules/post_activation.py:1311-1317,1377-1404,1438-1444`); mutations proceed on the partial view. |
+| R4-F2 | Medium | Python | *Resolved by #359 (merged 2026-10-15) within one invocation; see [R4-06 Closeout](#r4-06-closeout-2026-10-16). Historical text follows.* The mutation client is built by re-reading kubeconfig files (`new_client_from_config`, `:1118-1134`) after manual matching — TOCTOU and dual-resolver disagreement. |
+| R4-F3 | Low | Python | *Resolved by #351 and #356 (merged 2026-10-15); see [R4-06 Closeout](#r4-06-closeout-2026-10-16). Historical text follows.* Duplicate entry names and duplicate YAML mapping keys silently last-write-win in the manual merge. |
 
 ### Planned resolution slices
 
@@ -1992,7 +2066,7 @@ designs exist; implementation plans are still required).
 | R4-03 | merged | R4-C1, R4-C2, R4-C3, R4-C4, R4-C5, R4-C6 | `docs/plans/2026-07-29-decommission-completion-design.md` | Delivered serially by PRs #281, #286, #293, #304, #307, and #308; the F2 operator-documentation gap found during closure was corrected by #310 before #308 merged. The merged boundary includes server-side UID-preconditioned DELETE with CR-absence proof, refusal-aborts semantics, the shared strict Kubernetes inventory primitive consumed by `R4-04`, the destination-observability gate, identity-bound MCH Pod classification, durable teardown/result state, and integrated check-mode/dry-run closure proof. Deferred follow-ups remain separately tracked and do not reopen the merged R4-03 acceptance boundary. |
 | R4-04 | merged | R4-D1, R4-D2, R4-D3, R4-D4 | `docs/plans/2026-07-29-migration-evidence-design.md` | Freeze `latest` to journaled concrete backup names at activation entry, additive name+count expectations with explicit waiver, strict inventory reads through the shared primitive whose contract `R4-03` owns (error is never absence; absence is fatal for migration consumers), evidence bound to Restore identity/spec, atomic UID+resourceVersion passive patch, durable cleanup state machine with fail-closed ambiguous recovery, final validated UID+resourceVersion DELETE, evidence/cleanup gate before teardown. Delivered serially by PRs #329 (A), #331 (B), #335 (C) with documentation amendments #330 and #333; the kubernetes-client-37 prerequisite #337 merged first. Follow-ups tracked in #332 and #338. |
 | R4-05 | planned | R4-E1 abrupt-termination residual, R4-E2, R4-E3, R4-E4, R4-E5, R4-E6, LER-01 | `docs/plans/2026-07-29-state-integrity-residuals-design.md` | Abrupt-termination crash marker and full-fidelity simulation snapshot, parent-dir fsync on both the rename and the absent-file unlink path, per-hub `coordination.k8s.io/v1` Lease locks with a post-acquisition UID revalidation barrier (requires a coordinated RBAC update — see `R4-E4`), reset-under-lock with narrowed `--force`, run contract with atomic committed contract transitions, and restore-write failure semantics that retain an in-memory retry obligation and never report successful restoration. Ordinary exceptions and `KeyboardInterrupt` are already covered by PR #222. Cross-reference: the rename half of the §2 parent-directory fsync (Python `StateManager._write_state`, collection `_save_checkpoint`) is delivered narrowly by R4-04 PR A; the capability determination, indeterminate-record reconciliation, the unlink path and the other R4-05 durability points remain here. |
-| R4-06 | in_progress | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md`, amended by `docs/plans/2026-10-15-r4-06-current-base-amendment.md` (operator decisions 2026-10-15, #353); PR 1 merged (#349, PR #351, `3082b843`), PR 2 merged (#355, PR #356, `39e0700e`), PR 3 (#357) in review | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization with an enumerated fail-closed rejection set for malformed server URLs, snapshot-built client whose file-backed credential **contents** (CA/cert/key/`tokenFile`) are captured at snapshot time rather than re-read at client construction, mutation barrier. `SSA-03` implementation should use this design. `GLM-H3` amendment (2026-08-16) — **delivered by R4-06 PR 1 (#349, PR #351, `3082b843`); the line references below describe the pre-fix base** — acceptance must also cover the verification-path consequence of the same seam — `_load_kubeconfig_data`'s fail-open (`modules/post_activation.py:1455-1457`) silently disables the `_verify_klusterlet_connections` wrong-hub gate while `verify()` still returns `True` (`:127-128`), and the silently-skipped `verify_klusterlet_connections` step is marked completed by `StepContext` (`lib/utils.py:852`) so it never re-runs on resume; a per-file load failure returns a truthy empty-merge dict, so all clusters degrade to `unreachable` equally silently (`:1063-1068`). This is outside `PR 21`/`F38` delivered scope (only `99bb3e01` ever touched `_load_kubeconfig_data`) — a scope boundary, not a regression. |
+| R4-06 | merged | R4-F1, R4-F2, R4-F3 (+ SSA-PY2, SSA-A6) | `docs/plans/2026-07-29-kubeconfig-ambiguity-guard-design.md`, amended by `docs/plans/2026-10-15-r4-06-current-base-amendment.md` (operator decisions 2026-10-15, #353); delivered by PR #351 (PR 1, `3082b843`), #354 (amendment and plan, `04aeddab`), #356 (PR 2, `39e0700e`) and #359 (PR 3, `42e2e136`), all merged 2026-10-15; evidence in [R4-06 Closeout (2026-10-16)](#r4-06-closeout-2026-10-16). Open follow-ups: #350, #352, #360 and #362, plus two PR 1 deferrals in #344 | Extends `SSA-03`: fail-closed merge, duplicate-name rule, full-URL endpoint normalization with an enumerated fail-closed rejection set for malformed server URLs, snapshot-built client whose file-backed credential **contents** (CA/cert/key/`tokenFile`) are captured at snapshot time rather than re-read at client construction, mutation barrier. `SSA-03` implementation should use this design. `GLM-H3` amendment (2026-08-16) — **delivered by R4-06 PR 1 (#349, PR #351, `3082b843`); the line references below describe the pre-fix base** — acceptance must also cover the verification-path consequence of the same seam — `_load_kubeconfig_data`'s fail-open (`modules/post_activation.py:1455-1457`) silently disables the `_verify_klusterlet_connections` wrong-hub gate while `verify()` still returns `True` (`:127-128`), and the silently-skipped `verify_klusterlet_connections` step is marked completed by `StepContext` (`lib/utils.py:852`) so it never re-runs on resume; a per-file load failure returns a truthy empty-merge dict, so all clusters degrade to `unreachable` equally silently (`:1063-1068`). This is outside `PR 21`/`F38` delivered scope (only `99bb3e01` ever touched `_load_kubeconfig_data`) — a scope boundary, not a regression. |
 
 Cross-references (adjacent, not superseded): `SSA-01` (hub distinctness — excluded,
 already tracked), `SSA-02` (decommission target/RBAC — complementary to `R4-03`),
@@ -2302,7 +2376,7 @@ acceptance scope; the designs are intentionally not amended for them.
 | R4-04 | Define and journal the ACM-to-Velero Restore association (namespace/name/UID + strict correlation rule); both identities and terminal statuses required before `restore.completed_at`; cover unrelated, replaced, missing, and mismatched Velero Restores. |
 | R4-04 | Include `cleanupBeforeRestore` in the journal projection, fingerprint, comparisons, and parity tests, **or** narrow the exact-spec claim to the method-scoped backup projection. |
 | R4-05 | Define Lease release-failure handling: `403`/`409`/API failures never fall back to unconditional delete or report successful cleanup under uncertain ownership; a failed release leaves the Lease to bounded expiry with an operator-visible error. |
-| R4-06 | Validate resolver-consumed nested fields before matching: `context.cluster` non-empty string, `context.user` non-empty string when present, each `cluster`/`user` member a mapping; violations fail closed with sanitized provenance; parity vectors added. |
+| R4-06 | Validate resolver-consumed nested fields before matching: `context.cluster` non-empty string, `context.user` non-empty string when present, each `cluster`/`user` member a mapping; violations fail closed with sanitized provenance; parity vectors added. **Delivered by #351 under the kubectl reading recorded on #349 (comment 6193432496): present `cluster`/`user` must be strings and `""` means unset; see [R4-06 Closeout](#r4-06-closeout-2026-10-16).** |
 
 Where a row offers an **or**, the implementing slice makes the call in its implementation
 plan and records it; both branches satisfy the obligation.
@@ -2496,7 +2570,7 @@ Dispositions:
 | M5 | resolved through PR #206 | PR #206 | PR #206 deleted `lib/argocd_coordinator.py` and replaced the cited 164-line `pause_hubs` architecture with the Argo CD pause register. Later Argo CD transaction findings remain separate and receive no closure credit from M5. |
 | L2 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1178-1182` derives `bootstrap_namespace` from the import manifest's `bootstrap-hub-kubeconfig` Secret and `:1109` passes it to `_restart_klusterlet` (`:1281`) to patch the `klusterlet` Deployment; the ACM co-residence assumption is still undocumented in the code. |
 | L3 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `deploy/helm/acm-switchover-rbac/templates/namespace.yaml:7-15` inlines its labels and is the only template not using `include "acm-switchover-rbac.labels"` (`templates/_helpers.tpl:35-44`), so the Namespace receives neither `.Values.commonLabels` nor any `managed-by` label. Second residue: `values.yaml:73` sets lowercase `app.kubernetes.io/managed-by: helm`, which will not match a conventional `managed-by=Helm` selector. |
-| L4 | confirmed still open; call sites overlap `SSA-PY2` | resolve inside SSA-03 (planned) | `re.sub(r"https://([^:/]+).*", r"\1", url)` still duplicated 4x at `modules/post_activation.py:1483,1490,1608,1609` with silent passthrough on non-match; no `lib.utils.host_from_url` exists. `SSA-PY2` (hostname-key collapse at `:1490-1491`) targets these exact sites and `SSA-03` replaces hostname-only matching with normalized endpoint identities — extract the shared helper there rather than as a standalone cleanup. |
+| L4 | resolved through PR #356 (merged 2026-10-15); historical: confirmed still open; call sites overlap `SSA-PY2` | resolved by `R4-06` PR 2 (#356): shared helper extracted, legacy regex kept only as the `py_legacy_host` veto; historical owner: resolve inside SSA-03 (planned) | `re.sub(r"https://([^:/]+).*", r"\1", url)` still duplicated 4x at `modules/post_activation.py:1483,1490,1608,1609` with silent passthrough on non-match; no `lib.utils.host_from_url` exists. `SSA-PY2` (hostname-key collapse at `:1490-1491`) targets these exact sites and `SSA-03` replaces hostname-only matching with normalized endpoint identities — extract the shared helper there rather than as a standalone cleanup. |
 | L5 | confirmed still open; silently dropped from Review #2's re-confirmation list without rationale | none - opportunistic cleanup | `lib/operation_runners.py:78-80,101-105,201-204` still type `args`/`state`/`primary`/`secondary`/`logger` as `Any` despite `argparse.Namespace`, `StateManager`, and `KubeClient` being the real types, used precisely in `lib/workflow.py`. |
 | L6 | confirmed still open (Review #1; re-confirmed Review #2 and 2026-07-26) | none - opportunistic cleanup | `modules/post_activation.py:1289` still does `import time as time_module` inside `_restart_klusterlet` while the module imports `time` at `:12`. |
 | L7 | confirmed still open, wider than originally cited | none - opportunistic cleanup | `%`-style formatting inside `raise SwitchoverError(...)` at `modules/finalization.py:1299-1302,1367-1369,1375-1378,1381-1384,1447-1451` — 5 sites, up from the 2 cited on 2026-06-13 — while the rest of the file uses f-strings. `:1423` uses the same idiom in a `WaitConditionResult.pending` call. |
@@ -2508,14 +2582,14 @@ Dispositions:
 | SSA-R2 | confirmed with controller mitigation, corrected P2 | SSA-04 (planned) | Trusted profile arguments are appended verbatim and a trailing Ansible `-e` can override adapter dry-run defaults, although matrix/controller gates still apply. |
 | SSA-C1 | confirmed with narrower scope, corrected P2 | SSA-06 (planned) | Dependency, secret, Semgrep, and Trivy lanes are advisory; Bandit and CodeQL were incorrectly included in the original claim and are already blocking. |
 | SSA-A5 | confirmed documentation defect, corrected P3 | SSA-10 (planned) | The migration map claims `--force` maps to `acm_switchover_execution.force`, but collection runtime never reads it and the variable reference describes reserved compatibility. |
-| SSA-PY2 | confirmed, corrected P2 | SSA-03 (planned) | Python klusterlet context selection collapses server URLs to hostname keys, so distinct endpoints sharing a host can overwrite each other and mis-target remediation. |
+| SSA-PY2 | confirmed, corrected P2 | resolved by `R4-06` PR 2 (#356, merged 2026-10-15); historical owner: SSA-03 (planned) | Python klusterlet context selection collapses server URLs to hostname keys, so distinct endpoints sharing a host can overwrite each other and mis-target remediation. |
 | SSA-PY3 | confirmed with local-filesystem precondition, corrected P3 | SSA-08 (planned) | Relative general state paths receive syntax-only validation and do not inherit the symlink-containment policy already used for report artifacts. |
 | SSA-PY4 | confirmed, corrected P2 | SSA-02 (planned) | Python preflight checks decommission RBAC, but finalization invokes embedded `Decommission` without an immediate permission recheck before teardown. |
 | SSA-S2 | confirmed as residual hardening, corrected P3 | SSA-07 (planned) | OpenShift-client downloads are checksum verified, but empty pinned-digest defaults permit same-origin checksum trust instead of independently pinned release digests. |
 | SSA-C2 | confirmed with narrower scope, corrected P2 | SSA-06 (planned) | Trivy and TruffleHog use branch refs and Semgrep is installed unversioned; other floating major action tags also retain supply-chain movement. |
 | SSA-C3 | confirmed, corrected P2 | SSA-07 (planned) | Blocking Bandit omits collection plugins, and CI/release dependency resolution has minimum floors without reviewed constraints or lock artifacts. |
 | SSA-PY5 | confirmed with direct reusable-helper exposure, corrected P2 | SSA-09 (planned) | `KubeClient.patch_custom_resource()` logs status, reason, bounded raw API response body, and the rendered exception; full-list aggregation remains a separate lower-urgency subproblem within the same design gate. |
-| SSA-A6 | confirmed with narrower scope, corrected P3 | SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
+| SSA-A6 | confirmed with narrower scope, corrected P3 | cap delivered by `R4-06` PR 2 (#356, merged 2026-10-15); measured-concurrency scale proof open in #360; historical owner: SSA-03 (planned) | Collection worker configuration has no upper cap; defaults and API timeouts mitigate impact, and the original check-mode concern was not substantiated. |
 | SSA-S3 | obsolete shipped-surface finding | SSA-05 (delivered by PR #223) | PR #223 removed the deprecated Bash state-file surface. The earlier mode and context-parsing analysis is preserved in the dated SSA-05 requirements, not as active work. |
 | R3-A1 | merged, High | R3-01 / TR2D-01; issue #199; PR #200 | The correction assigns distinct scoped, cluster-wide, validation, and published variables and guards publication behind complete positive validation. Non-mock primary-prep retry and standalone resume prove the former no-op paths; exact validated head `0bc1a4b6701508f6c3d4cd898515d82b8a29b6a3` merged as `786f8325493c6086e136cb9694a9997557f12e02`, and issue #199 is closed as completed. |
 | R3-A2 | confirmed empirically, Medium | R3-01b (planned) | Same clobber pattern makes the finalization dry-run preview always report `restore_count: 0`. |
@@ -2582,7 +2656,7 @@ Dispositions:
 | GLM-V1 | validation-discovered 2026-08-16 | unassigned (design-gated) | `roles/post_activation/tasks/verify_managed_clusters.yml:102-104`: the hard-fail `failed_when` is a no-op in both soft-fail modes — at evaluation time the register's `.failed` is always `false` (the final `k8s_info` call succeeded; only the `until` condition was unmet), and the resulting `failed_when_result: false` then masks the exhaustion stamp from `is_failed()`. The intended hard-fail-on-timeout is unreachable; the phase currently fails only via the downstream `acm_cluster_verify` gate (`roles/post_activation/tasks/main.yml:72-80`). A `failed_when` that reads as a safety control and is not one. |
 | GLM-V2 | validation-discovered 2026-08-16 | fold into R4-01 | Reverse dry-run divergence for the Argo CD pause register: `ArgocdPauseRegister(dry_run=True)` combined with a real (non-dry-run) `KubeClient` lands a real pause while the store's persistence early-returns (`lib/argocd_register_store.py:188-189,197-198,221-222`) — a real pause with no register entry, an undischargeable resume obligation. Worse direction than the already-noted `pause_applied=True` recording divergence (`lib/argocd_register.py:402`). `R4-01`'s durable intent-record/journal design should close both directions (derive the flag from the client or assert consistency at construction). |
 | GLM-V3 | validation-discovered 2026-08-16 | unassigned (design-gated) | Checkpoint identity fallbacks exist as three literal sets, not two: `module_utils/checkpoint.py:47-50` (restore_only-conditional terminal fallbacks `full`/`none`), `acm_checkpoint_identity_validate.py:130-143` (unconditional `passive`/`secondary`, with `checkpoint_identity.get(...)` interposed), and the `_defaults` merge at `:110-118`. Divergence bites only checkpoints lacking those keys (legacy schema, hand-edited, partially written) in restore-only mode — latent and invisible on the happy path. Own the fallbacks in one helper. |
-| GLM-H3 | confirmed; already tracked | R4-06 (boundary amended 2026-08-16) | Same fail-open seam as `R4-F1`. Outside `PR 21`/`F38` delivered scope (`git log -S` shows only `99bb3e01` ever touched `_load_kubeconfig_data`) — scope boundary, not a regression; the F38 resolved row stands. See the amended `R4-06` boundary for the verification-gate and resume-step-completion additions. |
+| GLM-H3 | confirmed; already tracked | resolved by `R4-06` PR 1 (#351, `3082b843`, merged 2026-10-15); #352 (pre-fix completion markers) open; historical owner: R4-06 (boundary amended 2026-08-16) | Same fail-open seam as `R4-F1`. Outside `PR 21`/`F38` delivered scope (`git log -S` shows only `99bb3e01` ever touched `_load_kubeconfig_data`) — scope boundary, not a regression; the F38 resolved row stands. See the amended `R4-06` boundary for the verification-gate and resume-step-completion additions. |
 | GLM-H4 | confirmed (all sub-claims, both form factors); already tracked | R4-01 + TR2D-02 (planned) | Python `resume_autosync` returns `restored=True` straight from the patch response with no re-read (`lib/argocd.py:849-860`; the `resourceVersion` pin at `:823-843` closes only the read→patch window), and the register purge persists to disk at that trust moment (`lib/argocd_register.py:160-163`, store `_forget` → immediate persist at `argocd_register_store.py:255-258`). Collection `resume.yml` counts module `changed` only; collection `pause.yml` lacks the `resourceVersion` pin resume has, and its post-patch verification checks only `automated`, so a stale clobber of other `syncPolicy` fields passes silently — all inside `R4-A3`'s stated scope plus `TR2D-M2` OCC parity. Fix both form factors in one coordinated change per the parity contract. |
 | GLM-H11 | partial; rides R4-05 | R4-05 (planned) | Six dry-run snapshot-restore sites in `acm_switchover.py` (3 capture sites) in three control-flow shapes — confirmed; the review's claim that every copy cites parity-audit H10 is false for the two `finally`-wrapper sites (`:432-433`, `:520-521`). Consolidate into a `StateManager`-owned context manager inside `R4-05`'s snapshot/crash-marker work. |
 | GLM-H12 | merged/resolved through PR #273 | R3-02 (merged); PR #273 | Collection auto-import distinguishes explicit named 404 from unverifiable reads and fails before ManagedCluster work on error; Python activation uses `get_configmap_advisory()`. Exact validated head `4ae3ae0987280cc91f057319b7d57f1f13827a37`; merge commit `98eb185ce5d0ef7582adfa57c6fbd07265893ae7`. Historical defect: API/RBAC/transport errors were published as a benign skip. |
