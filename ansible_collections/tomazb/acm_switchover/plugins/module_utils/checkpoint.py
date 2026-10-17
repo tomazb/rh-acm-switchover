@@ -196,6 +196,25 @@ def _coerce_count(value):
     return None
 
 
+def backup_continuity_facts(checkpoint) -> dict:
+    """Raw read-only Backup evidence; never coerce missing or malformed values."""
+    if not isinstance(checkpoint, dict):
+        return {"invalid_reason": "invalid_checkpoint"}
+    data, phases = checkpoint.get("operational_data", {}), checkpoint.get("completed_phases", [])
+    if not isinstance(data, dict) or not isinstance(phases, list) or any(not isinstance(p, str) for p in phases):
+        return {"invalid_reason": "invalid_checkpoint"}
+    return copy.deepcopy(
+        {
+            "enabled_at_present": KEY_BACKUP_SCHEDULE_ENABLED_AT in data,
+            "enabled_at": data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT),
+            "finalization_completed": "finalization" in phases,
+            "phase": checkpoint.get("phase"),
+            "phase_status": checkpoint.get("phase_status"),
+            "operation_identity": checkpoint.get("operation_identity"),
+        }
+    )
+
+
 def checkpoint_facts(checkpoint) -> dict:
     """Flattened named view of a checkpoint's cross-phase facts.
 
@@ -219,6 +238,7 @@ def checkpoint_facts(checkpoint) -> dict:
         else {}
     )
     return {
+        "backup_continuity": backup_continuity_facts(checkpoint),
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
         KEY_ARGOCD_DISCOVERY_NAMESPACES: (namespaces if isinstance(namespaces, dict) else {}),
         # Ansible's own boolean vocabulary coerces; anything else — e.g. a

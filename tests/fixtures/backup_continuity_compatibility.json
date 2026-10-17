@@ -1,0 +1,788 @@
+[
+  {
+    "id": "valid",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  },
+  {
+    "id": "equal",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:00:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  },
+  {
+    "id": "offset",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T12:00:00+02:00",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  },
+  {
+    "id": "fraction",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:00:00.000001Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  },
+  {
+    "id": "old-creation-new-completion",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T09:59:59Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "backup_predates_enable",
+    "collection_reason": "backup_predates_enable"
+  },
+  {
+    "id": "boundary-null",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": null,
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-empty",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "",
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-false",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": false,
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-zero",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": 0,
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-number",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": 42,
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-list",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": [],
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-naive",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00",
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-malformed",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "broken",
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "boundary-future",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T11:00:00Z",
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "invalid_enable_boundary"
+  },
+  {
+    "id": "creation-null",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": null,
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "creation-empty",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "creation-false",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": false,
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "creation-naive",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "creation-malformed",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "bad",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "creation-future",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T11:00:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_creation",
+    "collection_reason": "invalid_backup_creation"
+  },
+  {
+    "id": "absent-fallback",
+    "inputs": {
+      "enabled_at_present": false,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": [
+        {
+          "name": "enable_backup_schedule",
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": "missing_enable_boundary"
+  },
+  {
+    "id": "absent-no-fallback",
+    "inputs": {
+      "enabled_at_present": false,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "missing_enable_boundary",
+    "collection_reason": "missing_enable_boundary"
+  },
+  {
+    "id": "absent-duplicate",
+    "inputs": {
+      "enabled_at_present": false,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": [
+        {
+          "timestamp": "2026-10-17T10:00:00Z"
+        },
+        {
+          "timestamp": "2026-10-17T10:00:00Z"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "ambiguous_enable_boundary",
+    "collection_reason": "missing_enable_boundary"
+  },
+  {
+    "id": "absent-invalid-marker",
+    "inputs": {
+      "enabled_at_present": false,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": [
+        {
+          "timestamp": "bad"
+        }
+      ]
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_enable_boundary",
+    "collection_reason": "missing_enable_boundary"
+  },
+  {
+    "id": "missing-uid",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "invalid_backup_identity",
+    "collection_reason": "invalid_backup_identity"
+  },
+  {
+    "id": "unowned",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "manual",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {}
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "backup_not_acm_owned",
+    "collection_reason": "backup_not_acm_owned"
+  },
+  {
+    "id": "name-fallback",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {}
+      },
+      "status": {
+        "phase": "Completed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  }
+]

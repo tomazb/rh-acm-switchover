@@ -12,6 +12,7 @@ config keys the tool has always used, so existing state files remain
 resumable and show_state renders historical files identically.
 """
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -313,6 +314,29 @@ class RunRecord:
         record_new_backup can fire for the new watch window."""
         self._set(_KEY_BACKUP_WATCH_STARTED_AT, at_iso)
         self._set(_KEY_NEW_BACKUP_DETECTED, False)
+
+    def backup_continuity_inputs(self) -> dict:
+        """Own a raw read-only evidence copy; falsey stored values remain present."""
+        snapshot = self._state.capture_state_snapshot()
+        if not isinstance(snapshot, dict):
+            return {"invalid_reason": "invalid_state"}
+        config, steps = snapshot.get("config", {}), snapshot.get("completed_steps", [])
+        if not isinstance(config, dict) or not isinstance(steps, list):
+            return {"invalid_reason": "invalid_state"}
+        if any(not isinstance(step, dict) or not isinstance(step.get("name"), str) for step in steps):
+            return {"invalid_reason": "invalid_steps"}
+        return copy.deepcopy(
+            {
+                "enabled_at_present": _KEY_BACKUP_WATCH_STARTED_AT in config,
+                "enabled_at": config.get(_KEY_BACKUP_WATCH_STARTED_AT),
+                "recorded_name_present": _KEY_NEW_BACKUP_NAME in config,
+                "recorded_name": config.get(_KEY_NEW_BACKUP_NAME),
+                "legacy_enable_steps": [step for step in steps if step["name"] == "enable_backup_schedule"],
+                "verification_steps": [
+                    step["name"] for step in steps if step["name"] in ("verify_new_backups", "verify_backup_integrity")
+                ],
+            }
+        )
 
     def backup_watch_started_at(self) -> Optional[str]:
         return self._get(_KEY_BACKUP_WATCH_STARTED_AT, None)
