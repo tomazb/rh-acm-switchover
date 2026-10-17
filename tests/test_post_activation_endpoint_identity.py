@@ -123,7 +123,7 @@ def _kubeconfig(entries):
 
 def _managed_cluster(name, url=None, configs=None):
     spec = {"managedClusterClientConfigs": configs if configs is not None else ([{"url": url}] if url else [])}
-    return {"metadata": {"name": name}, "spec": spec}
+    return {"metadata": {"name": name, "uid": f"{name}-uid"}, "spec": spec}
 
 
 @pytest.fixture
