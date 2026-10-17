@@ -93,6 +93,23 @@ def _serve_schedules(secondary, reads=None):
     secondary.list_custom_resources_strict.side_effect = _list
 
 
+def _serve_backups(secondary, reads):
+    """Serve backup strict outcomes without replacing other strict resource reads."""
+    previous = secondary.list_custom_resources_strict.side_effect
+    default = secondary.list_custom_resources_strict.return_value
+    outcomes = [
+        StrictReadOutcome.error("read_failed") if isinstance(read, Exception) else StrictReadOutcome.from_items(read)
+        for read in reads
+    ]
+
+    def _list(**kwargs):
+        if kwargs.get("plural") == "backups":
+            return outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+        return previous(**kwargs) if callable(previous) else default
+
+    secondary.list_custom_resources_strict.side_effect = _list
+
+
 @pytest.fixture
 def mock_mco_primary():
     """Strict MCO reads for the shared teardown reached through Finalization.
@@ -240,15 +257,18 @@ class TestFinalization:
 
         # Strict BackupSchedule reads (verification, collision check); then initial backups, loop 1
         _serve_schedules(mock_secondary_client)
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # Initial backups
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "InProgress"},
-                }
-            ],  # Loop iteration 1 - new ACM backup
-        ]
+                [],  # Initial backups
+                [
+                    {
+                        "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "InProgress"},
+                    }
+                ],  # Loop iteration 1 - new ACM backup
+            ],
+        )
 
         mch_response = {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}}
         # _fix_backup_schedule_collision calls get_custom_resource twice (before-delete read + post-delete
@@ -392,26 +412,29 @@ class TestFinalization:
         # 2. Loop 1 list (still empty)
         # 3. Loop 2 list (new backup found)
         # Velero uses "Completed" phase, not "Finished"
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            [],
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "new-backup", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                [],
+                [
+                    {
+                        "metadata": {"name": "new-backup", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources.call_count == 3
+        assert mock_secondary_client.list_custom_resources_strict.call_count == 3
 
     @patch("modules.finalization.time")
     def test_verify_new_backups_timeout(self, mock_time, finalization, mock_secondary_client):
         """Backup verification timeout must raise SwitchoverError (fail closed)."""
         mock_time.time.side_effect = [0, 10, 45, 51]
-        mock_secondary_client.list_custom_resources.return_value = []
+        _serve_backups(mock_secondary_client, [[]])
 
         with pytest.raises(SwitchoverError, match="No new backup created"):
             finalization._verify_new_backups(timeout=50)
@@ -422,7 +445,7 @@ class TestFinalization:
     ):
         """Without a recorded post-switchover backup, timeout must raise instead of silently succeeding."""
         mock_time.time.side_effect = [0, 15, 45, 61]
-        mock_secondary_client.list_custom_resources.return_value = []
+        _serve_backups(mock_secondary_client, [[]])
 
         with pytest.raises(SwitchoverError, match="No new backup created within 60s"):
             finalization._verify_new_backups(timeout=60)
@@ -433,15 +456,18 @@ class TestFinalization:
     def test_verify_new_backups_stores_backup_name(self, mock_time, finalization, mock_secondary_client):
         """Successful backup detection must record the backup name in state."""
         mock_time.time.side_effect = [0, 1]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                [
+                    {
+                        "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         finalization._verify_new_backups(timeout=10)
 
@@ -453,7 +479,7 @@ class TestFinalization:
             "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
             "status": {"phase": "Completed"},
         }
-        mock_secondary_client.list_custom_resources.return_value = [recorded_backup]
+        _serve_backups(mock_secondary_client, [[recorded_backup]])
         mock_secondary_client.get_custom_resource.return_value = recorded_backup
         RunRecord(finalization.state).record_new_backup("acm-backup-001")
         finalization.state._set_config.reset_mock()
@@ -479,7 +505,7 @@ class TestFinalization:
             },
             "status": {"phase": "Completed", "completionTimestamp": backup_ts},
         }
-        mock_secondary_client.list_custom_resources.return_value = [existing_backup]
+        _serve_backups(mock_secondary_client, [[existing_backup]])
         mock_secondary_client.get_custom_resource.return_value = None
         RunRecord(finalization.state).record_backup_watch_started(enabled_ts)
 
@@ -493,16 +519,19 @@ class TestFinalization:
     ):
         """Known ACM backup names are accepted with a warning when the ACM label is missing."""
         mock_time.time.side_effect = [0, 0, 1, 2]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            [],
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "acm-managed-clusters-schedule-20260306100000"},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                [],
+                [
+                    {
+                        "metadata": {"name": "acm-managed-clusters-schedule-20260306100000"},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         with caplog.at_level(logging.WARNING):
             finalization._verify_new_backups(timeout=10)
@@ -515,16 +544,19 @@ class TestFinalization:
     def test_verify_new_backups_ignores_unrelated_velero_backups(self, mock_time, finalization, mock_secondary_client):
         """Only ACM-owned backups should count as post-switchover evidence."""
         mock_time.time.side_effect = [0, 0, 1, 2]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            [{"metadata": {"name": "manual-backup"}, "status": {"phase": "Completed"}}],
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                [{"metadata": {"name": "manual-backup"}, "status": {"phase": "Completed"}}],
+                [
+                    {
+                        "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         finalization._verify_new_backups(timeout=10)
 
@@ -536,25 +568,28 @@ class TestFinalization:
     ):
         """Transient backup list failures should be tolerated until a later poll succeeds."""
         mock_time.time.side_effect = [0, 0, 1]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            ApiException(status=500, reason="temporary failure"),
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                ApiException(status=500, reason="temporary failure"),
+                [
+                    {
+                        "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources.call_count == 3
+        assert mock_secondary_client.list_custom_resources_strict.call_count == 3
         assert RunRecord(finalization.state).new_backup() == "acm-backup-001"
 
     def test_verify_new_backups_wraps_initial_transient_list_error(self, finalization, mock_secondary_client):
         """Initial backup discovery should not leak raw ApiException on retryable failures."""
-        mock_secondary_client.list_custom_resources.side_effect = ApiException(status=500, reason="temporary failure")
+        _serve_backups(mock_secondary_client, [ApiException(status=500, reason="temporary failure")])
 
         with pytest.raises(
             SwitchoverError,
@@ -562,7 +597,7 @@ class TestFinalization:
         ):
             finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources.call_count == 1
+        assert mock_secondary_client.list_custom_resources_strict.call_count == 1
 
     def test_cleanup_restore_resources_raises_when_delete_fails(
         self, finalization, mock_secondary_client, mock_state_manager
@@ -579,21 +614,24 @@ class TestFinalization:
         mock_state_manager._set_config.assert_called_once_with("archived_restores", ANY)
 
     @patch("modules.finalization.time")
-    def test_verify_new_backups_fails_fast_on_permanent_list_error(
+    def test_verify_new_backups_exhausts_unreadable_poll_inventory(
         self, mock_time, finalization, mock_secondary_client
     ):
-        """Permanent backup list failures should surface immediately instead of timing out."""
-        mock_time.time.side_effect = [0, 0]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            ApiException(status=403, reason="Forbidden"),
-        ]
+        """Strict outcomes do not expose HTTP classes; repeated unreadable polls exhaust the wait."""
+        mock_time.time.side_effect = [0, 0, 11]
+        _serve_backups(
+            mock_secondary_client,
+            [
+                [],
+                ApiException(status=403, reason="Forbidden"),
+            ],
+        )
 
-        with pytest.raises(SwitchoverError, match="Failed to list Velero backups"):
+        with pytest.raises(SwitchoverError, match="No new backup created"):
             finalization._verify_new_backups(timeout=10)
 
-        mock_time.sleep.assert_not_called()
-        assert mock_secondary_client.list_custom_resources.call_count == 2
+        mock_time.sleep.assert_called_once()
+        assert mock_secondary_client.list_custom_resources_strict.call_count == 2
 
     def test_verify_backup_integrity_success(self, finalization, mock_secondary_client):
         """Backup integrity should pass for a recent completed backup with no errors (recorded name path)."""
@@ -981,7 +1019,7 @@ class TestFinalization:
                 "warnings": 0,
             },
         }
-        mock_secondary_client.list_custom_resources.return_value = [backup]
+        _serve_backups(mock_secondary_client, [[backup]])
         mock_secondary_client.get_pods.return_value = []
         # Nothing recorded (fixture default) → falls back to latest-by-timestamp, age check skipped
 
@@ -991,32 +1029,37 @@ class TestFinalization:
         """Fallback integrity path should consider only ACM-owned backups."""
         acm_backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         manual_backup_ts = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
-        mock_secondary_client.list_custom_resources.return_value = [
-            {
-                "metadata": {
-                    "name": "manual-backup",
-                    "creationTimestamp": manual_backup_ts,
-                },
-                "status": {
-                    "phase": "Completed",
-                    "completionTimestamp": manual_backup_ts,
-                    "errors": 99,
-                },
-            },
-            {
-                "metadata": {
-                    "name": "backup-1",
-                    "creationTimestamp": acm_backup_ts,
-                    "labels": ACM_BACKUP_LABEL,
-                },
-                "status": {
-                    "phase": "Completed",
-                    "completionTimestamp": acm_backup_ts,
-                    "errors": 0,
-                    "warnings": 0,
-                },
-            },
-        ]
+        _serve_backups(
+            mock_secondary_client,
+            [
+                [
+                    {
+                        "metadata": {
+                            "name": "manual-backup",
+                            "creationTimestamp": manual_backup_ts,
+                        },
+                        "status": {
+                            "phase": "Completed",
+                            "completionTimestamp": manual_backup_ts,
+                            "errors": 99,
+                        },
+                    },
+                    {
+                        "metadata": {
+                            "name": "backup-1",
+                            "creationTimestamp": acm_backup_ts,
+                            "labels": ACM_BACKUP_LABEL,
+                        },
+                        "status": {
+                            "phase": "Completed",
+                            "completionTimestamp": acm_backup_ts,
+                            "errors": 0,
+                            "warnings": 0,
+                        },
+                    },
+                ]
+            ],
+        )
         mock_secondary_client.get_pods.return_value = []
         # Nothing recorded (fixture default) → the fallback path selects the latest ACM-owned backup
         finalization._cached_schedules = [
@@ -1069,7 +1112,7 @@ class TestFinalization:
                 "warnings": 0,
             },
         }
-        mock_secondary_client.list_custom_resources.return_value = [backup]
+        _serve_backups(mock_secondary_client, [[backup]])
         mock_secondary_client.get_pods.return_value = []
         RunRecord(finalization.state).record_backup_watch_started(enabled_ts)
 
@@ -1123,7 +1166,7 @@ class TestFinalization:
         # get_custom_resource returns None for the recorded name (pruned)
         mock_secondary_client.get_custom_resource.return_value = None
         # list_custom_resources returns a fallback backup
-        mock_secondary_client.list_custom_resources.return_value = [fallback_backup]
+        _serve_backups(mock_secondary_client, [[fallback_backup]])
         mock_secondary_client.get_pods.return_value = []
         finalization._cached_schedules = []
         RunRecord(finalization.state).record_new_backup("acm-backup-switchover")
@@ -1892,15 +1935,18 @@ class TestFinalization:
 
         # Mock all required responses with side_effect for sequential calls
         _serve_schedules(mock_secondary_client)
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # Initial backups
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "InProgress"},
-                }
-            ],  # Loop iteration 1 - new ACM backup
-        ]
+                [],  # Initial backups
+                [
+                    {
+                        "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "InProgress"},
+                    }
+                ],  # Loop iteration 1 - new ACM backup
+            ],
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
             None,  # after deletion
@@ -1974,15 +2020,18 @@ class TestFinalization:
                 [{"metadata": {"name": "schedule"}, "spec": {"veleroSchedule": "*/15 * * * *"}}],
             ],
         )
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],  # Initial backups
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
-                    "status": {"phase": "InProgress"},
-                }
-            ],  # New ACM backup detected
-        ]
+                [],  # Initial backups
+                [
+                    {
+                        "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                        "status": {"phase": "InProgress"},
+                    }
+                ],  # New ACM backup detected
+            ],
+        )
         mock_secondary_client.get_custom_resource.side_effect = [
             {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
             None,  # after deletion
@@ -2400,16 +2449,19 @@ class TestFinalizationBackupOwnershipFallbackIntegration:
         from lib.utils import StateManager
 
         mock_time.time.side_effect = [0, 0, 1, 2]
-        mock_secondary_client.list_custom_resources.side_effect = [
-            [],
-            [],
+        _serve_backups(
+            mock_secondary_client,
             [
-                {
-                    "metadata": {"name": "acm-managed-clusters-schedule-20260306100000"},
-                    "status": {"phase": "Completed"},
-                }
+                [],
+                [],
+                [
+                    {
+                        "metadata": {"name": "acm-managed-clusters-schedule-20260306100000"},
+                        "status": {"phase": "Completed"},
+                    }
+                ],
             ],
-        ]
+        )
 
         state = StateManager(str(tmp_path / "state.json"))
         fin = Finalization(
