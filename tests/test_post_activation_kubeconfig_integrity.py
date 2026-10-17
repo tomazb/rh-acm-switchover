@@ -183,7 +183,9 @@ def test_a_valid_kubeconfig_still_runs_the_klusterlet_gate(tmp_path, state, monk
         pav._verify_klusterlet_connections()
 
     targets, kubeconfig_data = check.call_args.args
-    assert targets == [("spoke-a", "https://api.spoke-a.example:6443", None)]
+    assert [(target.cluster, target.api_url, target.url_reason) for target in targets] == [
+        ("spoke-a", "https://api.spoke-a.example:6443", None)
+    ]
     assert [ctx["name"] for ctx in kubeconfig_data["contexts"]] == ["secondary-ctx"]
 
 

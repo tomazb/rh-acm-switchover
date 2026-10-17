@@ -223,6 +223,17 @@ materialized in a private directory, with the same refusals, held equal by
 `tests/fixtures/r4_06_credential_vectors.json`. The snapshot lives for one Python run or one
 collection module invocation.
 
+Python refreshes its complete strict inventory at selection and again before any
+remediation worker dispatch (#362). The latter compares the whole selected non-local
+batch by name, UID and normalized URL, refusing all writes on drift or an unproven
+inventory while retaining the selected snapshots. The collection already reads and
+proves each mapped target afresh within every remediation invocation, classifies it
+again, and blocks mutations if any prepared peer is unproven. It does not retain UID
+continuity across invocations. These checks preserve the shared safety outcome under
+the existing input and snapshot lifetimes; `dual-supported` status is unchanged.
+Neither form factor makes hub discovery and spoke mutation atomic. Python's final
+batch read leaves a race during subsequent worker execution.
+
 The input models differ by design (operator decision 1, 2026-10-15). These are recorded
 differences, not parity gaps, and the capability stays `dual-supported`:
 
