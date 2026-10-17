@@ -36,6 +36,7 @@ from lib import (
     cli_outcomes,
     operation_runners,
     runtime_bootstrap,
+    workflow,
     setup_logging,
     validate_decommission_permissions,
 )
@@ -89,10 +90,14 @@ def _missing_parse_required_args(args: argparse.Namespace) -> list[str]:
     argocd_resume_only_requested = getattr(args, "argocd_resume_only", False)
     restore_only_requested = getattr(args, "restore_only", False)
 
-    standalone_mode_requested = setup_requested or argocd_resume_only_requested or restore_only_requested
+    standalone_mode_requested = (
+        setup_requested or argocd_resume_only_requested or restore_only_requested
+    )
     missing: list[str] = []
 
-    if not (restore_only_requested or argocd_resume_only_requested) and not getattr(args, "primary_context", None):
+    if not (restore_only_requested or argocd_resume_only_requested) and not getattr(
+        args, "primary_context", None
+    ):
         missing.append("--primary-context")
 
     if not standalone_mode_requested:
@@ -162,7 +167,9 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
+    mode_group.add_argument(
+        "--decommission", action="store_true", help="Decommission old hub (interactive)"
+    )
     mode_group.add_argument(
         "--setup",
         action="store_true",
@@ -432,7 +439,9 @@ Examples:
     )
 
     # Logging
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -448,7 +457,9 @@ Examples:
     args = parser.parse_args()
     missing_required_args = _missing_parse_required_args(args)
     if missing_required_args:
-        parser.error("the following arguments are required: " + ", ".join(missing_required_args))
+        parser.error(
+            "the following arguments are required: " + ", ".join(missing_required_args)
+        )
 
     return args
 
@@ -468,13 +479,19 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
             runtime_bootstrap.get_default_state_dir()
         else:
             # Validate user-specified state file path to prevent unsafe locations
-            InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
+            InputValidator.validate_safe_filesystem_path(
+                args.state_file, "--state-file"
+            )
 
         if getattr(args, "report_dir", None):
             validate_report_artifact_directory(args.report_dir, "--report-dir")
 
-        if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
-            logger.warning("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
+        if getattr(args, "validate_only", False) and getattr(
+            args, "argocd_manage", False
+        ):
+            logger.warning(
+                "--argocd-manage has no effect with --validate-only; continuing without Argo CD management."
+            )
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
@@ -494,6 +511,7 @@ def _build_switchover_runner_hooks() -> operation_runners.SwitchoverRunnerHooks:
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        backup_continuity_guard=_verify_backup_continuity_entry,
         rescue_repause=_repause_argocd_after_rescue,
     )
 
@@ -508,6 +526,7 @@ def _build_restore_only_runner_hooks() -> operation_runners.RestoreOnlyRunnerHoo
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        backup_continuity_guard=_verify_backup_continuity_entry,
         rescue_repause=_repause_argocd_after_rescue,
     )
 
@@ -530,7 +549,12 @@ def run_switchover(
     """Execute the main switchover workflow."""
     # The public wrapper owns dry-run rollback because the library runner still
     # performs durable phase bookkeeping to exercise the real workflow path.
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot()
+        if getattr(args, "dry_run", False)
+        and not workflow.completed_backup_assessment(args, state)
+        else None
+    )
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
     except MigrationJournalResetRefused:
@@ -585,7 +609,9 @@ def _run_restore_only_argocd_pause(
         register = ArgocdPauseRegister(state, dry_run=getattr(args, "dry_run", False))
         summary = register.pause_hubs([(secondary, HUB_ROLE_SECONDARY)])
     except Exception as exc:
-        return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
+        return _fail_phase(
+            state, f"Argo CD pause on secondary hub failed: {exc}", logger
+        )
 
     if summary.blocked:
         return _fail_phase(
@@ -624,7 +650,12 @@ def run_restore_only(
     """Execute restore-only workflow for single-hub restore from backup."""
     # Keep dry-run rollback at the wrapper boundary so restore-only and full
     # switchover discard all durable state written by shared runner helpers.
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot()
+        if getattr(args, "dry_run", False)
+        and not workflow.completed_backup_assessment(args, state)
+        else None
+    )
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
     except MigrationJournalResetRefused:
@@ -686,7 +717,9 @@ def _repause_argocd_after_rescue(
     logger: logging.Logger,
 ) -> bool:
     """Re-pause Argo CD before a retry's first phase when a journal rescue resumed it."""
-    return argocd_resume.repause_argocd_after_rescue(args, state, primary, secondary, logger)
+    return argocd_resume.repause_argocd_after_rescue(
+        args, state, primary, secondary, logger
+    )
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
@@ -745,7 +778,9 @@ def _run_phase_preflight(
     state.set_phase(Phase.PREFLIGHT)
 
     is_restore_only = getattr(args, "restore_only", False)
-    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
+    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(
+        args, "validate_only", False
+    )
     validator = PreflightValidator(
         primary,
         secondary,
@@ -769,7 +804,9 @@ def _run_phase_preflight(
     )
 
     if not passed:
-        return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
+        return _fail_phase(
+            state, "Pre-flight validation failed! Cannot proceed.", logger
+        )
 
     if is_restore_only:
         primary_version = "unknown"
@@ -779,11 +816,17 @@ def _run_phase_preflight(
     else:
         primary_version = config["primary_version"]
         primary_obs_detected = config["primary_observability_detected"]
-        primary_obs_enabled = primary_obs_detected and not args.skip_observability_checks
-        expected_managed_cluster_names = list(config.get("expected_managed_cluster_names", []))
+        primary_obs_enabled = (
+            primary_obs_detected and not args.skip_observability_checks
+        )
+        expected_managed_cluster_names = list(
+            config.get("expected_managed_cluster_names", [])
+        )
 
     secondary_obs_detected = config["secondary_observability_detected"]
-    secondary_obs_enabled = secondary_obs_detected and not args.skip_observability_checks
+    secondary_obs_enabled = (
+        secondary_obs_detected and not args.skip_observability_checks
+    )
     run_record.record_hub_facts(
         HubFacts(
             primary_version=primary_version,
@@ -840,14 +883,18 @@ def _report_argocd_acm_impact(
     hub_pairs.append((HUB_ROLE_SECONDARY, secondary))
     for label, client in hub_pairs:
         try:
-            discovery = argocd_lib.detect_argocd_installation(client, public_advisory=True)
+            discovery = argocd_lib.detect_argocd_installation(
+                client, public_advisory=True
+            )
             if not discovery.has_applications_crd:
                 logger.info(
                     "[%s] Argo CD advisory: Applications CRD not found; check skipped",
                     label,
                 )
                 continue
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None, public_advisory=True)
+            apps = argocd_lib.list_argocd_applications(
+                client, namespaces=None, public_advisory=True
+            )
             acm_apps = argocd_lib.find_acm_touching_apps(apps, public_advisory=True)
             if not acm_apps:
                 logger.info(
@@ -870,7 +917,9 @@ def _report_argocd_acm_impact(
 
     if not argocd_manage and all_acm_apps:
         autosync_count = sum(
-            1 for a in all_acm_apps if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
+            1
+            for a in all_acm_apps
+            if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
         )
         if autosync_count:
             if primary is None:
@@ -930,7 +979,9 @@ def _run_phase_activation(
 ) -> bool:
     _log_phase_banner("PHASE 3: SECONDARY HUB ACTIVATION", logger)
     state.set_phase(Phase.ACTIVATION)
-    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
+    min_managed_clusters, expected_names, enforce_expected_names = (
+        _resolve_managed_cluster_expectation(args, state)
+    )
 
     activation = SecondaryActivation(
         secondary_client=secondary,
@@ -942,7 +993,9 @@ def _run_phase_activation(
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
         enforce_expected_managed_cluster_names=enforce_expected_names,
-        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(args),
+        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(
+            args
+        ),
     )
 
     if not activation.activate():
@@ -961,7 +1014,9 @@ def _run_phase_post_activation(
 ) -> bool:
     _log_phase_banner("PHASE 4: POST-ACTIVATION VERIFICATION", logger)
     state.set_phase(Phase.POST_ACTIVATION)
-    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
+    min_managed_clusters, expected_names, enforce_expected_names = (
+        _resolve_managed_cluster_expectation(args, state)
+    )
 
     facts = RunRecord(state).hub_facts()
     verification = PostActivationVerification(
@@ -972,7 +1027,9 @@ def _run_phase_post_activation(
         min_managed_clusters=min_managed_clusters,
         expected_managed_cluster_names=expected_names,
         enforce_expected_managed_cluster_names=enforce_expected_names,
-        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(args),
+        managed_cluster_expectation_waiver=managed_cluster_expectation_waiver_request(
+            args
+        ),
     )
 
     if not verification.verify():
@@ -1002,7 +1059,11 @@ def _resolve_managed_cluster_expectation(
                 "managed-cluster verification: pass --min-managed-clusters explicitly, or re-run "
                 "preflight to record the expectation."
             )
-        if expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
+        if (
+            expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
+            and expected_count == 0
+            and not expected_names
+        ):
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
     # AC25: an explicit minimum is an additional count floor; recorded names stay enforced.
@@ -1020,7 +1081,9 @@ def _require_waivable_recorded_expectation(
     if managed_cluster_expectation_waiver_request(args) is None:
         return True
     try:
-        _require_waivable_expectation(args, list(RunRecord(state).managed_cluster_expectation().names))
+        _require_waivable_expectation(
+            args, list(RunRecord(state).managed_cluster_expectation().names)
+        )
     except SwitchoverError as exc:
         if not getattr(args, "dry_run", False):
             raise
@@ -1029,17 +1092,55 @@ def _require_waivable_recorded_expectation(
     return True
 
 
-def _require_waivable_expectation(args: argparse.Namespace, expected_names: list[str]) -> None:
+def _require_waivable_expectation(
+    args: argparse.Namespace, expected_names: list[str]
+) -> None:
     """Reject a requested waiver when the recorded expectation has no name to waive.
 
     Python records one expected-name set for both the activation and post-activation
     checks, so every waiver scope is covered by the same set.
     """
-    if managed_cluster_expectation_waiver_request(args) is not None and not expected_names:
+    if (
+        managed_cluster_expectation_waiver_request(args) is not None
+        and not expected_names
+    ):
         raise SwitchoverError(
             "waiver_expected_names_empty: --skip-managed-cluster-expectations was requested, but no expected "
             "ManagedCluster name is recorded to waive"
         )
+
+
+def _verify_backup_continuity_entry(
+    args, state, primary, secondary, logger, *, completed: bool
+) -> bool:
+    """Wire domain proof; lifecycle callers supply applicability and completed status."""
+    inputs = RunRecord(state).backup_continuity_inputs()
+    historical = (
+        inputs.get("invalid_reason")
+        or inputs.get("enabled_at_present")
+        or inputs.get("recorded_name_present")
+        or inputs.get("verification_steps")
+        or inputs.get("legacy_enable_steps")
+    )
+    if not completed and not historical:
+        return True
+    try:
+        finalization = Finalization(
+            secondary,
+            state,
+            RunRecord(state).hub_facts().secondary_version,
+            primary_client=primary,
+            old_hub_action="none",
+        )
+        finalization._prove_backup_continuity(finalization._get_backup_verify_timeout())
+        return True
+    except SwitchoverError as exc:
+        logger.error("%s", exc)
+    except Exception:
+        logger.error(
+            "Backup continuity cannot be established from fresh evidence; preserve the checkpoint for assessment."
+        )
+    return False
 
 
 def _run_phase_finalization(
@@ -1066,9 +1167,13 @@ def _run_phase_finalization(
         dry_run=args.dry_run,
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
-        disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
+        disable_observability_on_secondary=getattr(
+            args, "disable_observability_on_secondary", False
+        ),
         restore_only=is_restore_only,
-        acknowledge_observability_not_migrated=getattr(args, "acknowledge_observability_not_migrated", False),
+        acknowledge_observability_not_migrated=getattr(
+            args, "acknowledge_observability_not_migrated", False
+        ),
         migration_cleanup_repair=migration_cleanup_repair_request(args),
     )
 
@@ -1126,7 +1231,9 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
+        logger.info(
+            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
+        )
     else:
         logger.info("Starting decommission workflow")
 
@@ -1238,7 +1345,9 @@ def run_setup(
     logger.info("  Role: %s", args.role)
     logger.info("  Token duration: %s", args.token_duration)
     logger.info("  Output directory: %s", args.output_dir)
-    logger.info("  Include decommission RBAC: %s", getattr(args, "include_decommission", False))
+    logger.info(
+        "  Include decommission RBAC: %s", getattr(args, "include_decommission", False)
+    )
 
     try:
         result = subprocess.run(  # nosec B603
@@ -1255,7 +1364,9 @@ def run_setup(
         return False
 
 
-def _reject_dry_run_reset_state(args: argparse.Namespace, logger: logging.Logger) -> None:
+def _reject_dry_run_reset_state(
+    args: argparse.Namespace, logger: logging.Logger
+) -> None:
     """Fail closed if --reset-state is combined with --dry-run (parity audit H10).
 
     Capture-before-delete is not viable here: a corrupt, unparseable state file
@@ -1270,7 +1381,9 @@ def _reject_dry_run_reset_state(args: argparse.Namespace, logger: logging.Logger
         sys.exit(EXIT_FAILURE)
 
 
-def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namespace) -> Optional[dict]:
+def _bind_contexts_with_dry_run_guard(
+    state: StateManager, args: argparse.Namespace
+) -> Optional[dict]:
     """Bind invocation contexts, returning the dry-run state guard (or None).
 
     Under --dry-run the snapshot is captured BEFORE ensure_contexts: its
@@ -1278,11 +1391,20 @@ def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namesp
     preserve the wiped state (parity audit finding H10). main() restores the
     returned guard after the rehearsal completes.
     """
+    if workflow.completed_backup_assessment(args, state):
+        state.validate_retained_contexts(
+            getattr(args, "primary_context", None),
+            getattr(args, "secondary_context", None),
+        )
+        return None
     dry_run_state_guard = None
     if getattr(args, "dry_run", False):
         dry_run_state_guard = state.capture_state_snapshot()
     try:
-        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+        state.ensure_contexts(
+            getattr(args, "primary_context", None),
+            getattr(args, "secondary_context", None),
+        )
     except MigrationJournalResetRefused:
         # Refused before any change: there is nothing to restore, and restoring would write.
         raise
@@ -1332,14 +1454,16 @@ def _prepare_runtime(
             logger.error("  or manually remove: %s", resolved_state_file)
         sys.exit(EXIT_FAILURE)
 
-    should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
+    should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(
+        args, "decommission", False
+    )
     should_record_state_errors = not getattr(args, "decommission", False)
 
     dry_run_state_guard = None
     if should_bind_state:
         try:
             dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
-        except MigrationJournalResetRefused as exc:
+        except (MigrationJournalResetRefused, StateIdentityMismatch) as exc:
             # ensure_contexts refused a reset that would drop a migration journal.
             logger.error("%s", exc)
             sys.exit(EXIT_FAILURE)
@@ -1353,7 +1477,9 @@ def _prepare_runtime(
         and bool(getattr(args, "secondary_context", None))
     )
     try:
-        primary, secondary = _initialize_clients(args, logger, sanitize_identity_errors=sanitize_identity_errors)
+        primary, secondary = _initialize_clients(
+            args, logger, sanitize_identity_errors=sanitize_identity_errors
+        )
     except runtime_bootstrap.HubIdentityVerificationError as exc:
         logger.error("%s", exc)
         # H10 guard: restore dry-run state before exiting, so the rehearsal's
@@ -1400,18 +1526,30 @@ def _bind_runtime_hub_identities(
     """Validate and bind live hub identities inside the guarded main flow."""
     try:
         hub_identities = _collect_hub_identities(primary, secondary)
-        if not getattr(args, "restore_only", False) and primary is not None and secondary is not None:
+        if (
+            not getattr(args, "restore_only", False)
+            and primary is not None
+            and secondary is not None
+        ):
             validate_distinct_hub_identities(hub_identities)
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
         raise _PhysicalHubIdentityRefusal(str(exc)) from None
 
+    if workflow.completed_backup_assessment(args, state):
+        state.validate_retained_hub_identities(hub_identities)
+        return
+
     # #332: a --force reset this run would refuse over a migration journal refuses before
     # identity is persisted, so the refused state file stays unchanged.
-    operation_runners.refuse_implicit_journal_reset(args, state, logging.getLogger("acm_switchover"))
+    operation_runners.refuse_implicit_journal_reset(
+        args, state, logging.getLogger("acm_switchover")
+    )
     state.ensure_hub_identities(
         hub_identities,
         allow_legacy_backfill=getattr(args, "force", False),
-        persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
+        persist=not (
+            getattr(args, "dry_run", False) or getattr(args, "validate_only", False)
+        ),
     )
 
 
@@ -1459,7 +1597,9 @@ def main():
             )
         )
 
-    if getattr(args, "argocd_resume_only", False) and not os.path.exists(resolved_state_file):
+    if getattr(args, "argocd_resume_only", False) and not os.path.exists(
+        resolved_state_file
+    ):
         logger.error(
             "State file not found for --argocd-resume-only: %s. "
             "Run a switchover with Argo CD management first or pass --state-file explicitly.",

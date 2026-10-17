@@ -20,6 +20,7 @@ from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
 from lib.run_record import MigrationJournalResetRefused, RunSummary
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
+from lib.workflow import completed_backup_assessment
 
 # Fallback for state entries recorded before completion-time phases existed.
 # Matched by prefix so e.g. verify_backup_schedule_enabled still resolves.
@@ -54,12 +55,21 @@ _PHASE_BY_STEP_PREFIX = {
 }
 
 _REPORT_PHASE_VALUES = frozenset(CANONICAL_PHASE_NAMES.values())
-_PHASE_VALUE_TO_REPORT_NAME = {phase.value: name for phase, name in CANONICAL_PHASE_NAMES.items()}
+_PHASE_VALUE_TO_REPORT_NAME = {
+    phase.value: name for phase, name in CANONICAL_PHASE_NAMES.items()
+}
 
 
 def fallback_phase_for_step(step_name: str) -> Optional[str]:
     """Resolve a step name to its report phase via the static prefix map."""
-    return next((value for prefix, value in _PHASE_BY_STEP_PREFIX.items() if step_name.startswith(prefix)), None)
+    return next(
+        (
+            value
+            for prefix, value in _PHASE_BY_STEP_PREFIX.items()
+            if step_name.startswith(prefix)
+        ),
+        None,
+    )
 
 
 def report_target(args: Any) -> tuple[str, str]:
@@ -91,10 +101,16 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
     # per-entry isinstance skip this loop used to do
     # (tests/test_cli_outcomes.py::test_phase_report_from_state_ignores_malformed_snapshot_entries).
     for step in summary.completed_steps:
-        phase = step.phase if step.phase in _REPORT_PHASE_VALUES else fallback_phase_for_step(step.name)
+        phase = (
+            step.phase
+            if step.phase in _REPORT_PHASE_VALUES
+            else fallback_phase_for_step(step.name)
+        )
         if not phase:
             continue
-        phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})["steps"].append(step.name)
+        phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})[
+            "steps"
+        ].append(step.name)
 
     if summary.current_phase == Phase.FAILED.value:
         # Raw errors list on purpose: summary.errors omits non-dict entries, so
@@ -106,10 +122,14 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
             errors = []
 
         last_error = errors[-1] if errors else None
-        failed_phase_value = last_error.get("phase") if isinstance(last_error, dict) else None
+        failed_phase_value = (
+            last_error.get("phase") if isinstance(last_error, dict) else None
+        )
         failed_phase = _PHASE_VALUE_TO_REPORT_NAME.get(failed_phase_value)
         if failed_phase:
-            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
+            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})[
+                "status"
+            ] = "fail"
 
     return phases
 
@@ -173,7 +193,9 @@ def run_setup_mode(
         logger.warning("\n\nSetup interrupted by user")
         return exit_interrupt
     except Exception as exc:
-        logger.error("\n✗ Setup failed: %s", exc, exc_info=getattr(args, "verbose", False))
+        logger.error(
+            "\n✗ Setup failed: %s", exc, exc_info=getattr(args, "verbose", False)
+        )
         return exit_failure
 
     if success:
@@ -184,7 +206,9 @@ def run_setup_mode(
     return exit_failure
 
 
-def _report_interrupted_state(args: Any, state: StateManager, logger: logging.Logger) -> None:
+def _report_interrupted_state(
+    args: Any, state: StateManager, logger: logging.Logger
+) -> None:
     """Say "State saved" only after the pending state is durably written (R4-04 PR A).
 
     The SIGINT handler already flushed; this is a no-op unless that write failed or was
@@ -238,18 +262,22 @@ def run_operation_outcome(
 ) -> OperationOutcome:
     """Run the prepared non-setup operation path and return its outcome."""
     exit_code = exit_failure
+    completed_assessment = completed_backup_assessment(args, state)
     journal_reset_refused = False
     refusal_report_message: Optional[str] = None
     try:
         if should_bind_state:
             hooks.bind_runtime_hub_identities(args, state, primary, secondary)
         if getattr(args, "argocd_resume_only", False):
-            success = hooks.run_argocd_resume_only(args, state, primary, secondary, logger)
+            success = hooks.run_argocd_resume_only(
+                args, state, primary, secondary, logger
+            )
         else:
             success = hooks.execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        _report_interrupted_state(args, state, logger)
+        if not completed_assessment:
+            _report_interrupted_state(args, state, logger)
         exit_code = exit_interrupt
     except MigrationJournalResetRefused as exc:
         # A --force reset would discard the migration journal. Nothing was changed, and
@@ -267,12 +295,14 @@ def run_operation_outcome(
         exit_code = exit_failure
     except SwitchoverError as exc:
         logger.error("\n✗ %s", exc)
-        if should_record_state_errors:
+        if should_record_state_errors and not completed_assessment:
             state.add_error(str(exc))
         exit_code = exit_failure
     except Exception as exc:
-        logger.error("\n✗ Unexpected error: %s", exc, exc_info=getattr(args, "verbose", False))
-        if should_record_state_errors:
+        logger.error(
+            "\n✗ Unexpected error: %s", exc, exc_info=getattr(args, "verbose", False)
+        )
+        if should_record_state_errors and not completed_assessment:
             state.add_error(str(exc))
         exit_code = exit_failure
     else:

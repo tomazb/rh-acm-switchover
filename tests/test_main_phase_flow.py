@@ -138,7 +138,9 @@ class TestPhaseFlowIntegration:
         assert "preflight" not in call_order
         assert call_order[0] == "primary_prep"
         reloaded = StateManager(str(state_file))
-        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "primary_prep"}
+        assert reloaded._get_config("resume_summary") == {
+            "resume_start_phase": "primary_prep"
+        }
 
     def test_resume_from_activation_skips_earlier_phases(self, tmp_path):
         """When state is ACTIVATION, only activation onward should execute."""
@@ -205,7 +207,9 @@ class TestPhaseFlowIntegration:
 
         assert result is True
         reloaded = StateManager(str(state_file))
-        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "activation"}
+        assert reloaded._get_config("resume_summary") == {
+            "resume_start_phase": "activation"
+        }
 
     def test_resume_from_preflight_persists_resume_summary(self, tmp_path):
         """Resuming from persisted PREFLIGHT should record a preflight restart."""
@@ -239,7 +243,9 @@ class TestPhaseFlowIntegration:
         assert result is True
         assert call_order[0] == "preflight"
         reloaded = StateManager(str(state_file))
-        assert reloaded._get_config("resume_summary") == {"resume_start_phase": "preflight"}
+        assert reloaded._get_config("resume_summary") == {
+            "resume_start_phase": "preflight"
+        }
 
 
 @pytest.mark.unit
@@ -385,107 +391,32 @@ class TestResumeFromFailedState:
 
 @pytest.mark.unit
 class TestStaleStateDetection:
-    """Tests for stale completed state detection and --force override."""
+    """Stale completion is held even with force or validation-only."""
 
-    def test_stale_completed_state_raises_without_force(self, tmp_path):
-        """State older than STALE_STATE_THRESHOLD with COMPLETED phase should
-        raise a workflow-domain error when --force is not set."""
+    @pytest.mark.parametrize("force", [False, True])
+    @pytest.mark.parametrize("validate_only", [False, True])
+    def test_stale_completed_state_refuses_without_reset_or_preflight(
+        self, tmp_path, force, validate_only
+    ):
         from lib.constants import STALE_STATE_THRESHOLD
         from lib.utils import Phase, StateManager
 
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        # Set COMPLETED with stale timestamp using _write_state to preserve it
+        path = tmp_path / "state.json"
+        state = StateManager(str(path))
         state.state["current_phase"] = Phase.COMPLETED.value
-        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
-        state.state["last_updated"] = stale_time.isoformat()
+        state.state["last_updated"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+        ).isoformat()
         state._write_state(state.state)
-
-        # Reload to simulate fresh run
-        state2 = StateManager(str(state_file))
-        args = make_switchover_args(state_file=str(state_file))
-
-        with pytest.raises(SwitchoverError, match="Use --force to proceed with stale state"):
-            run_switchover(args, state2, Mock(), Mock(), Mock())
-
-    def test_stale_completed_state_force_resets_and_proceeds(self, tmp_path):
-        """With --force on stale COMPLETED state, orchestrator should reset
-        state and run from the beginning."""
-        from lib.constants import STALE_STATE_THRESHOLD
-        from lib.utils import Phase, StateManager
-
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        state.state["current_phase"] = Phase.COMPLETED.value
-        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
-        state.state["last_updated"] = stale_time.isoformat()
-        state._write_state(state.state)
-
-        state2 = StateManager(str(state_file))
-        args = make_switchover_args(state_file=str(state_file), force=True)
-
-        def successful_phase(next_phase):
-            def handler(_args, phase_state, *_rest):
-                phase_state.set_phase(next_phase)
-                return True
-
-            return handler
-
-        with patch(
-            "acm_switchover._run_phase_preflight",
-            side_effect=successful_phase(Phase.PREFLIGHT),
-        ), patch(
-            "acm_switchover._run_phase_primary_prep",
-            side_effect=successful_phase(Phase.PRIMARY_PREP),
-        ), patch(
-            "acm_switchover._run_phase_activation",
-            side_effect=successful_phase(Phase.ACTIVATION),
-        ), patch(
-            "acm_switchover._run_phase_post_activation",
-            side_effect=successful_phase(Phase.POST_ACTIVATION),
-        ), patch(
-            "acm_switchover._run_phase_finalization",
-            side_effect=successful_phase(Phase.FINALIZATION),
-        ):
-            result = run_switchover(args, state2, Mock(), Mock(), Mock())
-
-        assert result is True
-        assert state2.get_current_phase() == Phase.COMPLETED
-
-    def test_validate_only_with_completed_state_runs_preflight(self, tmp_path):
-        """--validate-only should run preflight even on stale COMPLETED state,
-        bypassing the stale check entirely."""
-        from lib.constants import STALE_STATE_THRESHOLD
-        from lib.utils import Phase, StateManager
-
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        state.state["current_phase"] = Phase.COMPLETED.value
-        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
-        state.state["last_updated"] = stale_time.isoformat()
-        state._write_state(state.state)
-
-        state2 = StateManager(str(state_file))
-        args = make_switchover_args(
-            state_file=str(state_file),
-            validate_only=True,
-            old_hub_action="secondary",
-            argocd_manage=False,
-        )
-        config = {
-            "primary_version": "2.14.0",
-            "secondary_version": "2.14.0",
-            "primary_observability_detected": False,
-            "secondary_observability_detected": False,
-        }
-
-        with patch("acm_switchover.PreflightValidator") as validator_class:
-            validator_class.return_value.validate_all.return_value = (True, config)
-            result = run_switchover(args, state2, Mock(), Mock(), Mock())
-
-        assert result is True
-        # Phase should be preserved (checkpoint mechanism)
-        assert state2.get_current_phase() == Phase.COMPLETED
+        before = path.read_bytes()
+        args = make_switchover_args(force=force, validate_only=validate_only)
+        with patch("acm_switchover._run_phase_preflight") as preflight, patch.object(
+            state, "reset"
+        ) as reset:
+            assert run_switchover(args, state, Mock(), Mock(), Mock()) is False
+        preflight.assert_not_called()
+        reset.assert_not_called()
+        assert path.read_bytes() == before
 
 
 @pytest.mark.unit
@@ -584,7 +515,9 @@ class TestMainExceptionHandlers:
 
         assert exc_info.value.code == EXIT_FAILURE
 
-    def test_workflow_domain_error_exits_without_unexpected_log(self, tmp_path, monkeypatch, capsys):
+    def test_workflow_domain_error_exits_without_unexpected_log(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """SwitchoverError from workflow helpers should exit cleanly with failure."""
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
         state_file = tmp_path / "state.json"
@@ -604,7 +537,9 @@ class TestMainExceptionHandlers:
                 "--state-file",
                 str(state_file),
             ],
-        ), patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())), patch(
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
             "acm_switchover._collect_hub_identities",
             return_value={
                 "primary": {"context": "p1", "cluster_uid": "uid-primary"},
@@ -692,13 +627,16 @@ class TestPhaseHandlerFailure:
             Mock(),
             Mock(),
             hook,
+            backup_continuity_guard=lambda *a, **k: True,
         )
 
         assert result is False
         assert hook.called is hook_runs
 
     @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
-    def test_failed_state_retry_phase_keeps_the_repause_marker_precedence(self, tmp_path, dry_run):
+    def test_failed_state_retry_phase_keeps_the_repause_marker_precedence(
+        self, tmp_path, dry_run
+    ):
         """A dry-run retries the same phase as an execution, in memory only; an execution persists it."""
         from types import SimpleNamespace
 
@@ -710,9 +648,13 @@ class TestPhaseHandlerFailure:
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
         state.add_error("finalization failed", Phase.FINALIZATION.value)
-        RunRecord(state).record_argocd_repause_required(Phase.ACTIVATION.value, "2026-10-14T00:00:00Z")
+        RunRecord(state).record_argocd_repause_required(
+            Phase.ACTIVATION.value, "2026-10-14T00:00:00Z"
+        )
         state.set_phase(Phase.FAILED)
-        config = FailedStateConfig(resumable_phases=SWITCHOVER_RESUMABLE_PHASES, operation_noun="switchover")
+        config = FailedStateConfig(
+            resumable_phases=SWITCHOVER_RESUMABLE_PHASES, operation_noun="switchover"
+        )
 
         with patch.object(StateManager, "_write_state", autospec=True) as write_state:
             handle_failed_state(SimpleNamespace(dry_run=dry_run), state, Mock(), config)
@@ -849,7 +791,9 @@ class TestRestoreOnlyFlow:
         assert result is True
         pp.assert_not_called()
 
-    def test_restore_only_fails_when_successful_handler_leaves_wrong_phase(self, tmp_path):
+    def test_restore_only_fails_when_successful_handler_leaves_wrong_phase(
+        self, tmp_path
+    ):
         """Restore-only must not complete when a True handler leaves stale phase state."""
         from lib.utils import Phase, StateManager
 
@@ -863,7 +807,9 @@ class TestRestoreOnlyFlow:
         ), patch(
             "acm_switchover._run_phase_activation",
             side_effect=self._successful_phase(Phase.PREFLIGHT),
-        ), patch("acm_switchover._attempt_argocd_resume_on_failure") as resume_on_failure:
+        ), patch(
+            "acm_switchover._attempt_argocd_resume_on_failure"
+        ) as resume_on_failure:
             result = run_restore_only(args, state, Mock(), Mock())
 
         assert result is False
@@ -879,6 +825,10 @@ class TestRestoreOnlyFlow:
         args = make_restore_only_args()
         state = Mock(spec=StateManager)
         state._get_config.side_effect = lambda key, default=None: default
+        state.capture_state_snapshot.return_value = {
+            "config": {},
+            "completed_steps": [],
+        }
         # Return INIT first, then follow each phase transition via set_phase
         current = [Phase.INIT]
 
@@ -965,9 +915,9 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
-            "acm_switchover._run_phase_activation"
-        ) as act:
+        with patch(
+            "acm_switchover._run_phase_preflight", return_value=True
+        ) as pf, patch("acm_switchover._run_phase_activation") as act:
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is True
@@ -985,9 +935,9 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=False) as pf, patch(
-            "acm_switchover._run_phase_activation"
-        ) as act:
+        with patch(
+            "acm_switchover._run_phase_preflight", return_value=False
+        ) as pf, patch("acm_switchover._run_phase_activation") as act:
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is False
@@ -1028,6 +978,10 @@ class TestRestoreOnlyFlow:
         args.method = "full"
         state = Mock()
         state._get_config.side_effect = lambda key, default=None: default
+        state.capture_state_snapshot.return_value = {
+            "config": {},
+            "completed_steps": [],
+        }
         state.get_current_phase.return_value = Phase.INIT
         state.get_state_age.return_value = None
         secondary = Mock()
@@ -1096,7 +1050,9 @@ class TestRestoreOnlyFlow:
         args = make_restore_only_args()
         real_logger = logging.getLogger("acm_switchover")
 
-        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+        with patch(
+            "acm_switchover._verify_backup_continuity_entry", return_value=True
+        ), caplog.at_level(logging.INFO, logger="acm_switchover"):
             result = run_restore_only(args, reloaded, Mock(), real_logger)
 
         assert result is True
@@ -1135,7 +1091,9 @@ class TestObservabilityAcknowledgementCliPlumbing:
     def test_the_flag_is_a_store_true_switch(self):
         from acm_switchover import parse_args
 
-        with patch("sys.argv", self._BASE_ARGV + ["--acknowledge-observability-not-migrated"]):
+        with patch(
+            "sys.argv", self._BASE_ARGV + ["--acknowledge-observability-not-migrated"]
+        ):
             assert parse_args().acknowledge_observability_not_migrated is True
 
     def test_finalization_receives_the_acknowledgement(self):
@@ -1156,7 +1114,12 @@ class TestObservabilityAcknowledgementCliPlumbing:
             finalization_class.return_value.finalize.return_value = True
             assert _run_phase_finalization(args, state, None, Mock(), Mock()) is True
 
-        assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is True
+        assert (
+            finalization_class.call_args.kwargs[
+                "acknowledge_observability_not_migrated"
+            ]
+            is True
+        )
 
     def test_finalization_receives_the_validated_cleanup_repair_request(self):
         """--repair-migration-cleanup reaches the Restore-cleanup transaction as the validated request."""
@@ -1189,7 +1152,9 @@ class TestObservabilityAcknowledgementCliPlumbing:
             finalization_class.return_value.finalize.return_value = True
             _run_phase_finalization(args, state, None, Mock(), Mock())
 
-        assert finalization_class.call_args.kwargs["migration_cleanup_repair"] == request
+        assert (
+            finalization_class.call_args.kwargs["migration_cleanup_repair"] == request
+        )
 
     def test_a_missing_attribute_falls_back_to_not_acknowledged(self):
         """The fallback for a destructive acknowledgement must be the safe direction."""
@@ -1209,4 +1174,9 @@ class TestObservabilityAcknowledgementCliPlumbing:
             finalization_class.return_value.finalize.return_value = True
             _run_phase_finalization(args, state, None, Mock(), Mock())
 
-        assert finalization_class.call_args.kwargs["acknowledge_observability_not_migrated"] is False
+        assert (
+            finalization_class.call_args.kwargs[
+                "acknowledge_observability_not_migrated"
+            ]
+            is False
+        )

@@ -115,57 +115,47 @@ def log_operation_completion(
         logger.info(message)
 
 
-def _refuse_reset_of_migration_journal(state: StateManager, logger: logging.Logger) -> None:
+def _refuse_reset_of_migration_journal(
+    state: StateManager, logger: logging.Logger
+) -> None:
     """--force never discards a migration journal; only --reset-state does (R4-04 amendment section 10)."""
     if migration_journal_present(state.capture_state_snapshot()):
         raise MigrationJournalResetRefused(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
 
 
+def completed_backup_assessment(args: Any, state: StateManager) -> bool:
+    """Identify a read-only completed attempt before context/identity preparation."""
+    return (
+        not getattr(args, "decommission", False)
+        and not getattr(args, "argocd_resume_only", False)
+        and state.get_current_phase() == Phase.COMPLETED
+    )
+
+
 def handle_completed_state(
-    args: argparse.Namespace,
-    state: StateManager,
-    logger: logging.Logger,
-    config: CompletedStateConfig,
+    args, state, logger, config, *, primary, secondary, backup_continuity_guard
 ) -> bool:
-    """Handle completed-state reruns.
-
-    Returns True when the caller should stop successfully, or False when the
-    operation should continue.
-    """
-
-    if state.get_current_phase() != Phase.COMPLETED:
+    """Require current proof before the bounded no-op; never reset or replay history."""
+    if not completed_backup_assessment(args, state):
         return False
-
-    state_age = _completed_state_age(state)
-
-    if getattr(args, "validate_only", False):
-        return False
-
-    operation_noun = config.operation_noun
-    if state_age.total_seconds() > STALE_STATE_THRESHOLD:
-        logger.warning(WORKFLOW_BLANK_LINE)
-        logger.warning(WORKFLOW_STALE_COMPLETED_STATE_MESSAGE)
-        logger.warning(
-            WORKFLOW_STALE_COMPLETED_DETAIL_MESSAGE,
-            operation_noun.title(),
-            f"{int(state_age.total_seconds() // 60)} minutes",
+    try:
+        age = _completed_state_age(state)
+        if age.total_seconds() > STALE_STATE_THRESHOLD:
+            logger.error(
+                "Completed checkpoint is stale; Backup assessment cannot authorize reset or replay."
+            )
+            return False
+        if not backup_continuity_guard(
+            args, state, primary, secondary, logger, completed=True
+        ):
+            return False
+        log_completed_noop(state, logger, age, config.operation_label)
+        return True
+    except Exception:
+        logger.error(
+            "Completed Backup assessment is unavailable; preserving the original checkpoint."
         )
-        logger.warning(WORKFLOW_BLANK_LINE)
-        logger.warning(WORKFLOW_START_FRESH_MESSAGE, operation_noun)
-        logger.warning(WORKFLOW_REMOVE_STATE_FILE_OPTION, state.state_file)
-        logger.warning(WORKFLOW_RESET_STATE_OPTION)
-        logger.warning(WORKFLOW_FORCE_STALE_STATE_OPTION)
-        logger.warning(WORKFLOW_BLANK_LINE)
-        if not getattr(args, "force", False):
-            logger.error(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
-            raise SwitchoverError(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
-        _refuse_reset_of_migration_journal(state, logger)
-        logger.warning(WORKFLOW_FORCE_RESET_FRESH_MESSAGE, operation_noun)
-        state.reset()
         return False
-
-    log_completed_noop(state, logger, state_age, config.operation_label)
-    return True
 
 
 def handle_failed_state(
@@ -176,12 +166,16 @@ def handle_failed_state(
 ) -> None:
     """Prepare a failed state for retry, or exit when the retry phase is unknown."""
 
-    if state.get_current_phase() != Phase.FAILED or getattr(args, "validate_only", False):
+    if state.get_current_phase() != Phase.FAILED or getattr(
+        args, "validate_only", False
+    ):
         return
 
     last_error_phase = _failed_state_retry_phase(state)
     errors = state.get_errors()
-    last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+    last_error_msg = (
+        errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+    )
 
     logger.info(WORKFLOW_BLANK_LINE)
     logger.info(WORKFLOW_RESUMING_FAILED_STATE_MESSAGE)
@@ -216,7 +210,11 @@ def handle_failed_state(
 def _completed_state_age(state: StateManager) -> timedelta:
     """A completed state's age; an unknown age counts as stale."""
     state_age = state.get_state_age()
-    return state_age if state_age is not None else timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+    return (
+        state_age
+        if state_age is not None
+        else timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+    )
 
 
 def _failed_state_retry_phase(state: StateManager) -> Optional[Phase]:
@@ -226,24 +224,29 @@ def _failed_state_retry_phase(state: StateManager) -> Optional[Phase]:
     section 2.2), so an error recorded later against another phase cannot move the retry.
     """
     marker_phase = RunRecord(state).argocd_repause_required()
-    return Phase(marker_phase) if marker_phase is not None else state.get_last_error_phase()
+    return (
+        Phase(marker_phase)
+        if marker_phase is not None
+        else state.get_last_error_phase()
+    )
 
 
 def refuse_predictable_journal_reset(
-    args: argparse.Namespace, state: StateManager, logger: logging.Logger, resumable_phases: Tuple[Phase, ...]
+    args: argparse.Namespace,
+    state: StateManager,
+    logger: logging.Logger,
+    resumable_phases: Tuple[Phase, ...],
 ) -> None:
     """Raise the migration-journal reset refusal before any write when this run's --force would reset.
 
-    Mirrors the two implicit resets of handle_completed_state and handle_failed_state, so
+    Mirrors the implicit reset of handle_failed_state, so
     a caller that writes before them (live hub identity binding, #332) refuses first and
     the refused state stays unchanged.
     """
     if getattr(args, "validate_only", False) or not getattr(args, "force", False):
         return
     phase = state.get_current_phase()
-    if phase == Phase.COMPLETED:
-        would_reset = _completed_state_age(state).total_seconds() > STALE_STATE_THRESHOLD
-    elif phase == Phase.FAILED:
+    if phase == Phase.FAILED:
         would_reset = _failed_state_retry_phase(state) not in resumable_phases
     else:
         return
@@ -324,6 +327,8 @@ def run_phase_flow(
     fail_phase: FailPhaseHandler,
     fail_unexpected_phase_state: UnexpectedPhaseHandler,
     on_phase_failure: FailureHook,
+    *,
+    backup_continuity_guard: Callable[..., bool],
     before_phases: Optional[PhaseHandler] = None,
 ) -> bool:
     current_phase = state.get_current_phase()
@@ -337,13 +342,19 @@ def run_phase_flow(
 
     # A dry-run records no resume summary: its refusals below must leave the state file unwritten.
     resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
-    if current_phase != Phase.INIT and resume_start_phase is not None and not getattr(args, "dry_run", False):
+    if (
+        current_phase != Phase.INIT
+        and resume_start_phase is not None
+        and not getattr(args, "dry_run", False)
+    ):
         RunRecord(state).record_resume_start_phase(resume_start_phase)
 
     # Obligations a failed run left for its retry run before any phase work. The Argo CD
     # re-pause precedes the journal refusal below, as in the collection, so Argo CD stays
     # paused while the operator follows the refusal guidance.
-    if before_phases is not None and not before_phases(args, state, primary, secondary, logger):
+    if before_phases is not None and not before_phases(
+        args, state, primary, secondary, logger
+    ):
         return False
 
     refusal = _post_activation_marker_refusal(args, state, current_phase)
@@ -358,10 +369,23 @@ def run_phase_flow(
     for handler, allowed_states, expected_phase in phase_flow:
         if state.get_current_phase() in allowed_states:
             ran_phase = True
+            if expected_phase == Phase.FINALIZATION and not backup_continuity_guard(
+                args, state, primary, secondary, logger, completed=False
+            ):
+                fail_phase(
+                    state,
+                    "Backup continuity is unproved; preserve historical evidence for assessment.",
+                    logger,
+                )
+                on_phase_failure(args, state, primary, secondary, logger)
+                return False
             result = handler(args, state, primary, secondary, logger)
             if not result:
                 # A dry-run refusal before phase work is not a phase failure: only a FAILED phase runs the hook.
-                if not getattr(args, "dry_run", False) or state.get_current_phase() == Phase.FAILED:
+                if (
+                    not getattr(args, "dry_run", False)
+                    or state.get_current_phase() == Phase.FAILED
+                ):
                     on_phase_failure(args, state, primary, secondary, logger)
                 return False
             if state.get_current_phase() != expected_phase:

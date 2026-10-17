@@ -70,7 +70,9 @@ def test_execute_operation_requires_secondary_for_restore_only():
     args = SimpleNamespace(decommission=False, restore_only=True)
     hooks = OperationDispatchHooks(Mock(), Mock(), Mock())
 
-    with pytest.raises(ValueError, match="Secondary context is required for restore-only"):
+    with pytest.raises(
+        ValueError, match="Secondary context is required for restore-only"
+    ):
         execute_operation(args, Mock(), Mock(), None, Mock(), hooks=hooks)
 
 
@@ -113,7 +115,9 @@ def test_execute_operation_requires_secondary_for_switchover():
     args = SimpleNamespace(decommission=False, restore_only=False)
     hooks = OperationDispatchHooks(Mock(), Mock(), Mock())
 
-    with pytest.raises(ValueError, match="Secondary context is required for switchover"):
+    with pytest.raises(
+        ValueError, match="Secondary context is required for switchover"
+    ):
         execute_operation(args, Mock(), Mock(), None, Mock(), hooks=hooks)
 
 
@@ -132,7 +136,9 @@ def test_execute_operation_routes_switchover_when_secondary_exists():
     result = execute_operation(args, state, primary, secondary, logger, hooks=hooks)
 
     assert result is True
-    hooks.switchover_runner.assert_called_once_with(args, state, primary, secondary, logger)
+    hooks.switchover_runner.assert_called_once_with(
+        args, state, primary, secondary, logger
+    )
 
 
 def test_run_switchover_impl_uses_validate_only_preflight_shortcut():
@@ -150,15 +156,22 @@ def test_run_switchover_impl_uses_validate_only_preflight_shortcut():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_validate_only_preflight", return_value=True) as validate_only:
-        result = run_switchover_impl(args, state, primary, secondary, logger, hooks=hooks)
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_validate_only_preflight", return_value=True
+    ) as validate_only:
+        result = run_switchover_impl(
+            args, state, primary, secondary, logger, hooks=hooks
+        )
 
     assert result is True
-    validate_only.assert_called_once_with(args, state, primary, secondary, logger, hooks.preflight_handler)
+    validate_only.assert_called_once_with(
+        args, state, primary, secondary, logger, hooks.preflight_handler
+    )
 
 
 def test_run_switchover_impl_passes_expected_phase_flow_to_run_phase_flow():
@@ -176,12 +189,17 @@ def test_run_switchover_impl_passes_expected_phase_flow_to_run_phase_flow():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow:
-        result = run_switchover_impl(args, state, primary, secondary, logger, hooks=hooks)
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_phase_flow", return_value=True
+    ) as run_phase_flow:
+        result = run_switchover_impl(
+            args, state, primary, secondary, logger, hooks=hooks
+        )
 
     assert result is True
     phase_flow = run_phase_flow.call_args.args[5]
@@ -192,7 +210,9 @@ def test_run_switchover_impl_passes_expected_phase_flow_to_run_phase_flow():
         hooks.post_activation_handler,
         hooks.finalization_handler,
     ]
-    assert [(entry[1], entry[2]) for entry in phase_flow] == list(EXPECTED_SWITCHOVER_PHASE_ROUTING)
+    assert [(entry[1], entry[2]) for entry in phase_flow] == list(
+        EXPECTED_SWITCHOVER_PHASE_ROUTING
+    )
     assert run_phase_flow.call_args.args[6] == PHASE_FLOW_NAME_SWITCHOVER
     assert run_phase_flow.call_args.args[7] is hooks.fail_phase
     assert run_phase_flow.call_args.args[8] is hooks.fail_unexpected_phase_state
@@ -217,14 +237,19 @@ def test_run_switchover_impl_tolerates_missing_optional_args():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow, patch(
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_phase_flow", return_value=True
+    ) as run_phase_flow, patch(
         "lib.operation_runners.run_validate_only_preflight"
     ) as validate_only:
-        result = run_switchover_impl(args, state, primary, secondary, logger, hooks=hooks)
+        result = run_switchover_impl(
+            args, state, primary, secondary, logger, hooks=hooks
+        )
 
     assert result is True
     validate_only.assert_not_called()
@@ -248,15 +273,20 @@ def test_run_restore_only_impl_uses_validate_only_preflight_shortcut():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_validate_only_preflight", return_value=True) as validate_only:
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_validate_only_preflight", return_value=True
+    ) as validate_only:
         result = run_restore_only_impl(args, state, secondary, logger, hooks=hooks)
 
     assert result is True
-    validate_only.assert_called_once_with(args, state, None, secondary, logger, hooks.preflight_handler)
+    validate_only.assert_called_once_with(
+        args, state, None, secondary, logger, hooks.preflight_handler
+    )
 
 
 def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_phase_flow():
@@ -273,11 +303,14 @@ def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_p
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow:
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_phase_flow", return_value=True
+    ) as run_phase_flow:
         result = run_restore_only_impl(args, state, secondary, logger, hooks=hooks)
 
     assert result is True
@@ -291,7 +324,9 @@ def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_p
         hooks.post_activation_handler,
         hooks.finalization_handler,
     ]
-    assert [(entry[1], entry[2]) for entry in phase_flow] == list(EXPECTED_RESTORE_ONLY_PHASE_ROUTING)
+    assert [(entry[1], entry[2]) for entry in phase_flow] == list(
+        EXPECTED_RESTORE_ONLY_PHASE_ROUTING
+    )
     assert run_phase_flow.call_args.args[6] == PHASE_FLOW_NAME_RESTORE_ONLY
 
 
@@ -312,11 +347,14 @@ def test_run_restore_only_impl_tolerates_missing_optional_args():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
-    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
-        "lib.operation_runners.handle_failed_state"
-    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow, patch(
+    with patch(
+        "lib.operation_runners.handle_completed_state", return_value=False
+    ), patch("lib.operation_runners.handle_failed_state"), patch(
+        "lib.operation_runners.run_phase_flow", return_value=True
+    ) as run_phase_flow, patch(
         "lib.operation_runners.run_validate_only_preflight"
     ) as validate_only:
         result = run_restore_only_impl(args, state, secondary, logger, hooks=hooks)
