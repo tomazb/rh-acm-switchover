@@ -53,3 +53,17 @@ def test_malformed_checkpoint_fact_containers_refuse(checkpoint):
         owner.resolve_enable_boundary(
             backup_continuity_facts(checkpoint), observed_at=datetime.fromisoformat("2026-10-17T11:00:00+00:00")
         )
+
+
+def test_strict_transport_creation_bound_positive_and_old_refusal():
+    from ansible_collections.tomazb.acm_switchover.tests.unit.test_k8s_read_outcome import _FakeClient, _FakeDynamicClient, _ResolvedResource
+    case=json.loads(VECTORS.read_text())[0]
+    good=copy.deepcopy(case['backup'])
+    good['metadata'].update(name='acm-managed-clusters-current',uid='uid-1',resourceVersion='12',creationTimestamp='2026-10-17T10:30:00+00:00')
+    good['status']={'phase':'Completed','errors':0}
+    route=_ResolvedResource('backups',namespaced=True,group_version='velero.io/v1')
+    discovery={'kind':'APIResourceList','groupVersion':'velero.io/v1','resources':[{'name':'backups','kind':'Backup','namespaced':True}]}
+    api=_FakeClient(resource=route,pages=[{'items':[good],'metadata':{'resourceVersion':'100'}},good],dynamic=_FakeDynamicClient(discovery))
+    proof=owner.verify_backup_continuity(api,enabled_at=datetime.fromisoformat('2026-10-17T10:00:00+00:00'),timeout=1,poll_interval=0)
+    assert proof['name']==good['metadata']['name'] and proof['phase']=='Completed'
+    assert api.get_calls==2 and api.get_params[1]['name']==proof['name']

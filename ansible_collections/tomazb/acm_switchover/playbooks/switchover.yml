@@ -15,12 +15,19 @@
   tasks:
     - name: Run switchover phases with reporting
       block:
+        # Outside the mutation-capable rescue and before ordinary identity entry.
+        - name: Assess completed Backup continuity before workflow entry
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.finalization
+            tasks_from: assess_completed
+
         - name: Establish trusted identity and checkpoint barrier
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.preflight
             tasks_from: identity_barrier
           vars:
             _acm_identity_barrier_requires_checkpoint: true
+          when: not (acm_switchover_backup_completed_assessed | bool)
 
         # PR C decisions amendment 2.2 rule 3: a retry re-pauses Argo CD before any
         # further phase work when a failure rescue left the re-pause marker.
@@ -28,8 +35,10 @@
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.argocd_manage
             tasks_from: repause_recovery
+          when: not (acm_switchover_backup_completed_assessed | bool)
 
         - name: Run post-barrier switchover phases
+          when: not (acm_switchover_backup_completed_assessed | bool)
           block:
             - name: Run remaining preflight validation
               ansible.builtin.include_role:

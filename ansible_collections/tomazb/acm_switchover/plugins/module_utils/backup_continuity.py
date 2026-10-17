@@ -1,6 +1,7 @@
 """Read-only Backup continuity decisions, independent of lifecycle and storage."""
 
 import re
+import time
 from datetime import datetime, timezone
 from typing import Mapping
 
@@ -93,3 +94,60 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
         if error_count:
             raise BackupContinuityError("backup_errors")
     return {"name": name, "uid": uid, "created_at": created.isoformat(), "phase": phase}
+
+
+def verify_backup_continuity(api_client, *, enabled_at, timeout, poll_interval):
+    """Prove current creation and terminal health with one strict read owner."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import BACKUP_NAMESPACE
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.k8s_read import strict_read
+
+    deadline = time.monotonic() + timeout
+
+    def read(mode, name=None):
+        status, resources, _revision = strict_read(
+            api_client, read_mode=mode, api_version="velero.io/v1", kind="Backup",
+            resource_name="backups", namespace=BACKUP_NAMESPACE, name=name,
+        )
+        if status != "ok":
+            raise BackupContinuityError("backup_inventory_unavailable" if mode == "list" else "recorded_backup_unavailable")
+        return resources
+
+    def select(items):
+        candidates = []
+        for backup in items:
+            if not is_acm_owned(backup):
+                continue
+            try:
+                proof = validate_backup(backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc))
+            except BackupContinuityError as exc:
+                if exc.reason == "backup_predates_enable":
+                    continue
+                raise
+            candidates.append(proof)
+        return min(candidates, key=lambda proof: datetime.fromisoformat(proof["created_at"])) if candidates else None
+
+    baseline = read("list")  # Never manufacture inventory from an unreadable initial observation.
+    selected = select(baseline)
+    while time.monotonic() < deadline:
+        if selected is None:
+            try:
+                current = read("list")
+            except BackupContinuityError:
+                current = None
+            if current is not None:
+                selected = select(current)
+        if selected is not None:
+            resources = read("get", selected["name"])
+            if len(resources) != 1:
+                raise BackupContinuityError("recorded_backup_unavailable")
+            proof = validate_backup(
+                resources[0], enabled_at=enabled_at, observed_at=datetime.now(timezone.utc),
+                expected_name=selected["name"], expected_uid=selected["uid"],
+            )
+            if proof["phase"] == "Completed":
+                return proof
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_interval, remaining))
+    raise BackupContinuityError("No qualifying new backup completed within the verification timeout")

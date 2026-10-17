@@ -62,10 +62,13 @@
   ansible.builtin.set_fact:
     acm_switchover_backup_schedule_enabled_at: >-
       {{
-        acm_switchover_backup_schedule_enabled_at
-        | default(now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'), true)
+        acm_switchover_backup_lifecycle_inputs.enabled_at
+        if ((acm_switchover_backup_lifecycle_inputs | default({})).enabled_at_present | default(false) | bool)
+        else now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
       }}
-  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
 
 - name: Publish enable backups result
   ansible.builtin.set_fact:
