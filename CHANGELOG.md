@@ -102,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
+  Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
+  the existing 600-second minimum, completion grace, fixed cadences, and fallback.
+
 - Python post-activation now uses `verify_klusterlet_connections_v2` at both existing gate
   call sites, so a legacy unversioned completion cannot skip the gate on normal phase
   entry. Historical entries and state/journal schemas remain intact; successful new
