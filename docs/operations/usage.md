@@ -447,6 +447,21 @@ the same host but a different scheme, port or path gives
 `endpoint_mismatch_unverified`. No matching context at all remains the
 documented non-fatal skip.
 
+Python reads a fresh complete strict ManagedCluster inventory at klusterlet target
+selection. If any cluster needs remediation, it reads the complete inventory again
+after classification and before dispatching any remediation worker. Every selected
+non-local name, UID and normalized API URL must still match, including verified or
+skipped peers. Missing identity, added or disappeared clusters, replacement UIDs,
+changed endpoints, or an unsuccessful inventory read refuse the whole batch with
+zero spoke writes and no completion marker. Retry to discover and verify the current
+targets. A run with no remediation does not newly require UIDs. Status,
+resourceVersion, list order and normalized-equivalent URL spelling do not cause refusal.
+The original context and credential snapshot remain selected throughout the attempt.
+
+This final inventory read establishes a fresh batch boundary. Changes after that
+read can still race worker execution; it is not an atomic transaction across the
+hub inventory and spoke writes.
+
 The collection never discovers contexts: `acm_switchover_managed_clusters` maps
 each cluster to one kubeconfig file and, optionally, a context. Every mapped
 file is validated like the Python merge. The selected context's server must equal

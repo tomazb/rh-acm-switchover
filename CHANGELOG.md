@@ -112,6 +112,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provenance requires the [operator hold](docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold);
   the out-of-phase residual stays open in #352 pending an evidence-based disposition.
 
+- Python klusterlet remediation refreshes strict ManagedCluster discovery at selection
+  and before worker dispatch (#362). Name, UID or normalized API URL drift, missing
+  identity and failed inventory reads refuse the whole remediation batch without
+  spoke writes or a completion marker. Existing credential snapshots and endpoint
+  checks remain in force. Collection per-invocation target proof already provides
+  the corresponding safety behavior; capability parity is unchanged. The final read
+  is a batch boundary, not an atomic hub/spoke transaction.
+
 - Strict LIST readers in Python and the Collection reject non-string pagination
   continuations (#345). Malformed pages cannot become complete inventories or bypass
   deletion safety checks; accumulated items and revisions are discarded. Missing, null

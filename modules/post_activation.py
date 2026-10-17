@@ -866,20 +866,28 @@ class PostActivationVerification:
 
         logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
-    def _klusterlet_cluster_targets(self) -> List[Tuple[str, Optional[str], Optional[str]]]:
-        """``(cluster_name, api_url, url_reason)`` for every non-local managed cluster.
+    def _klusterlet_cluster_targets(self) -> "List[_KlusterletTarget]":
+        """Fresh immutable selections for every non-local managed cluster.
 
         The URL is the first non-empty ``managedClusterClientConfigs[].url`` (amendment
         §2.5 rule 1); without a usable one ``api_url`` is None and ``url_reason`` says why.
         """
 
         cluster_targets = []
-        for managed_cluster in self._get_managed_clusters():
-            name = managed_cluster.get("metadata", {}).get("name")
-            if not name or name == LOCAL_CLUSTER_NAME:
+        for managed_cluster in self._strict_managed_clusters():
+            metadata = managed_cluster.get("metadata") if isinstance(managed_cluster, dict) else None
+            name = metadata.get("name") if isinstance(metadata, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                raise SwitchoverError(
+                    "Klusterlet ManagedCluster inventory has an invalid name; retry after discovery is repaired"
+                )
+            if name == LOCAL_CLUSTER_NAME:
                 continue
+            uid = metadata.get("uid")
+            # Missing UID is allowed for a non-mutating probe, but cannot authorize a repair.
+            uid = uid if isinstance(uid, str) and uid.strip() else None
             api_url, url_reason = managed_cluster_url(managed_cluster)
-            cluster_targets.append((name, api_url, url_reason))
+            cluster_targets.append(_KlusterletTarget(name, uid, api_url, url_reason))
         return cluster_targets
 
     def _check_klusterlet_target(
@@ -954,7 +962,7 @@ class PostActivationVerification:
 
     def _check_klusterlet_targets(
         self,
-        cluster_targets: List[Tuple[str, Optional[str], Optional[str]]],
+        cluster_targets: "List[_KlusterletTarget]",
         kubeconfig_data: Dict,
     ) -> Tuple[
         List[str],
@@ -983,11 +991,11 @@ class PostActivationVerification:
                 executor.submit(
                     self._check_klusterlet_target,
                     kubeconfig_data,
-                    name,
-                    api_url,
-                    url_reason,
-                ): (name, KLUSTERLET_RESULT_WORKER_TIMEOUT, None, None, None, None)
-                for name, api_url, url_reason in cluster_targets
+                    target.cluster,
+                    target.api_url,
+                    target.url_reason,
+                ): (target.cluster, KLUSTERLET_RESULT_WORKER_TIMEOUT, None, None, None, None)
+                for target in cluster_targets
             }
             for (
                 cluster_name,
@@ -1267,6 +1275,7 @@ class PostActivationVerification:
         if blocking:
             raise SwitchoverError("; ".join(blocking))
         if wrong_hub:
+            self._require_fresh_klusterlet_inventory(cluster_targets)
             self._remediate_wrong_hub_klusterlets(wrong_hub)
         if unreachable:
             logger.info(
@@ -1274,6 +1283,36 @@ class PostActivationVerification:
                 len(unreachable),
                 ", ".join(unreachable),
             )
+
+    def _require_fresh_klusterlet_inventory(self, selected: "List[_KlusterletTarget]") -> None:
+        """Authorize the whole repair batch before any mutation worker is submitted (#362).
+
+        Preserve the selected contexts and credential snapshots. Only name, UID and normalized
+        URL continuity matter, not ordering, status or resourceVersion. This is a fresh batch
+        boundary, not an atomic precondition across the hub and spoke APIs: later drift remains
+        possible while workers execute.
+        """
+        refusal = (
+            "Klusterlet remediation refused: ManagedCluster inventory changed or could not be proven; "
+            "retry to discover and verify the current targets"
+        )
+        try:
+            current = self._klusterlet_cluster_targets()
+        except Exception:
+            # A transport exception may quote credentials or server input.
+            raise SwitchoverError(refusal) from None
+
+        identities = []
+        for targets in (selected, current):
+            inventory = {}
+            for target in targets:
+                endpoint, _ = parse_endpoint(target.api_url)
+                if target.cluster in inventory or target.uid is None or endpoint is None:
+                    raise SwitchoverError(refusal)
+                inventory[target.cluster] = (target.uid, endpoint)
+            identities.append(inventory)
+        if identities[0] != identities[1]:
+            raise SwitchoverError(refusal)
 
     def _force_klusterlet_reconnect(self, cluster_name: str, snapshot: Any, api_url: str, expected_hub: str) -> bool:
         """
@@ -1704,6 +1743,15 @@ class PostActivationVerification:
             f" ({reason})" if reason else "",
         )
         return result, reason
+
+
+class _KlusterletTarget(NamedTuple):
+    """An immutable per-invocation ManagedCluster association, never persisted."""
+
+    cluster: str
+    uid: Optional[str]
+    api_url: Optional[str]
+    url_reason: Optional[str]
 
 
 class _WrongHub(NamedTuple):

@@ -1782,15 +1782,15 @@ class TestKlusterletParallelVerification:
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
             {
-                "metadata": {"name": "c2"},
+                "metadata": {"name": "c2", "uid": "c2-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c2:6443"}]},
             },
             {
-                "metadata": {"name": "c3"},
+                "metadata": {"name": "c3", "uid": "c3-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c3:6443"}]},
             },
         ]
@@ -1832,7 +1832,7 @@ class TestKlusterletParallelVerification:
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
         ]
@@ -1866,7 +1866,7 @@ class TestKlusterletParallelVerification:
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
         ]
@@ -1904,7 +1904,7 @@ class TestKlusterletParallelVerification:
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
         ]
@@ -2077,7 +2077,7 @@ class TestKlusterletParallelVerification:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
         ]
@@ -2127,7 +2127,7 @@ class TestKlusterletParallelVerification:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "c1"},
+                "metadata": {"name": "c1", "uid": "c1-uid"},
                 "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
             },
         ]

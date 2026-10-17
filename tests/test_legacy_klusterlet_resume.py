@@ -58,20 +58,37 @@ class SyntheticHub:
         self.inventory_error = False
         self.import_error = False
         self.cleanup_error = False
+        self.items = [
+            {
+                "metadata": {"name": name, "uid": f"synthetic-uid-{name}"},
+                "spec": {"managedClusterClientConfigs": [{"url": f"https://api.{name}.example:6443"}]},
+            }
+            for name in NAMES
+        ]
+        self.outcome = None
+        self.inventory_exception = None
+        self.reads = []
+        self.events = []
 
     def get_cluster_identity(self):
         return {"context": self.context, "cluster_uid": f"synthetic-physical-{self.context}"}
 
     def list_managed_clusters_strict(self):
         self.inventory_reads += 1
+        self.events.append("inventory")
+        if self.inventory_exception is not None:
+            self.reads.append(self.inventory_exception)
+            raise self.inventory_exception
+        if self.outcome is not None:
+            self.reads.append(self.outcome)
+            return self.outcome
         if self.inventory_error or (self.cleanup_error and self.inventory_reads >= 3):
             return StrictReadOutcome.error("synthetic denied inventory")
         ready = not (self.fallback and self.inventory_reads == 1)
-        return StrictReadOutcome.from_items(
+        outcome = StrictReadOutcome.from_items(
             [
                 {
-                    "metadata": {"name": name},
-                    "spec": {"managedClusterClientConfigs": [{"url": f"https://api.{name}.example:6443"}]},
+                    **copy.deepcopy(item),
                     "status": {
                         "conditions": [
                             {"type": "ManagedClusterConditionAvailable", "status": "True" if ready else "False"},
@@ -79,9 +96,11 @@ class SyntheticHub:
                         ]
                     },
                 }
-                for name in NAMES
+                for item in self.items
             ]
         )
+        self.reads.append(outcome)
+        return outcome
 
     def get_secret(self, namespace, name):
         assert namespace in NAMES and name == f"{namespace}-import"
@@ -140,6 +159,7 @@ class Retry:
         self.finalization = False
         self.identity_bound = False
         self.state = None
+        self.after_classification = None
         monkeypatch.setenv("KUBECONFIG", str(self.kubeconfig))
         monkeypatch.setattr(socket.socket, "connect", self.forbid_network)
         monkeypatch.setattr(client.CoreV1Api, "read_namespaced_secret", lambda api, **kw: self.read_secret(api, **kw))
@@ -151,9 +171,19 @@ class Retry:
         def observe_classification(expected, observed):
             result = classify(expected, observed)
             self.classifications.append(result[0])
+            self.hub.events.append("classification")
             return result
 
         monkeypatch.setattr(post, "classify_hub", observe_classification)
+        classify_targets = post.PostActivationVerification._check_klusterlet_targets
+
+        def observe_batch(verification, *args):
+            result = classify_targets(verification, *args)
+            if self.after_classification is not None:
+                self.after_classification()
+            return result
+
+        monkeypatch.setattr(post.PostActivationVerification, "_check_klusterlet_targets", observe_batch)
 
     @staticmethod
     def forbid_network(*_args, **_kwargs):
@@ -188,12 +218,14 @@ class Retry:
             or (self.repair == "partial" and spoke == "cluster-a" and name == "bootstrap-hub-kubeconfig")
         ):
             raise ApiException(status=403, reason="SyntheticDenied")
-        return SimpleNamespace(data={"kubeconfig": _encoded_config(NEW if self.hub_state == "correct" else OLD)})
+        converged = self.hub_state == "correct" or (self.repair == "converged" and spoke in self.restarts)
+        return SimpleNamespace(data={"kubeconfig": _encoded_config(NEW if converged else OLD)})
 
     def patch_secret(self, api, *, name, namespace, body, **_kwargs):
         spoke = self.spoke_name(api)
         assert namespace == "open-cluster-management-agent" and name == "bootstrap-hub-kubeconfig"
         self.patches.append(spoke)
+        self.hub.events.append("patch")
         if self.repair == "denied" or (self.repair == "partial" and spoke == "cluster-b"):
             raise ApiException(status=403, reason="SyntheticDenied")
         return SimpleNamespace(data=body["data"])
@@ -201,6 +233,7 @@ class Retry:
     def restart(self, api, *, name, namespace, body, **_kwargs):
         assert name == "klusterlet" and namespace == "open-cluster-management-agent"
         self.restarts.append(self.spoke_name(api))
+        self.hub.events.append("restart")
         return SimpleNamespace()
 
     def stored(self):
@@ -234,6 +267,16 @@ class Retry:
 
 def _names(stored):
     return [s["name"] for s in stored["completed_steps"]]
+
+
+def _assert_history_preserved(retry, stored):
+    for key in ("version", "tool_version", "created_at", "hub_identities", "contexts"):
+        assert stored[key] == retry.original[key]
+    assert stored["completed_steps"][: len(retry.original["completed_steps"])] == retry.original["completed_steps"]
+    assert stored["errors"][: len(retry.original["errors"])] == retry.original["errors"]
+    for key, value in retry.original["config"].items():
+        if key != "migration_backups":
+            assert stored["config"][key] == value
 
 
 @pytest.mark.parametrize(
@@ -270,6 +313,7 @@ def test_first_ready_poll_precedes_legacy_gate_and_cannot_authorize_wrong_hub(tm
     raw["completed_steps"] = [step for step in raw["completed_steps"] if step["name"] != "verify_clusters_connected"]
     assert LEGACY in _names(raw) and CURRENT not in _names(raw)
     retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    retry.original = copy.deepcopy(raw)
     retry.hub_state = hub_state
 
     result = retry.run()
@@ -295,6 +339,7 @@ def test_first_ready_poll_precedes_legacy_gate_and_cannot_authorize_wrong_hub(tm
 
 def _assert_refused(retry):
     stored = retry.stored()
+    _assert_history_preserved(retry, stored)
     assert retry.finalization is False
     assert CURRENT not in _names(stored)
     assert LEGACY in _names(stored)
@@ -310,6 +355,7 @@ def test_current_gate_success_is_durable_once_and_retains_history(tmp_path, monk
     retry.hub_state = "correct"
     assert retry.run() is True
     stored = retry.stored()
+    _assert_history_preserved(retry, stored)
     assert retry.finalization
     assert len(retry.spoke_reads) == 2  # Fallback must not invoke the gate a second time.
     assert retry.patches == retry.restarts == []
@@ -326,6 +372,94 @@ def test_current_gate_success_is_durable_once_and_retains_history(tmp_path, monk
         journal["post_activation"]["names_verified_at"]
         == retry.original["config"]["migration_backups"]["post_activation"]["names_verified_at"]
     )
+
+
+@pytest.mark.parametrize("fallback", [False, True], ids=["direct", "timeout-fallback"])
+@pytest.mark.parametrize(
+    "fault",
+    ["endpoint", "uid", "missing-uid", "invalid-name", "missing-peer", "read-error", "incomplete-read", "exception"],
+)
+def test_legacy_retry_requires_fresh_inventory_before_any_spoke_write(tmp_path, monkeypatch, caplog, fallback, fault):
+    retry = Retry(tmp_path, monkeypatch, fallback=fallback)
+    retry.repair = "converged"
+    sentinel = "synthetic-credential-must-not-escape"
+    applied = []
+
+    def change_authoritative_inventory():
+        assert retry.classifications == ["wrong_hub", "wrong_hub"]
+        assert retry.patches == retry.restarts == []
+        if fault == "endpoint":
+            retry.hub.items[0]["spec"]["managedClusterClientConfigs"][0]["url"] = "https://replacement.example:6443"
+        elif fault == "uid":
+            retry.hub.items[0]["metadata"]["uid"] = "synthetic-replacement-uid"
+        elif fault == "missing-uid":
+            retry.hub.items[0]["metadata"].pop("uid")
+        elif fault == "invalid-name":
+            retry.hub.items[0]["metadata"]["name"] = ""
+        elif fault == "missing-peer":
+            retry.hub.items.pop()
+        elif fault in ("read-error", "incomplete-read"):
+            retry.hub.outcome = StrictReadOutcome.error(f"synthetic {fault} {sentinel}")
+        else:
+            retry.hub.inventory_exception = RuntimeError(sentinel)
+        applied.append((copy.deepcopy(retry.hub.items), retry.hub.outcome, retry.hub.inventory_exception))
+        retry.hub.events.append("fault-applied")
+
+    retry.after_classification = change_authoritative_inventory
+    caplog.set_level(logging.DEBUG, logger="acm_switchover")
+    result = retry.run()
+
+    # On A before B integration this observes actual Secret/Deployment writes and
+    # false v2/completion evidence. The fault is applied to the fake authoritative
+    # hub only after both real classifications; the gate itself is never replaced.
+    assert applied
+    assert retry.patches == retry.restarts == [], {"writes": retry.patches, "events": retry.hub.events}
+    assert result is False
+    assert retry.hub.events[-2:] == ["fault-applied", "inventory"]
+    final_read = retry.hub.reads[-1]
+    items, outcome, exception = applied[0]
+    if exception is not None:
+        assert final_read is exception
+    elif outcome is not None:
+        assert final_read is outcome and not final_read.is_success and final_read.items == []
+    else:
+        assert [item["metadata"] for item in final_read.items] == [item["metadata"] for item in items]
+        assert [item["spec"] for item in final_read.items] == [item["spec"] for item in items]
+    _assert_refused(retry)
+    assert retry.stored()["config"]["migration_backups"] == retry.original["config"]["migration_backups"]
+    assert "ManagedCluster inventory changed or could not be proven" in str(retry.stored()["errors"])
+    assert sentinel not in caplog.text
+    assert sentinel not in retry.path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("fallback", [False, True], ids=["direct", "timeout-fallback"])
+def test_legacy_retry_reloads_after_inventory_refusal_and_earns_v2_once(tmp_path, monkeypatch, fallback):
+    retry = Retry(tmp_path, monkeypatch, fallback=fallback)
+    retry.repair = "converged"
+    original_items = copy.deepcopy(retry.hub.items)
+
+    def replace_identity():
+        retry.hub.items[0]["metadata"]["uid"] = "synthetic-replacement-uid"
+
+    retry.after_classification = replace_identity
+    assert retry.run() is False
+    _assert_refused(retry)
+    assert retry.patches == retry.restarts == []
+    first_state = retry.state
+    retry.hub.items = original_items
+    retry.after_classification = None
+    retry.hub.events.clear()
+
+    assert retry.run() is True
+    assert retry.state is not first_state  # Actual on-disk reload, not in-memory recovery.
+    assert sorted(retry.patches) == sorted(retry.restarts) == NAMES
+    first_write = retry.hub.events.index("patch")
+    assert retry.hub.events[first_write - 3 : first_write] == ["classification", "classification", "inventory"]
+    stored = retry.stored()
+    _assert_history_preserved(retry, stored)
+    assert _names(stored).count(CURRENT) == 1
+    assert stored["config"]["migration_backups"]["post_activation"]["completed_at"]
+    assert retry.finalization
 
 
 def test_failure_after_new_marker_keeps_idempotent_skip_on_later_retry(tmp_path, monkeypatch):
@@ -458,6 +592,7 @@ def test_actual_state_write_failure_cannot_advance_to_finalization(tmp_path, mon
     try:
         assert reloaded.state == retry.stored()
         stored = reloaded.state
+        _assert_history_preserved(retry, stored)
         assert (CURRENT in _names(stored)) is (fault == "completion")
         assert LEGACY in _names(stored)
         assert stored["config"]["migration_backups"]["post_activation"]["completed_at"] is None
@@ -495,6 +630,7 @@ def test_legacy_checkpoint_dry_run_writes_no_new_evidence_or_transport(tmp_path,
         verification = post.PostActivationVerification(retry.hub, state, False, dry_run=True)
         assert verification.verify() is True
         assert retry.path.read_bytes() == before
+        _assert_history_preserved(retry, state.state)
         assert CURRENT not in _names(state.state)
         assert retry.hub.inventory_reads == retry.hub.import_reads == 0
         assert retry.spoke_reads == retry.patches == retry.restarts == []
