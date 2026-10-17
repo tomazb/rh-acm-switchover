@@ -38,11 +38,7 @@ from lib.workflow import (
     handle_failed_state,
 )
 
-VECTORS = (
-    Path(__file__).resolve().parent
-    / "fixtures"
-    / "r4_04_migration_evidence_vectors.json"
-)
+VECTORS = Path(__file__).resolve().parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
 
 
 @pytest.fixture
@@ -166,9 +162,7 @@ class TestResumeStartPhase:
     def test_record_writes_resume_summary_shape(self, state, record):
         record.record_resume_start_phase("activation")
         snapshot = state.capture_state_snapshot()
-        assert snapshot["config"]["resume_summary"] == {
-            "resume_start_phase": "activation"
-        }
+        assert snapshot["config"]["resume_summary"] == {"resume_start_phase": "activation"}
 
 
 class TestRunSummary:
@@ -194,13 +188,9 @@ class TestRunSummary:
         assert summary.current_phase == "finalization"
         assert summary.completed_steps == (
             StepRecord(name="preflight_validation", phase="preflight", timestamp="t1"),
-            StepRecord(
-                name="activate_managed_clusters", phase="activation", timestamp="t2"
-            ),
+            StepRecord(name="activate_managed_clusters", phase="activation", timestamp="t2"),
         )
-        assert summary.errors == (
-            ErrorRecord(error="boom", phase="activation", timestamp="t3"),
-        )
+        assert summary.errors == (ErrorRecord(error="boom", phase="activation", timestamp="t3"),)
         assert summary.preflight_results == ({"check": "versions", "status": "pass"},)
 
     @pytest.mark.parametrize(
@@ -231,25 +221,16 @@ class TestRunSummary:
             }
         )
         assert summary.current_phase is None
-        assert summary.completed_steps == (
-            StepRecord(name="", phase=None, timestamp=None),
-        )
+        assert summary.completed_steps == (StepRecord(name="", phase=None, timestamp=None),)
         assert summary.errors == (ErrorRecord(error="", phase=None, timestamp=None),)
         assert summary.preflight_results == ({"ok": 1},)
 
     def test_from_snapshot_non_list_preflight_results(self):
-        assert (
-            RunSummary.from_snapshot(
-                {"config": {"preflight_results": "nope"}}
-            ).preflight_results
-            == ()
-        )
+        assert RunSummary.from_snapshot({"config": {"preflight_results": "nope"}}).preflight_results == ()
 
     def test_live_summary_matches_snapshot_summary(self, state, record):
         state.mark_step_completed("preflight_validation")
-        record.record_preflight_results(
-            [{"check": "versions", "status": "pass"}], passed=True, critical_failures=0
-        )
+        record.record_preflight_results([{"check": "versions", "status": "pass"}], passed=True, critical_failures=0)
         live = record.summary()
         offline = RunSummary.from_snapshot(state.capture_state_snapshot())
         assert live == offline
@@ -340,21 +321,15 @@ class TestMigrationBackups:
     def test_absent_before_the_first_write(self, record):
         assert record.migration_backups() is None
 
-    def test_first_write_round_trips_and_survives_reload(
-        self, state, record, first_write
-    ):
+    def test_first_write_round_trips_and_survives_reload(self, state, record, first_write):
         record.record_migration_backups(first_write)
         assert record.migration_backups() == first_write
-        assert (
-            RunRecord(StateManager(state.state_file)).migration_backups() == first_write
-        )
+        assert RunRecord(StateManager(state.state_file)).migration_backups() == first_write
 
     def test_the_write_is_durable_on_return(self, state, record, first_write):
         record.record_migration_backups(first_write)
         on_disk = json.loads(open(state.state_file, encoding="utf-8").read())
-        assert (
-            on_disk["config"][run_record_module._KEY_MIGRATION_BACKUPS] == first_write
-        )
+        assert on_disk["config"][run_record_module._KEY_MIGRATION_BACKUPS] == first_write
 
     def test_every_write_forces_a_critical_flush(self, state, record, first_write):
         record.record_migration_backups(first_write)
@@ -370,21 +345,15 @@ class TestMigrationBackups:
         read["run_id"] = "edited"
         assert record.migration_backups()["run_id"] != "edited"
 
-    @pytest.mark.parametrize(
-        "stored", [None, {}, [], "", 0, False, {"schema_version": 2}]
-    )
+    @pytest.mark.parametrize("stored", [None, {}, [], "", 0, False, {"schema_version": 2}])
     def test_a_present_invalid_key_raises_and_is_never_absent(self, tmp_path, stored):
-        record = RunRecord(
-            StateManager(str(_state_file_with_journal(tmp_path, stored)))
-        )
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, stored))))
         with pytest.raises(MigrationEvidenceError):
             record.migration_backups()
 
     def test_an_unknown_schema_version_blocks(self, tmp_path, first_write):
         first_write["schema_version"] = 3
-        record = RunRecord(
-            StateManager(str(_state_file_with_journal(tmp_path, first_write)))
-        )
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, first_write))))
         with pytest.raises(MigrationEvidenceError) as exc_info:
             record.migration_backups()
         assert exc_info.value.code == "unsupported_schema_version"
@@ -395,35 +364,25 @@ class TestMigrationBackups:
         assert exc_info.value.code == "invalid_freeze_write"
         assert record.migration_backups() is None
 
-    def test_a_legal_transition_replaces_the_whole_value(
-        self, record, first_write, next_write
-    ):
+    def test_a_legal_transition_replaces_the_whole_value(self, record, first_write, next_write):
         record.record_migration_backups(first_write)
         record.record_migration_backups(next_write)
         assert record.migration_backups() == next_write
 
-    def test_retry_never_rewrites_a_frozen_field(
-        self, state, record, first_write, rewrite
-    ):
+    def test_retry_never_rewrites_a_frozen_field(self, state, record, first_write, rewrite):
         record.record_migration_backups(first_write)
         with pytest.raises(MigrationEvidenceError) as exc_info:
             record.record_migration_backups(rewrite)
         assert exc_info.value.code == "frozen_field_changed"
-        assert (
-            RunRecord(StateManager(state.state_file)).migration_backups() == first_write
-        )
+        assert RunRecord(StateManager(state.state_file)).migration_backups() == first_write
 
     def test_an_identical_write_is_idempotent(self, record, first_write):
         record.record_migration_backups(first_write)
         record.record_migration_backups(copy.deepcopy(first_write))
         assert record.migration_backups() == first_write
 
-    def test_an_invalid_candidate_is_refused_before_the_stored_one_is_read(
-        self, tmp_path, first_write
-    ):
-        record = RunRecord(
-            StateManager(str(_state_file_with_journal(tmp_path, {"broken": True})))
-        )
+    def test_an_invalid_candidate_is_refused_before_the_stored_one_is_read(self, tmp_path, first_write):
+        record = RunRecord(StateManager(str(_state_file_with_journal(tmp_path, {"broken": True}))))
         first_write["schema_version"] = 1
         with pytest.raises(MigrationEvidenceError) as exc_info:
             record.record_migration_backups(first_write)
@@ -434,24 +393,15 @@ class TestMigrationBackups:
         record = RunRecord(StateManager(str(path)))
         with pytest.raises(MigrationEvidenceError):
             record.record_migration_backups(first_write)
-        assert (
-            json.loads(path.read_text())["config"][
-                run_record_module._KEY_MIGRATION_BACKUPS
-            ]
-            is None
-        )
+        assert json.loads(path.read_text())["config"][run_record_module._KEY_MIGRATION_BACKUPS] is None
 
     def test_a_critical_write_failure_propagates(self, record, first_write):
         with patch("lib.utils._fsync_directory", side_effect=OSError("EIO")):
             with pytest.raises(OSError, match="EIO"):
                 record.record_migration_backups(first_write)
 
-    def test_a_failed_write_before_replace_propagates_and_keeps_the_old_file(
-        self, state, record, first_write
-    ):
-        with patch(
-            "lib.utils.os.replace", side_effect=OSError("read-only file system")
-        ):
+    def test_a_failed_write_before_replace_propagates_and_keeps_the_old_file(self, state, record, first_write):
+        with patch("lib.utils.os.replace", side_effect=OSError("read-only file system")):
             with pytest.raises(OSError, match="read-only"):
                 record.record_migration_backups(first_write)
         assert RunRecord(StateManager(state.state_file)).migration_backups() is None
@@ -461,9 +411,7 @@ class TestMigrationStoreOutcomes:
     """Amendment section 2: corrupt and unreadable block and are never an absent journal."""
 
     @pytest.mark.parametrize("text", ["{not json", "[]", '"text"'])
-    def test_a_corrupt_state_file_blocks_across_invocations_and_is_preserved(
-        self, tmp_path, text
-    ):
+    def test_a_corrupt_state_file_blocks_across_invocations_and_is_preserved(self, tmp_path, text):
         path = tmp_path / "switchover-corrupt.json"
         path.write_text(text)
         for _ in range(2):
@@ -504,9 +452,7 @@ class TestResetStateMakesTheJournalAbsent:
         path = tmp_path / "switchover-corrupt.json"
         path.write_text("{not json")
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
-            runtime = _prepare_runtime(
-                _cli_args(), logging.getLogger("test"), str(path)
-            )
+            runtime = _prepare_runtime(_cli_args(), logging.getLogger("test"), str(path))
         assert RunRecord(runtime.state).migration_backups() is None
         assert json.loads(path.read_text())["config"] == {}
 
@@ -516,9 +462,7 @@ class TestResetStateMakesTheJournalAbsent:
         state.ensure_contexts("hub-a", "hub-b")
         RunRecord(state).record_migration_backups(first_write)
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
-            runtime = _prepare_runtime(
-                _cli_args(), logging.getLogger("test"), str(path)
-            )
+            runtime = _prepare_runtime(_cli_args(), logging.getLogger("test"), str(path))
         assert RunRecord(runtime.state).migration_backups() is None
 
     def test_an_ordinary_retry_keeps_the_journal(self, tmp_path, first_write):
@@ -527,9 +471,7 @@ class TestResetStateMakesTheJournalAbsent:
         state.ensure_contexts("hub-a", "hub-b")
         RunRecord(state).record_migration_backups(first_write)
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
-            runtime = _prepare_runtime(
-                _cli_args(reset_state=False), logging.getLogger("test"), str(path)
-            )
+            runtime = _prepare_runtime(_cli_args(reset_state=False), logging.getLogger("test"), str(path))
         assert RunRecord(runtime.state).migration_backups() == first_write
 
 
@@ -551,9 +493,7 @@ class TestMalformedConfigContainer:
 
     @pytest.mark.parametrize("container", [[], "", None])
     def test_the_read_blocks(self, tmp_path, container):
-        record = RunRecord(
-            StateManager(str(_write_raw_state(tmp_path, config=container)))
-        )
+        record = RunRecord(StateManager(str(_write_raw_state(tmp_path, config=container))))
         with pytest.raises(run_record_module.StateStructureError):
             record.migration_backups()
 
@@ -613,22 +553,16 @@ class _Untouched:
 class TestImplicitResetsKeepTheJournal:
     """Amendment section 10: only --reset-state may drop a recorded journal."""
 
-    def test_a_context_mismatch_refuses_instead_of_resetting(
-        self, tmp_path, first_write
-    ):
+    def test_a_context_mismatch_refuses_instead_of_resetting(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(
-            run_record_module.MigrationJournalResetRefused, match="--reset-state"
-        ):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-c")
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
-    def test_missing_contexts_on_progress_refuse_instead_of_resetting(
-        self, tmp_path, first_write
-    ):
+    def test_missing_contexts_on_progress_refuse_instead_of_resetting(self, tmp_path, first_write):
         path = _journal_state(
             tmp_path,
             first_write,
@@ -637,9 +571,7 @@ class TestImplicitResetsKeepTheJournal:
         )
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(
-            run_record_module.MigrationJournalResetRefused, match="--reset-state"
-        ):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-b")
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -652,9 +584,7 @@ class TestImplicitResetsKeepTheJournal:
         )
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
-        with pytest.raises(
-            run_record_module.MigrationJournalResetRefused, match="--reset-state"
-        ):
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
             state.ensure_contexts("hub-a", "hub-c")
         untouched.assert_unchanged()
 
@@ -668,9 +598,7 @@ class TestImplicitResetsKeepTheJournal:
         assert state.state["completed_steps"] == []
         assert state.state["contexts"] == {"primary": "hub-a", "secondary": "hub-c"}
 
-    def test_the_cli_reports_the_refusal_and_keeps_the_journal(
-        self, tmp_path, first_write
-    ):
+    def test_the_cli_reports_the_refusal_and_keeps_the_journal(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
         before = path.read_bytes()
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
@@ -686,16 +614,10 @@ class TestImplicitResetsKeepTheJournal:
     def test_force_on_an_unresumable_failed_state_refuses(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write, current_phase="failed", errors=[])
         state = StateManager(str(path))
-        config = FailedStateConfig(
-            resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover"
-        )
+        config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
         untouched = _Untouched(path, state)
-        with pytest.raises(
-            run_record_module.MigrationJournalResetRefused, match="--reset-state"
-        ):
-            handle_failed_state(
-                argparse.Namespace(force=True), state, logging.getLogger("test"), config
-            )
+        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
+            handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
@@ -707,9 +629,7 @@ class TestImplicitResetsKeepTheJournal:
             last_updated="2020-01-01T00:00:00+00:00",
         )
         state = StateManager(str(path))
-        config = CompletedStateConfig(
-            operation_label="Switchover", operation_noun="switchover"
-        )
+        config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
         untouched = _Untouched(path, state)
         assert (
             handle_completed_state(
@@ -729,12 +649,8 @@ class TestImplicitResetsKeepTheJournal:
     def test_failed_force_reset_survives_but_completed_never_resets(self, tmp_path):
         failed = _write_raw_state(tmp_path, current_phase="failed", errors=[])
         state = StateManager(str(failed))
-        config = FailedStateConfig(
-            resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover"
-        )
-        handle_failed_state(
-            argparse.Namespace(force=True), state, logging.getLogger("test"), config
-        )
+        config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
+        handle_failed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
         assert state.get_current_phase() == Phase.INIT
 
         completed_dir = tmp_path / "completed"
@@ -745,9 +661,7 @@ class TestImplicitResetsKeepTheJournal:
             last_updated="2020-01-01T00:00:00+00:00",
         )
         state = StateManager(str(completed))
-        config = CompletedStateConfig(
-            operation_label="Switchover", operation_noun="switchover"
-        )
+        config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
         assert (
             handle_completed_state(
                 argparse.Namespace(force=True),
@@ -766,9 +680,7 @@ class TestImplicitResetsKeepTheJournal:
 class TestResetRefusalWritesNothing:
     """The refusal is not a run error: no path records it into the state file."""
 
-    def test_the_operation_path_does_not_record_the_refusal(
-        self, tmp_path, first_write
-    ):
+    def test_the_operation_path_does_not_record_the_refusal(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
@@ -801,9 +713,7 @@ class TestResetRefusalWritesNothing:
         assert exit_code == 1
         untouched.assert_unchanged()
 
-    def test_a_dry_run_cli_refusal_leaves_the_file_untouched(
-        self, tmp_path, first_write
-    ):
+    def test_a_dry_run_cli_refusal_leaves_the_file_untouched(self, tmp_path, first_write):
         path = _journal_state(tmp_path, first_write)
         before = path.read_bytes()
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
@@ -814,9 +724,7 @@ class TestResetRefusalWritesNothing:
             ):
                 with pytest.raises(SystemExit) as exc_info:
                     _prepare_runtime(
-                        _cli_args(
-                            reset_state=False, dry_run=True, secondary_context="hub-c"
-                        ),
+                        _cli_args(reset_state=False, dry_run=True, secondary_context="hub-c"),
                         logging.getLogger("test"),
                         str(path),
                     )
@@ -869,9 +777,7 @@ class TestDryRunForceRefusalWritesNothing:
             ),
         ],
     )
-    def test_the_cli_refuses_without_a_rollback_write(
-        self, tmp_path, first_write, fields, argv, primary
-    ):
+    def test_the_cli_refuses_without_a_rollback_write(self, tmp_path, first_write, fields, argv, primary):
         path = _cli_journal_state(tmp_path, first_write, primary, **fields)
         if fields["current_phase"] == "completed":
             raw = json.loads(path.read_text())
@@ -888,16 +794,10 @@ class TestDryRunForceRefusalWritesNothing:
         ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", cli))
-            stack.enter_context(
-                patch(
-                    "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
-                )
-            )
+            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
             stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
             stack.enter_context(patch("acm_switchover._write_python_report"))
-            restore = stack.enter_context(
-                patch.object(StateManager, "restore_state_snapshot")
-            )
+            restore = stack.enter_context(patch.object(StateManager, "restore_state_snapshot"))
             write = stack.enter_context(patch.object(StateManager, "_write_state"))
             with pytest.raises(SystemExit) as exc_info:
                 acm_switchover.main()
@@ -930,11 +830,7 @@ class TestDryRunForceRefusalWritesNothing:
         ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", cli))
-            stack.enter_context(
-                patch(
-                    "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
-                )
-            )
+            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
             stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
             stack.enter_context(patch("acm_switchover._write_python_report"))
             restore = stack.enter_context(
@@ -979,9 +875,7 @@ class TestIdentityBindingPrecedesNoRefusal:
             ),
         ],
     )
-    def test_the_refused_state_file_is_unchanged(
-        self, tmp_path, first_write, fields, argv, primary
-    ):
+    def test_the_refused_state_file_is_unchanged(self, tmp_path, first_write, fields, argv, primary):
         path = _cli_journal_state(tmp_path, first_write, primary, **fields)
         raw = json.loads(path.read_text())
         raw.pop("hub_identities", None)
@@ -1037,14 +931,9 @@ class TestIdentityBindingPrecedesNoRefusal:
                 "cluster_uid": uid,
             }
             clients.append(client)
-        args = argparse.Namespace(
-            force=True, restore_only=False, dry_run=False, validate_only=False
-        )
+        args = argparse.Namespace(force=True, restore_only=False, dry_run=False, validate_only=False)
         acm_switchover._bind_runtime_hub_identities(args, state, clients[0], clients[1])
-        assert (
-            json.loads(path.read_text())["hub_identities"]["primary"]["cluster_uid"]
-            == "uid-a"
-        )
+        assert json.loads(path.read_text())["hub_identities"]["primary"]["cluster_uid"] == "uid-a"
 
 
 class TestArgocdRepauseMarker:
@@ -1053,25 +942,14 @@ class TestArgocdRepauseMarker:
     def test_round_trip_is_forced_durable(self, state, record):
         assert record.argocd_repause_required() is None
         with patch.object(state, "flush_state", wraps=state.flush_state) as flush:
-            record.record_argocd_repause_required(
-                "activation", "2024-01-01T00:00:00+00:00"
-            )
+            record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
         flush.assert_called_once()
-        assert (
-            RunRecord(StateManager(state.state_file)).argocd_repause_required()
-            == "activation"
-        )
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() == "activation"
         record.clear_argocd_repause_required()
-        assert (
-            RunRecord(StateManager(state.state_file)).argocd_repause_required() is None
-        )
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() is None
 
-    @pytest.mark.parametrize(
-        "stored", ["activation", {}, {"failed_phase": ""}, {"failed_phase": 3}]
-    )
-    def test_a_malformed_marker_is_never_read_as_discharged(
-        self, state, record, stored
-    ):
+    @pytest.mark.parametrize("stored", ["activation", {}, {"failed_phase": ""}, {"failed_phase": 3}])
+    def test_a_malformed_marker_is_never_read_as_discharged(self, state, record, stored):
         state.state["config"][run_record_module._KEY_ARGOCD_REPAUSE_REQUIRED] = stored
         with pytest.raises(run_record_module.StateStructureError):
             record.argocd_repause_required()
@@ -1083,21 +961,14 @@ class TestArgocdRepauseMarker:
                 record.clear_argocd_repause_required()
         assert record.argocd_repause_required() == "activation"
         state.add_error("later write", "activation")
-        assert (
-            RunRecord(StateManager(state.state_file)).argocd_repause_required()
-            == "activation"
-        )
+        assert RunRecord(StateManager(state.state_file)).argocd_repause_required() == "activation"
 
 
 class TestF5InterruptedMarkerClear:
     """Codex finding 5: an interruption during the clear never leaves the obligation only in memory."""
 
-    @pytest.mark.parametrize(
-        "interruption", ["before-flush", "first-write", "second-write"]
-    )
-    def test_an_interrupted_clear_keeps_the_marker_durable(
-        self, state, record, interruption
-    ):
+    @pytest.mark.parametrize("interruption", ["before-flush", "first-write", "second-write"])
+    def test_an_interrupted_clear_keeps_the_marker_durable(self, state, record, interruption):
         record.record_argocd_repause_required("activation", "2024-01-01T00:00:00+00:00")
         original_write, original_flush = state._write_state, state.flush_state
         calls = {"n": 0}

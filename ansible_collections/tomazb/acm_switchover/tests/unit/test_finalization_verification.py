@@ -158,54 +158,33 @@ def test_main_restores_saved_backup_schedule_from_checkpoint():
     ), "main.yml must rehydrate saved_backup_schedule from checkpoint operational_data"
 
 
-def test_verify_backups_waits_for_clean_completed_acm_owned_velero_backup():
-    """verify_backups.yml must wait for a clean completed ACM-owned Velero backup."""
+def test_verify_backups_routes_current_creation_and_health_to_the_domain_owner():
+    """Strict producer behavior is exercised in test_backup_continuity; this protects wiring."""
     tasks = _load_yaml("verify_backups.yml")
     timeout_task = next(
         task
         for task in tasks
         if "_acm_secondary_backup_verify_timeout_seconds" in task.get("ansible.builtin.set_fact", {})
     )
-    backup_wait_tasks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Backup"]
-
-    assert backup_wait_tasks, "verify_backups.yml must query Velero Backup resources"
-
-    timeout_expr = str(timeout_task["ansible.builtin.set_fact"]["_acm_secondary_backup_verify_timeout_seconds"])
-    assert "+ 600" in timeout_expr, "verify_backups.yml must add completion grace beyond the BackupSchedule cadence"
-
-    wait_task = backup_wait_tasks[0]
-    assert wait_task["kubernetes.core.k8s_info"]["api_version"] == "velero.io/v1"
-    assert "retries" in wait_task, "verify_backups.yml must wait for a new backup"
-    assert "delay" in wait_task, "verify_backups.yml must poll for a new backup"
-    until = str(wait_task.get("until", ""))
-    assert (
-        "acm_switchover_backup_schedule_enabled_at" in until
-    ), "verify_backups.yml must require a backup created after backups were enabled"
-    assert (
-        "cluster.open-cluster-management.io/backup-schedule-type" in until
-    ), "verify_backups.yml must filter to ACM-owned backups"
-    retries = str(wait_task.get("retries", ""))
-    assert (
-        "_acm_secondary_backup_verify_timeout_seconds" in retries
-    ), "verify_backups.yml must derive wait retries from a computed timeout"
-    assert (
-        len(backup_wait_tasks) >= 2
-    ), "verify_backups.yml must re-check the selected fresh backup until it reaches a terminal phase"
-    terminal_until = str(backup_wait_tasks[1].get("until", ""))
-    assert (
-        "PartiallyFailed" in terminal_until and "FailedValidation" in terminal_until
-    ), "verify_backups.yml must wait on failure terminal phases for the selected backup"
-    text = (FINALIZATION_TASKS / "verify_backups.yml").read_text()
-    assert "veleroSchedule" in text, "verify_backups.yml must derive timeout from BackupSchedule cadence"
-    assert (
-        "PartiallyFailed" in text and "FailedValidation" in text
-    ), "verify_backups.yml must fail unhealthy terminal backup phases"
-    assert "errors" in text, "verify_backups.yml must validate backup error count before passing"
-    assert (
-        "sort(attribute='metadata.creationTimestamp')" in text
-    ), "verify_backups.yml must validate the latest fresh backup, not the first healthy backup"
-    assert_tasks = [task for task in tasks if "ansible.builtin.assert" in task]
-    assert assert_tasks, "verify_backups.yml must fail when a fresh backup reaches an unhealthy terminal state"
+    timeout_expr = timeout_task["ansible.builtin.set_fact"]["_acm_secondary_backup_verify_timeout_seconds"]
+    assert "+ 600" in timeout_expr and "veleroSchedule" in timeout_expr
+    proof_task = next(task for task in tasks if "tomazb.acm_switchover.acm_backup_continuity" in task)
+    args = proof_task["tomazb.acm_switchover.acm_backup_continuity"]
+    assert args["inputs"] == {
+        "enabled_at_present": True,
+        "enabled_at": "{{ acm_switchover_backup_schedule_enabled_at }}",
+    }
+    assert "_acm_secondary_backup_verify_timeout_seconds" in args["timeout"]
+    assert args["context"] == "{{ acm_switchover_hubs.secondary.context }}"
+    assert args["kubeconfig"] == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    assert not any(key in args for key in ("resources", "inventory", "proof"))
+    publisher = next(
+        task["ansible.builtin.set_fact"]["acm_switchover_verify_backups_result"]
+        for task in tasks
+        if task.get("name") == "Publish backup verification result"
+    )
+    assert proof_task["register"] + ".proof.name" in publisher["backup_name"]
+    assert proof_task["register"] + ".proof.phase" in publisher["backup_phase"]
 
 
 def test_enable_backups_only_records_baseline_for_real_runs():
@@ -239,7 +218,7 @@ def test_verify_backups_skips_restore_only_when_no_backup_schedule_exists():
 
 
 def test_verify_backups_publish_preserves_existing_skip_result():
-    """A prior skip result must prevent the pass publisher from dereferencing unset backup facts."""
+    """Only the current invocation skip decision prevents publishing pass from unset proof."""
     tasks = _load_yaml("verify_backups.yml")
     publish_task = next(
         task
@@ -253,7 +232,18 @@ def test_verify_backups_publish_preserves_existing_skip_result():
         when = [when]
     when_text = " ".join(str(item) for item in when)
 
-    assert "acm_switchover_verify_backups_result is not defined" in when_text
+    assert "not (acm_switchover_backup_verification_skipped | bool)" in when_text
+    clear = tasks[0]["ansible.builtin.set_fact"]
+    assert clear["acm_switchover_backup_verification_skipped"] is False
+    skips = [
+        t
+        for t in tasks
+        if t.get("ansible.builtin.set_fact", {}).get("acm_switchover_backup_verification_skipped") is True
+    ]
+    assert len(skips) == 2
+    assert all(
+        t["ansible.builtin.set_fact"]["acm_switchover_verify_backups_result"]["status"] == "skipped" for t in skips
+    )
 
 
 def test_reset_auto_import_deletes_import_controller_configmap_when_sync_was_set():

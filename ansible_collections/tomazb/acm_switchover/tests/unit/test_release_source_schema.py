@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from yaml_contract_helpers import _workflow_entry_sections
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_checkpoint_record,
@@ -120,8 +121,8 @@ def test_switchover_report_contract_top_level_keys_are_stable() -> None:
 
     assert "rescue" not in outer
     assert "always" in outer
-    assert outer["block"][2].get("name") == "Run post-barrier switchover phases"
-    assert "always" not in outer["block"][2]
+    phases = _workflow_entry_sections(outer)[3]
+    assert "always" not in phases
     assert contract is not None, "Build switchover report contract task not found in switchover.yml"
     assert contract["schema_version"] == "1.0"
     assert contract["source"] == "tomazb.acm_switchover"

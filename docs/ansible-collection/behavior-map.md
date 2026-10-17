@@ -19,7 +19,8 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/primary_prep.py` | `roles/primary_prep/` | 3 |
 | `modules/activation.py` | `roles/activation/` | 3 |
 | `modules/post_activation.py` | `roles/post_activation/` | 3 |
-| `modules/finalization.py` | `roles/finalization/`; Python Backup continuity baseline/polls and integrity fallback use the shared strict reader. Collection `verify_backups.yml` independently checks the persisted enable timestamp and clean completion. | 3 |
+| `modules/finalization.py` and `modules/backup_continuity.py` | `roles/finalization/`, `plugins/module_utils/backup_continuity.py` and `plugins/modules/acm_backup_continuity.py`; independent strict inventory, creation-boundary and terminal identity/health proof. Python retains a recorded name; Collection retains latest-fresh selection. | 3 |
+| `lib/workflow.py`, `lib/operation_runners.py`, CLI Backup proof callback and completed bootstrap/outcomes | `roles/finalization/tasks/assess_completed.yml`, `verify_backup_proof.yml`, and both operation playbooks. Completed proof precedes checkpoint entry/rescue; active history proof follows required re-pause and precedes mutation. See [usage](../operations/usage.md#backup-continuity-and-historical-checkpoints) for the #342 candidate and #367 acceptance hold. | 3 |
 | `modules/backup_schedule.py` | `roles/finalization/tasks/enable_backups.yml`, `roles/finalization/tasks/repair_backup_schedule_collision.yml` | 3 |
 | `modules/decommission.py` | `roles/decommission/`, with the standalone phase lifecycle in `playbooks/decommission.yml`. The shared phase machine, UID-preconditioned guarded delete, durable per-resource phase records, and destination-observability gate are each mirrored independently; the MultiClusterHub substep adds operator-identity capture and owner-chain Pod classification, orchestrated by `roles/decommission/tasks/delete_multiclusterhub.yml` — see the guarded-delete and identity rows below, the *MultiClusterObservability teardown boundary* paragraph, and the *MultiClusterHub identity ownership split* paragraph later in [Current-to-Collection Mapping](#current-to-collection-mapping) | 6 |
 | `lib/rbac_validator.py` | `roles/preflight/` validation behavior | 2 |
@@ -39,8 +40,8 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/decommission_identity.py` (`capture_operator_identity`, `classify_pods`) | `plugins/modules/acm_pod_owner_classify.py` (`capture_identity` and `classify` operations), `plugins/module_utils/pod_owner_classify.py` | 6 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py`. A corrupt checkpoint (invalid JSON, including bytes that are not valid UTF-8, or a non-object top level) is preserved in place with a forensic copy and blocks later runs, as `StateManager` does for a corrupt state file (R4-04 PR B) | 4 |
 
-In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint
-preflight runs the same load + verification path as `execute` mode — including
+Outside completed Backup assessment, in `validate` mode
+(`acm_switchover_execution.mode: validate`), ordinary checkpoint preflight runs the same load + verification path as `execute` mode — including
 hub-identity binding and `reset_from` handling — but does **not** persist any
 checkpoint transitions or perform mutations. This surfaces misconfigured
 checkpoints before an actual execute-mode run.

@@ -1,13 +1,14 @@
 """Read-only Backup continuity decisions, independent of lifecycle and storage."""
 
-import re
 import time
 from datetime import datetime, timezone
 from typing import Mapping
 
-ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
-ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
-ACM_BACKUP_SCHEDULE_TYPES = frozenset({"managedClusters", "credentials", "resources"})
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
+)
 
 
 class BackupContinuityError(RuntimeError):
@@ -31,7 +32,7 @@ def _timestamp(value, reason):
 
 
 def resolve_enable_boundary(inputs: Mapping, *, observed_at: datetime) -> datetime:
-    """Use the raw saved boundary, or the single absent-only Python legacy step."""
+    """Require the raw saved boundary; Collection checkpoints have no step fallback."""
     if not isinstance(inputs, Mapping) or inputs.get("invalid_reason"):
         raise BackupContinuityError("invalid_backup_evidence")
     present = inputs.get("enabled_at_present")
@@ -58,8 +59,8 @@ def is_acm_owned(backup):
     )
 
 
-def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
-    """Validate one current object's creation, ownership, identity and health."""
+def _candidate_identity_creation(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
+    """Validate the fields needed to select and bind a current candidate."""
     if not isinstance(backup, dict) or not isinstance(backup.get("metadata"), dict):
         raise BackupContinuityError("invalid_backup_identity")
     metadata = backup["metadata"]
@@ -75,6 +76,18 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
         raise BackupContinuityError("invalid_backup_creation")
     if created < enabled_at:
         raise BackupContinuityError("backup_predates_enable")
+    return {"name": name, "uid": uid, "created_at": created.isoformat()}
+
+
+def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
+    """Validate the selected object's creation, ownership, identity and health."""
+    proof = _candidate_identity_creation(
+        backup,
+        enabled_at=enabled_at,
+        observed_at=observed_at,
+        expected_name=expected_name,
+        expected_uid=expected_uid,
+    )
     status = backup.get("status")
     if not isinstance(status, dict):
         raise BackupContinuityError("invalid_backup_status")
@@ -93,7 +106,7 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
             raise BackupContinuityError("invalid_backup_status")
         if error_count:
             raise BackupContinuityError("backup_errors")
-    return {"name": name, "uid": uid, "created_at": created.isoformat(), "phase": phase}
+    return {**proof, "phase": phase}
 
 
 def verify_backup_continuity(api_client, *, enabled_at, timeout, poll_interval):
@@ -105,11 +118,18 @@ def verify_backup_continuity(api_client, *, enabled_at, timeout, poll_interval):
 
     def read(mode, name=None):
         status, resources, _revision = strict_read(
-            api_client, read_mode=mode, api_version="velero.io/v1", kind="Backup",
-            resource_name="backups", namespace=BACKUP_NAMESPACE, name=name,
+            api_client,
+            read_mode=mode,
+            api_version="velero.io/v1",
+            kind="Backup",
+            resource_name="backups",
+            namespace=BACKUP_NAMESPACE,
+            name=name,
         )
         if status != "ok":
-            raise BackupContinuityError("backup_inventory_unavailable" if mode == "list" else "recorded_backup_unavailable")
+            raise BackupContinuityError(
+                "backup_inventory_unavailable" if mode == "list" else "recorded_backup_unavailable"
+            )
         return resources
 
     def select(items):
@@ -118,13 +138,15 @@ def verify_backup_continuity(api_client, *, enabled_at, timeout, poll_interval):
             if not is_acm_owned(backup):
                 continue
             try:
-                proof = validate_backup(backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc))
+                proof = _candidate_identity_creation(
+                    backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc)
+                )
             except BackupContinuityError as exc:
                 if exc.reason == "backup_predates_enable":
                     continue
                 raise
             candidates.append(proof)
-        return min(candidates, key=lambda proof: datetime.fromisoformat(proof["created_at"])) if candidates else None
+        return max(candidates, key=lambda proof: datetime.fromisoformat(proof["created_at"])) if candidates else None
 
     baseline = read("list")  # Never manufacture inventory from an unreadable initial observation.
     selected = select(baseline)
@@ -141,8 +163,11 @@ def verify_backup_continuity(api_client, *, enabled_at, timeout, poll_interval):
             if len(resources) != 1:
                 raise BackupContinuityError("recorded_backup_unavailable")
             proof = validate_backup(
-                resources[0], enabled_at=enabled_at, observed_at=datetime.now(timezone.utc),
-                expected_name=selected["name"], expected_uid=selected["uid"],
+                resources[0],
+                enabled_at=enabled_at,
+                observed_at=datetime.now(timezone.utc),
+                expected_name=selected["name"],
+                expected_uid=selected["uid"],
             )
             if proof["phase"] == "Completed":
                 return proof

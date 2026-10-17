@@ -90,9 +90,7 @@ class TestArgParsing:
                 parse_args()
 
         # old-hub-action is also required
-        with patch(
-            "sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]
-        ):
+        with patch("sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]):
             with pytest.raises(SystemExit):
                 parse_args()
 
@@ -106,9 +104,7 @@ class TestArgParsing:
 
     def test_required_args_still_apply_to_decommission(self):
         """Decommission is not a standalone mode; method and old-hub-action remain required."""
-        with patch(
-            "sys.argv", ["script.py", "--decommission", "--primary-context", "old-hub"]
-        ):
+        with patch("sys.argv", ["script.py", "--decommission", "--primary-context", "old-hub"]):
             with pytest.raises(SystemExit):
                 parse_args()
 
@@ -145,24 +141,14 @@ class TestArgParsing:
                 parse_args()
 
         assert exc_info.value.code == 0
-        help_text = " ".join(capsys.readouterr().out.split()).replace(
-            "--restore- only", "--restore-only"
-        )
-        assert (
-            "Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)"
-            in help_text
-        )
-        assert (
-            "Kubernetes context for secondary hub (required except --decommission/--setup)"
-            in help_text
-        )
+        help_text = " ".join(capsys.readouterr().out.split()).replace("--restore- only", "--restore-only")
+        assert "Kubernetes context for primary hub (required unless --restore-only/--argocd-resume-only)" in help_text
+        assert "Kubernetes context for secondary hub (required except --decommission/--setup)" in help_text
         assert (
             "Switchover method: passive (continuous sync) or full (one-time restore) "
             "(required unless --setup/--restore-only/--argocd-resume-only)"
         ) in help_text
-        assert (
-            "Action for old primary hub after switchover (required unless" in help_text
-        )
+        assert "Action for old primary hub after switchover (required unless" in help_text
 
     def test_mutually_exclusive_modes(self):
         """Test that mutually exclusive flags raise error."""
@@ -440,9 +426,7 @@ class TestArgParsing:
         assert args.cleanup_repair_reason == "deleted by this run"
         assert args.cleanup_repair_evidence == ["audit-log", "oc get restore"]
         assert args.cleanup_repair_run_id == "not-validated-by-argparse"
-        assert (
-            args.cleanup_repair_operation_id == "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
-        )
+        assert args.cleanup_repair_operation_id == "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 
     def test_waiver_scope_choices_are_fixed(self):
         # Every other required switchover argument is present, so the scope is the only fault.
@@ -511,9 +495,7 @@ class TestForceWithCompletedState:
         state.state["current_phase"] = Phase.COMPLETED.value
         from lib.constants import STALE_STATE_THRESHOLD
 
-        stale_time = datetime.now(timezone.utc) - timedelta(
-            seconds=STALE_STATE_THRESHOLD + 1
-        )
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
         state.state["last_updated"] = stale_time.isoformat()
         state._write_state(state.state)
 
@@ -557,39 +539,25 @@ class TestForceWithCompletedState:
 class TestCompletedStateTimestampHandling:
     """Completed validation never resets, replays preflight or refreshes history."""
 
-    @pytest.mark.parametrize(
-        "timestamp", [None, "not-a-timestamp", "2020-01-01T00:00:00+00:00", "recent"]
-    )
+    @pytest.mark.parametrize("timestamp", [None, "not-a-timestamp", "2020-01-01T00:00:00+00:00", "recent"])
     @pytest.mark.parametrize("force", [False, True])
     @pytest.mark.parametrize("validate_only", [False, True])
-    def test_age_gate_preserves_history_and_never_replays(
-        self, tmp_path, timestamp, force, validate_only
-    ):
+    def test_age_gate_preserves_history_and_never_replays(self, tmp_path, timestamp, force, validate_only):
         path = tmp_path / "state.json"
         state = StateManager(str(path))
         state.state["current_phase"] = Phase.COMPLETED.value
         if timestamp is None:
             state.state.pop("last_updated", None)
         else:
-            state.state["last_updated"] = (
-                datetime.now(timezone.utc).isoformat()
-                if timestamp == "recent"
-                else timestamp
-            )
+            state.state["last_updated"] = datetime.now(timezone.utc).isoformat() if timestamp == "recent" else timestamp
         state._write_state(state.state)
         before = path.read_bytes()
         reloaded = StateManager(str(path))
         args = make_switchover_args(force=force, validate_only=validate_only)
-        with patch(
-            "acm_switchover._verify_backup_continuity_entry", return_value=True
-        ) as proof, patch(
+        with patch("acm_switchover._verify_backup_continuity_entry", return_value=True) as proof, patch(
             "acm_switchover._run_phase_preflight"
-        ) as preflight, patch.object(
-            reloaded, "reset"
-        ) as reset:
-            assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is (
-                timestamp == "recent"
-            )
+        ) as preflight, patch.object(reloaded, "reset") as reset:
+            assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is (timestamp == "recent")
         assert proof.call_count == (1 if timestamp == "recent" else 0)
         preflight.assert_not_called()
         reset.assert_not_called()
@@ -601,13 +569,10 @@ class TestCompletedStateTimestampHandling:
         state = StateManager(str(path))
         state.set_phase(Phase.COMPLETED)
         before = path.read_bytes()
-        with patch(
-            "acm_switchover._verify_backup_continuity_entry", return_value=False
-        ), patch("acm_switchover._run_phase_preflight") as preflight:
-            assert (
-                run_switchover(make_switchover_args(), state, Mock(), Mock(), Mock())
-                is False
-            )
+        with patch("acm_switchover._verify_backup_continuity_entry", return_value=False), patch(
+            "acm_switchover._run_phase_preflight"
+        ) as preflight:
+            assert run_switchover(make_switchover_args(), state, Mock(), Mock(), Mock()) is False
         preflight.assert_not_called()
         assert path.read_bytes() == before
 
@@ -667,9 +632,7 @@ class TestSwitchoverPhaseFlow:
         post_activation.assert_called_once()
         finalization.assert_called_once()
 
-    def test_run_switchover_fails_when_successful_handler_leaves_wrong_phase(
-        self, tmp_path
-    ):
+    def test_run_switchover_fails_when_successful_handler_leaves_wrong_phase(self, tmp_path):
         """A True handler result must not allow COMPLETED when durable phase state is wrong."""
         from lib.utils import Phase, StateManager
 
@@ -690,9 +653,7 @@ class TestSwitchoverPhaseFlow:
             phase_state.set_phase(Phase.INIT)
             return True
 
-        with patch(
-            "acm_switchover._run_phase_preflight", side_effect=bad_preflight
-        ), patch(
+        with patch("acm_switchover._run_phase_preflight", side_effect=bad_preflight), patch(
             "acm_switchover._attempt_argocd_resume_on_failure"
         ) as resume_on_failure:
             result = run_switchover(args, state, Mock(), Mock(), Mock())
@@ -703,9 +664,7 @@ class TestSwitchoverPhaseFlow:
         assert "expected phase" in state.get_errors()[-1]["error"]
         resume_on_failure.assert_called_once()
 
-    def test_run_switchover_valid_resume_paths_complete_with_expected_phases(
-        self, tmp_path
-    ):
+    def test_run_switchover_valid_resume_paths_complete_with_expected_phases(self, tmp_path):
         """Phase assertions must not block legitimate mid-flow resume states."""
         from lib.utils import Phase, StateManager
 
@@ -744,9 +703,7 @@ class TestSwitchoverPhaseFlow:
         post_activation.assert_called_once()
         finalization.assert_called_once()
 
-    def test_run_switchover_validate_only_ignores_resumed_non_init_phase(
-        self, tmp_path
-    ):
+    def test_run_switchover_validate_only_ignores_resumed_non_init_phase(self, tmp_path):
         """Validate-only must run preflight only, even when state has progressed beyond INIT."""
         from lib.utils import Phase, StateManager
 
@@ -763,9 +720,7 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with patch(
-            "acm_switchover._run_phase_preflight", return_value=True
-        ) as preflight, patch(
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
             "acm_switchover._run_phase_primary_prep", return_value=True
         ) as primary_prep, patch(
             "acm_switchover._run_phase_activation",
@@ -818,9 +773,7 @@ class TestSwitchoverPhaseFlow:
         assert result is True
         assert state.get_current_phase() == Phase.POST_ACTIVATION
 
-    def test_run_switchover_validate_only_restores_phase_on_preflight_failure(
-        self, tmp_path
-    ):
+    def test_run_switchover_validate_only_restores_phase_on_preflight_failure(self, tmp_path):
         """Validate-only must restore the original phase even when preflight fails."""
         from lib.utils import Phase, StateManager
 
@@ -900,9 +853,7 @@ class TestSwitchoverPhaseFlow:
         assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
-        log_text = "\n".join(
-            str(call.args[0]) for call in logger.info.call_args_list if call.args
-        )
+        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
         assert DRY_RUN_SWITCHOVER_COMPLETION_MESSAGE in log_text
         assert DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE in log_text
         assert SWITCHOVER_COMPLETED_SUCCESS_MESSAGE not in log_text
@@ -960,9 +911,7 @@ class TestSwitchoverPhaseFlow:
         assert reloaded._get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
-        log_text = "\n".join(
-            str(call.args[0]) for call in logger.info.call_args_list if call.args
-        )
+        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
         assert DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE in log_text
         assert DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE in log_text
         assert RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE not in log_text
@@ -976,20 +925,14 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = PauseSummary(
-                newly_paused=1, run_id="run-1"
-            )
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
             state._get_config.return_value = "run-1"
 
-            result = _run_restore_only_argocd_pause(
-                args, state, None, secondary, logger
-            )
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is True
         coordinator_class.assert_called_once_with(state, dry_run=True)
-        coordinator.pause_hubs.assert_called_once_with(
-            [(secondary, HUB_ROLE_SECONDARY)]
-        )
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_not_called()
 
     def test_restore_only_argocd_dry_run_pause_reports_run_id_from_summary(self):
@@ -1003,24 +946,14 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = PauseSummary(
-                newly_paused=2, run_id="run-9", dry_run=True
-            )
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=2, run_id="run-9", dry_run=True)
 
-            result = _run_restore_only_argocd_pause(
-                args, state, None, secondary, logger
-            )
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is True
         coordinator.status.assert_not_called()
-        messages = [
-            call.args[0] % call.args[1:]
-            for call in logger.info.call_args_list
-            if call.args
-        ]
-        summary_lines = [
-            message for message in messages if message.startswith("Argo CD: ")
-        ]
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
+        summary_lines = [message for message in messages if message.startswith("Argo CD: ")]
         assert len(summary_lines) == 1
         assert "2 Application(s) would be paused" in summary_lines[0]
         assert "run_id=run-9" in summary_lines[0]
@@ -1036,20 +969,11 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = PauseSummary(
-                newly_paused=1, run_id="run-9", dry_run=True
-            )
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-9", dry_run=True)
 
-            assert (
-                _run_restore_only_argocd_pause(args, state, None, secondary, logger)
-                is True
-            )
+            assert _run_restore_only_argocd_pause(args, state, None, secondary, logger) is True
 
-        messages = [
-            call.args[0] % call.args[1:]
-            for call in logger.info.call_args_list
-            if call.args
-        ]
+        messages = [call.args[0] % call.args[1:] for call in logger.info.call_args_list if call.args]
         assert any("would be paused" in message for message in messages)
 
     def test_restore_only_argocd_dry_run_pause_fails_on_blockers(self):
@@ -1066,15 +990,11 @@ class TestSwitchoverPhaseFlow:
             coordinator = coordinator_class.return_value
             coordinator.pause_hubs.return_value = PauseSummary(blocked=1)
 
-            result = _run_restore_only_argocd_pause(
-                args, state, None, secondary, logger
-            )
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is False
         coordinator_class.assert_called_once_with(state, dry_run=True)
-        coordinator.pause_hubs.assert_called_once_with(
-            [(secondary, HUB_ROLE_SECONDARY)]
-        )
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         fail_phase.assert_called_once_with(
             state,
             "Argo CD auto-sync pause blocked for 1 Application(s); pause the owning ApplicationSet first",
@@ -1091,24 +1011,16 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgocdPauseRegister") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = PauseSummary(
-                newly_paused=1, run_id="run-1"
-            )
+            coordinator.pause_hubs.return_value = PauseSummary(newly_paused=1, run_id="run-1")
 
-            result = _run_restore_only_argocd_pause(
-                args, state, None, secondary, logger
-            )
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is True
         coordinator_class.assert_called_once_with(state, dry_run=False)
-        coordinator.pause_hubs.assert_called_once_with(
-            [(secondary, HUB_ROLE_SECONDARY)]
-        )
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_called_once_with(STEP_PAUSE_ARGOCD_APPS)
 
-    def test_run_switchover_resume_from_failed_state_retries_failed_phase(
-        self, tmp_path
-    ):
+    def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
         from lib.utils import Phase, StateManager
 
@@ -1116,9 +1028,7 @@ class TestSwitchoverPhaseFlow:
         state = StateManager(str(state_file))
         # Simulate a failure during POST_ACTIVATION
         state.set_phase(Phase.POST_ACTIVATION)
-        state.add_error(
-            "disable-auto-import annotation still present", Phase.POST_ACTIVATION.value
-        )
+        state.add_error("disable-auto-import annotation still present", Phase.POST_ACTIVATION.value)
         state.set_phase(Phase.FAILED)
 
         args = SimpleNamespace(
@@ -1130,13 +1040,9 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with patch(
-            "acm_switchover._run_phase_preflight", return_value=True
-        ) as preflight, patch(
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
             "acm_switchover._run_phase_primary_prep", return_value=True
-        ) as primary_prep, patch(
-            "acm_switchover._run_phase_activation", return_value=True
-        ) as activation, patch(
+        ) as primary_prep, patch("acm_switchover._run_phase_activation", return_value=True) as activation, patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._successful_phase(Phase.POST_ACTIVATION),
         ) as post_activation, patch(
@@ -1155,18 +1061,14 @@ class TestSwitchoverPhaseFlow:
         post_activation.assert_called_once()
         finalization.assert_called_once()
 
-    def test_run_switchover_resume_from_failed_secondary_verify_retries_activation_path(
-        self, tmp_path
-    ):
+    def test_run_switchover_resume_from_failed_secondary_verify_retries_activation_path(self, tmp_path):
         """Verify FAILED resume supports legacy SECONDARY_VERIFY by continuing from activation."""
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
         state.set_phase(Phase.SECONDARY_VERIFY)
-        state.add_error(
-            "legacy secondary verification failure", Phase.SECONDARY_VERIFY.value
-        )
+        state.add_error("legacy secondary verification failure", Phase.SECONDARY_VERIFY.value)
         state.set_phase(Phase.FAILED)
 
         args = SimpleNamespace(
@@ -1178,9 +1080,7 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with patch(
-            "acm_switchover._run_phase_preflight", return_value=True
-        ) as preflight, patch(
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
             "acm_switchover._run_phase_primary_prep", return_value=True
         ) as primary_prep, patch(
             "acm_switchover._run_phase_activation",
@@ -1202,9 +1102,7 @@ class TestSwitchoverPhaseFlow:
         post_activation.assert_called_once()
         finalization.assert_called_once()
 
-    def test_run_switchover_failed_state_without_error_phase_requires_force(
-        self, tmp_path
-    ):
+    def test_run_switchover_failed_state_without_error_phase_requires_force(self, tmp_path):
         """FAILED state without determinable error phase should raise a domain error."""
         from lib.utils import Phase, StateManager
 
@@ -1222,14 +1120,10 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(
-            SwitchoverError, match="Use --force to reset state and retry"
-        ):
+        with pytest.raises(SwitchoverError, match="Use --force to reset state and retry"):
             run_switchover(args, state, Mock(), Mock(), Mock())
 
-    def test_run_switchover_failed_state_with_non_runnable_error_phase_requires_force(
-        self, tmp_path
-    ):
+    def test_run_switchover_failed_state_with_non_runnable_error_phase_requires_force(self, tmp_path):
         """FAILED resume should refuse phases that are not valid restart points."""
         from lib.utils import Phase, StateManager
 
@@ -1248,9 +1142,7 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(
-            SwitchoverError, match="Use --force to reset state and retry"
-        ):
+        with pytest.raises(SwitchoverError, match="Use --force to reset state and retry"):
             run_switchover(args, state, Mock(), Mock(), Mock())
 
     def test_run_switchover_failed_state_force_resets_and_retries(self, tmp_path):
@@ -1331,9 +1223,7 @@ class TestSwitchoverPhaseFlow:
         assert state.get_current_phase() == Phase.FAILED
         assert len(state.get_errors()) == 1
 
-    def test_run_switchover_validate_only_preflight_failure_preserves_failed_retry_phase(
-        self, tmp_path
-    ):
+    def test_run_switchover_validate_only_preflight_failure_preserves_failed_retry_phase(self, tmp_path):
         """A validate-only failure from FAILED state must not replace the durable retry phase."""
         from lib.utils import Phase, StateManager
 
@@ -1425,9 +1315,7 @@ class TestSwitchoverPhaseFlow:
     def test_fail_phase_skips_exact_duplicate_same_phase_error(self):
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
-        state.get_errors.return_value = [
-            {"phase": "finalization", "error": "current failure"}
-        ]
+        state.get_errors.return_value = [{"phase": "finalization", "error": "current failure"}]
         logger = Mock()
 
         result = _fail_phase(state, "current failure", logger)
@@ -1443,9 +1331,7 @@ class TestSwitchoverPhaseFlow:
         _fail_phase should NOT overwrite it with a generic wrapper message."""
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
-        state.get_errors.return_value = [
-            {"phase": "finalization", "error": "specific root cause"}
-        ]
+        state.get_errors.return_value = [{"phase": "finalization", "error": "specific root cause"}]
         logger = Mock()
 
         result = _fail_phase(state, "Finalization failed!", logger)
@@ -1471,21 +1357,15 @@ class TestSwitchoverPhaseFlow:
         self,
     ):
         state = Mock()
-        state.get_current_phase.return_value = SimpleNamespace(
-            value="preflight_validation"
-        )
-        state.get_errors.return_value = [
-            {"phase": "preflight_validation", "error": "old failure"}
-        ]
+        state.get_current_phase.return_value = SimpleNamespace(value="preflight_validation")
+        state.get_errors.return_value = [{"phase": "preflight_validation", "error": "old failure"}]
         state.get_retry_error_baseline.return_value = {
             "phase": "preflight_validation",
             "count": 1,
         }
         logger = Mock()
 
-        result = _fail_phase(
-            state, "Pre-flight validation failed! Cannot proceed.", logger
-        )
+        result = _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
 
         assert result is False
         state.add_error.assert_called_once_with(
@@ -1544,9 +1424,7 @@ class TestOperationRunnerDelegation:
         secondary = Mock()
         logger = Mock()
 
-        with patch(
-            "acm_switchover.operation_runners.run_switchover_impl", return_value=True
-        ) as impl:
+        with patch("acm_switchover.operation_runners.run_switchover_impl", return_value=True) as impl:
             result = _run_switchover_impl(args, state, primary, secondary, logger)
 
         assert result is True
@@ -1566,9 +1444,7 @@ class TestOperationRunnerDelegation:
         secondary = Mock()
         logger = Mock()
 
-        with patch(
-            "acm_switchover.operation_runners.run_restore_only_impl", return_value=True
-        ) as impl:
+        with patch("acm_switchover.operation_runners.run_restore_only_impl", return_value=True) as impl:
             result = _run_restore_only_impl(args, state, secondary, logger)
 
         assert result is True
@@ -1589,9 +1465,7 @@ class TestOperationRunnerDelegation:
         secondary = Mock()
         logger = Mock()
 
-        with patch(
-            "acm_switchover.operation_runners.execute_operation", return_value=True
-        ) as dispatch:
+        with patch("acm_switchover.operation_runners.execute_operation", return_value=True) as dispatch:
             result = _execute_operation(args, state, primary, secondary, logger)
 
         assert result is True
@@ -1649,20 +1523,14 @@ class TestArgocdResumeDelegation:
         secondary = Mock()
         logger = Mock()
 
-        with patch(
-            "acm_switchover.argocd_resume.run_argocd_resume_only", return_value=True
-        ) as run_resume:
+        with patch("acm_switchover.argocd_resume.run_argocd_resume_only", return_value=True) as run_resume:
             result = _run_argocd_resume_only(args, state, primary, secondary, logger)
 
         assert result is True
-        run_resume.assert_called_once_with(
-            args, state, primary, secondary, logger, kube_client_factory=KubeClient
-        )
+        run_resume.assert_called_once_with(args, state, primary, secondary, logger, kube_client_factory=KubeClient)
 
     def test_attempt_argocd_resume_on_failure_delegates_to_lib_module(self):
-        args = SimpleNamespace(
-            argocd_resume_on_failure=True, restore_only=False, force=False
-        )
+        args = SimpleNamespace(argocd_resume_on_failure=True, restore_only=False, force=False)
         state = Mock()
         primary = Mock()
         secondary = Mock()
@@ -2008,9 +1876,7 @@ class TestMainGitOpsReporting:
         collector.print_report.assert_called_once()
         state.add_error.assert_not_called()
 
-    def test_main_resume_only_uses_existing_reversed_default_state_file(
-        self, tmp_path, monkeypatch
-    ):
+    def test_main_resume_only_uses_existing_reversed_default_state_file(self, tmp_path, monkeypatch):
         args = self._base_args()
         args.argocd_resume_only = True
         args.state_file = None
@@ -2074,9 +1940,7 @@ class TestMainGitOpsReporting:
         state_manager.assert_called_once_with(str(state_path))
         assert args.state_file == str(state_path)
 
-    def test_main_resume_only_missing_state_file_exits_before_state_manager(
-        self, tmp_path
-    ):
+    def test_main_resume_only_missing_state_file_exits_before_state_manager(self, tmp_path):
         args = self._base_args()
         args.argocd_resume_only = True
         missing_state_file = tmp_path / "missing-state.json"
@@ -2109,12 +1973,8 @@ class TestMainGitOpsReporting:
         from acm_switchover import _resolve_state_file
 
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
-        (tmp_path / "switchover-primary-a__secondary-b.json").write_text(
-            "{}", encoding="utf-8"
-        )
-        (tmp_path / "switchover-restore-only__secondary-b.json").write_text(
-            "{}", encoding="utf-8"
-        )
+        (tmp_path / "switchover-primary-a__secondary-b.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "switchover-restore-only__secondary-b.json").write_text("{}", encoding="utf-8")
 
         with pytest.raises(ValueError, match="Multiple candidate state files found"):
             _resolve_state_file(
@@ -2197,9 +2057,7 @@ class TestPrepareRuntime:
         primary_client = Mock(name="primary-client")
         kube_client = Mock(
             side_effect=(
-                RuntimeError(raw_error)
-                if failing_role == "primary"
-                else [primary_client, RuntimeError(raw_error)]
+                RuntimeError(raw_error) if failing_role == "primary" else [primary_client, RuntimeError(raw_error)]
             )
         )
 
@@ -2286,9 +2144,7 @@ class TestPrepareRuntime:
         state.ensure_contexts.assert_called_once_with("primary", None)
         state.ensure_hub_identities.assert_not_called()
 
-    def test_prepare_runtime_removes_existing_state_file_before_state_manager(
-        self, tmp_path
-    ):
+    def test_prepare_runtime_removes_existing_state_file_before_state_manager(self, tmp_path):
         args = TestMainGitOpsReporting._base_args()
         args.reset_state = True
         state_path = tmp_path / "state.json"
@@ -2296,9 +2152,7 @@ class TestPrepareRuntime:
         logger = Mock()
         state = Mock()
 
-        with patch(
-            "acm_switchover.StateManager", return_value=state
-        ) as state_manager, patch(
+        with patch("acm_switchover.StateManager", return_value=state) as state_manager, patch(
             "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
         ):
             runtime = _prepare_runtime(args, logger, str(state_path))
@@ -2449,9 +2303,7 @@ class TestBindRuntimeHubIdentities:
             },
         ],
     )
-    def test_bind_runtime_hub_identities_rejects_malformed_evidence_before_state(
-        self, identities
-    ):
+    def test_bind_runtime_hub_identities_rejects_malformed_evidence_before_state(self, identities):
         args = TestMainGitOpsReporting._base_args()
         state = Mock()
 
@@ -2561,17 +2413,13 @@ class TestBindRuntimeHubIdentities:
 class TestDecommissionAndSetupHelpers:
     """Tests for run_decommission, _get_default_state_dir and run_setup helpers."""
 
-    def test_get_default_state_dir_prefers_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_get_default_state_dir_prefers_env_var(self, monkeypatch: pytest.MonkeyPatch):
         from acm_switchover import _get_default_state_dir
 
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/custom-state-dir")
         assert _get_default_state_dir() == "/tmp/custom-state-dir"
 
-    def test_get_default_state_dir_falls_back_when_env_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_get_default_state_dir_falls_back_when_env_missing(self, monkeypatch: pytest.MonkeyPatch):
         from acm_switchover import _get_default_state_dir
 
         monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)
@@ -2580,9 +2428,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_uses_namespace_and_interactive_flag(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=False, skip_rbac_validation=False
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=False)
         primary = Mock()
         primary.namespace_exists.return_value = True
         state = Mock()
@@ -2614,9 +2460,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_respects_non_interactive_flag(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=True, skip_rbac_validation=False
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=True, skip_rbac_validation=False)
         primary = Mock()
         primary.namespace_exists.return_value = False
         state = Mock()
@@ -2643,9 +2487,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_returns_false_when_rbac_validation_fails(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=False, skip_rbac_validation=False
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=False)
         primary = Mock()
         primary.namespace_exists.return_value = False
         state = Mock()
@@ -2663,9 +2505,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_skips_rbac_validation_when_requested(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=False, skip_rbac_validation=True
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=True)
         primary = Mock()
         primary.namespace_exists.return_value = True
         state = Mock()
@@ -2693,9 +2533,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_returns_false_on_refusal(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=True, skip_rbac_validation=True
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=True, skip_rbac_validation=True)
         primary = Mock()
         primary.namespace_exists.return_value = True
         state = Mock()
@@ -2711,9 +2549,7 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_preserves_false_cli_result_on_banner_cancel(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(
-            dry_run=False, non_interactive=False, skip_rbac_validation=True
-        )
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=True)
         primary = Mock()
         primary.namespace_exists.return_value = True
         state = Mock()
@@ -2727,9 +2563,7 @@ class TestDecommissionAndSetupHelpers:
             )
             assert run_decommission(args, primary, state, logger) is False
 
-    def test_run_setup_successful_execution(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ):
+    def test_run_setup_successful_execution(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
 
         fake_script_dir = tmp_path
@@ -2751,9 +2585,7 @@ class TestDecommissionAndSetupHelpers:
         # Ensure required files are reported as existing
         monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
         monkeypatch.setattr("os.path.isfile", lambda path: True)
-        monkeypatch.setattr(
-            "os.path.abspath", lambda _: str(fake_script_dir / "dummy.py")
-        )
+        monkeypatch.setattr("os.path.abspath", lambda _: str(fake_script_dir / "dummy.py"))
         monkeypatch.setattr("os.path.dirname", lambda p: str(fake_script_dir))
 
         with patch("subprocess.run") as run:
@@ -2774,9 +2606,7 @@ class TestDecommissionAndSetupHelpers:
                 args.output_dir,
             ]
 
-    def test_run_setup_passes_include_decommission_flag(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ):
+    def test_run_setup_passes_include_decommission_flag(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
 
         fake_script_dir = tmp_path
@@ -2797,9 +2627,7 @@ class TestDecommissionAndSetupHelpers:
 
         monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
         monkeypatch.setattr("os.path.isfile", lambda path: True)
-        monkeypatch.setattr(
-            "os.path.abspath", lambda _: str(fake_script_dir / "dummy.py")
-        )
+        monkeypatch.setattr("os.path.abspath", lambda _: str(fake_script_dir / "dummy.py"))
         monkeypatch.setattr("os.path.dirname", lambda p: str(fake_script_dir))
 
         with patch("subprocess.run") as run:
@@ -2808,9 +2636,7 @@ class TestDecommissionAndSetupHelpers:
             assert run_setup(args, logger) is True
             assert run.call_args.args[0][-1] == "--include-decommission"
 
-    def test_run_setup_missing_kubeconfig_fails(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ):
+    def test_run_setup_missing_kubeconfig_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
 
         args = SimpleNamespace(
@@ -2843,9 +2669,7 @@ class TestPreflightPhase:
         validator.restore_only = False
         validator.primary = Mock()
         # A 403 on the strict LIST is a read failure, never an empty inventory (#340 E1).
-        validator.primary.list_managed_clusters_strict.return_value = (
-            StrictReadOutcome.error("read_failed")
-        )
+        validator.primary.list_managed_clusters_strict.return_value = StrictReadOutcome.error("read_failed")
         validator.reporter = ValidationReporter()
 
         assert validator._derive_expected_managed_cluster_names() == []
@@ -2855,9 +2679,7 @@ class TestPreflightPhase:
         assert "inventory_unreadable" in failures[0]["message"]
         validator.primary.list_custom_resources.assert_not_called()
 
-    def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(
-        self, tmp_path
-    ):
+    def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self, tmp_path):
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -2896,9 +2718,7 @@ class TestPreflightPhase:
         assert expectation.count == 2
         assert expectation.mode == MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
 
-    def test_restore_only_preflight_persists_empty_expected_managed_clusters(
-        self, tmp_path
-    ):
+    def test_restore_only_preflight_persists_empty_expected_managed_clusters(self, tmp_path):
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -2933,9 +2753,7 @@ class TestPreflightPhase:
         assert expectation.count == 0
         assert expectation.mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
 
-    def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(
-        self, tmp_path
-    ):
+    def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(self, tmp_path):
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -2964,9 +2782,7 @@ class TestPreflightPhase:
         assert kwargs["expected_managed_cluster_names"] == ["cluster-a", "cluster-b"]
         assert kwargs["enforce_expected_managed_cluster_names"] is True
 
-    def test_run_phase_activation_explicit_zero_keeps_expected_names_enforced(
-        self, tmp_path
-    ):
+    def test_run_phase_activation_explicit_zero_keeps_expected_names_enforced(self, tmp_path):
         """AC25: an explicit 0 lowers only the count floor; recorded names stay enforced."""
         from lib.run_record import RunRecord
         from lib.utils import StateManager
@@ -2996,9 +2812,7 @@ class TestPreflightPhase:
         assert kwargs["enforce_expected_managed_cluster_names"] is True
 
     @pytest.mark.parametrize("phase", ["activation", "post_activation"])
-    def test_explicit_minimum_is_an_additional_floor_beside_expected_names(
-        self, tmp_path, phase
-    ):
+    def test_explicit_minimum_is_an_additional_floor_beside_expected_names(self, tmp_path, phase):
         """AC25: an explicit N is a count floor added to, never replacing, the recorded names."""
         from lib.run_record import HubFacts, RunRecord
         from lib.utils import StateManager
@@ -3025,11 +2839,7 @@ class TestPreflightPhase:
             if phase == "activation"
             else "acm_switchover.PostActivationVerification"
         )
-        runner = (
-            _run_phase_activation
-            if phase == "activation"
-            else _run_phase_post_activation
-        )
+        runner = _run_phase_activation if phase == "activation" else _run_phase_post_activation
         with patch(target) as phase_class:
             phase_class.return_value.activate.return_value = True
             phase_class.return_value.verify.return_value = True
@@ -3045,9 +2855,7 @@ class TestPreflightPhase:
 
     @pytest.mark.parametrize("phase", ["activation", "post_activation"])
     @pytest.mark.parametrize("scope", ["activation", "post_activation", "both"])
-    def test_waiver_without_recorded_names_is_rejected_before_the_phase_runs(
-        self, tmp_path, phase, scope
-    ):
+    def test_waiver_without_recorded_names_is_rejected_before_the_phase_runs(self, tmp_path, phase, scope):
         """July section 2: a waiver is rejected when there is no expected name to waive."""
         from lib.run_record import HubFacts, RunRecord
         from lib.utils import StateManager
@@ -3067,9 +2875,7 @@ class TestPreflightPhase:
         )
         state = StateManager(str(tmp_path / "state.json"))
         run_record = RunRecord(state)
-        run_record.record_managed_cluster_expectation(
-            names=[], count=0, mode=MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
-        )
+        run_record.record_managed_cluster_expectation(names=[], count=0, mode=MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY)
         run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
 
         target = (
@@ -3077,20 +2883,12 @@ class TestPreflightPhase:
             if phase == "activation"
             else "acm_switchover.PostActivationVerification"
         )
-        runner = (
-            _run_phase_activation
-            if phase == "activation"
-            else _run_phase_post_activation
-        )
-        with patch(target) as phase_class, pytest.raises(
-            SwitchoverError, match="^waiver_expected_names_empty:"
-        ):
+        runner = _run_phase_activation if phase == "activation" else _run_phase_post_activation
+        with patch(target) as phase_class, pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
             runner(args, state, None, Mock(), Mock())
         phase_class.assert_not_called()
 
-    def test_waiver_does_not_change_enforcement_or_the_recorded_expectation(
-        self, tmp_path
-    ):
+    def test_waiver_does_not_change_enforcement_or_the_recorded_expectation(self, tmp_path):
         """The waiver never rewrites the expectation; activation receives the validated request to journal."""
         from lib.run_record import RunRecord
         from lib.utils import StateManager
@@ -3182,9 +2980,7 @@ class TestPreflightPhase:
             manage_auto_import_strategy=False,
             min_managed_clusters=None,
             skip_managed_cluster_expectations=True,
-            managed_cluster_expectation_waiver_scope=(
-                "post_activation" if restore_only else "both"
-            ),
+            managed_cluster_expectation_waiver_scope=("post_activation" if restore_only else "both"),
             managed_cluster_expectation_waiver_actor="operator@example.com",
             managed_cluster_expectation_waiver_reason="stale inventory",
             managed_cluster_expectation_waiver_request_id=None,
@@ -3203,17 +2999,13 @@ class TestPreflightPhase:
         run_record.record_hub_facts(HubFacts(secondary_has_observability=False))
         state.set_phase(phase_at_resume)
 
-        with patch(patched) as phase_dependency, pytest.raises(
-            SwitchoverError, match="^waiver_expected_names_empty:"
-        ):
+        with patch(patched) as phase_dependency, pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
             handler(args, state, Mock(), Mock(), Mock())
 
         assert phase_dependency.mock_calls == []
         assert state.get_current_phase() == phase_at_resume
 
-    def test_preflight_rejects_a_waiver_when_primary_has_no_expected_names(
-        self, tmp_path
-    ):
+    def test_preflight_rejects_a_waiver_when_primary_has_no_expected_names(self, tmp_path):
         """The waiver fails at preflight, before any phase could consume it."""
         from lib.utils import StateManager
 
@@ -3249,9 +3041,7 @@ class TestPreflightPhase:
             with pytest.raises(SwitchoverError, match="^waiver_expected_names_empty:"):
                 _run_phase_preflight(args, state, Mock(), Mock(), Mock())
 
-    def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(
-        self, tmp_path
-    ):
+    def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(self, tmp_path):
         from lib.run_record import RunRecord
         from lib.utils import StateManager
 
@@ -3302,9 +3092,7 @@ class TestPreflightPhase:
 
         with patch("acm_switchover.PostActivationVerification") as verification_class:
             verification_class.return_value.verify.return_value = True
-            assert (
-                _run_phase_post_activation(args, state, None, secondary, Mock()) is True
-            )
+            assert _run_phase_post_activation(args, state, None, secondary, Mock()) is True
 
         kwargs = verification_class.call_args.kwargs
         assert kwargs["min_managed_clusters"] == 1
@@ -3337,9 +3125,7 @@ class TestPreflightPhase:
             verification_class.return_value.verify.return_value = True
             assert _run_phase_post_activation(args, state, None, Mock(), Mock()) is True
 
-        assert verification_class.call_args.kwargs[
-            "managed_cluster_expectation_waiver"
-        ] == {
+        assert verification_class.call_args.kwargs["managed_cluster_expectation_waiver"] == {
             "scope": "post_activation",
             "actor": "operator@example.com",
             "reason": "stale list",
@@ -3386,9 +3172,7 @@ class TestPreflightPhase:
             skip_gitops_check=False,
             restore_only=False,
         )
-        report_argocd_impact.assert_called_once_with(
-            primary, secondary, logger, argocd_manage=True
-        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=True)
 
     def test_run_phase_preflight_honors_skip_observability_for_old_hub_finalization_rbac(
         self,
@@ -3496,10 +3280,7 @@ class TestPreflightPhase:
             _report_argocd_acm_impact(primary, secondary, logger)
 
         assert logger.warning.call_count == 2
-        assert any(
-            "Unable to complete Argo CD check" in call.args[0]
-            for call in logger.warning.call_args_list
-        )
+        assert any("Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list)
 
     @pytest.mark.parametrize(
         "side_effect",
@@ -3529,14 +3310,9 @@ class TestPreflightPhase:
             _report_argocd_acm_impact(primary, secondary, logger)
 
         assert logger.warning.call_count == 2
-        assert any(
-            "Unable to complete Argo CD check" in call.args[0]
-            for call in logger.warning.call_args_list
-        )
+        assert any("Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list)
 
-    def test_automatic_preflight_logs_only_argocd_aggregate_without_application_identity(
-        self, caplog
-    ):
+    def test_automatic_preflight_logs_only_argocd_aggregate_without_application_identity(self, caplog):
         """Automatic preflight must retain the advisory count without publishing Application identity."""
         args = SimpleNamespace(
             method="passive",
@@ -3578,9 +3354,7 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         for client in (primary, secondary):
-            client.get_custom_resource_advisory.return_value = {
-                "metadata": {"name": "crd"}
-            }
+            client.get_custom_resource_advisory.return_value = {"metadata": {"name": "crd"}}
             client.list_custom_resources_advisory.side_effect = list_resources
 
         config = {
@@ -3610,9 +3384,7 @@ class TestPreflightPhase:
         assert "INJECTED-APPLICATION-LINE" not in log_text
         assert "\x1b" not in log_text
 
-    def test_automatic_preflight_omits_credential_bearing_argocd_exception(
-        self, caplog
-    ):
+    def test_automatic_preflight_omits_credential_bearing_argocd_exception(self, caplog):
         """Automatic preflight discovery failure must remain advisory without publishing exception detail."""
         args = SimpleNamespace(
             method="passive",
@@ -3634,9 +3406,7 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         for client in (primary, secondary):
-            client.get_custom_resource_advisory.side_effect = ApiException(
-                status=401, reason=private_reason
-            )
+            client.get_custom_resource_advisory.side_effect = ApiException(status=401, reason=private_reason)
 
         config = {
             "primary_version": "2.14.0",
@@ -3698,9 +3468,7 @@ class TestPreflightPhase:
             validator_class.return_value.validate_all.return_value = (True, config)
             _run_phase_preflight(args, state, primary, secondary, logger)
 
-        report_argocd_impact.assert_called_once_with(
-            primary, secondary, logger, argocd_manage=False
-        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=False)
 
     def test_argocd_detection_skipped_when_skip_gitops_check(self):
         """When skip_gitops_check=True, _report_argocd_acm_impact is NOT called."""
@@ -3747,9 +3515,7 @@ class TestPreflightPhase:
             namespace="openshift-gitops",
             name="acm-config",
             resource_count=3,
-            app={
-                "spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}
-            },
+            app={"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}},
         )
 
         with patch(
@@ -3786,9 +3552,7 @@ class TestPreflightPhase:
             namespace="openshift-gitops",
             name="acm-config",
             resource_count=3,
-            app={
-                "spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}
-            },
+            app={"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}},
         )
 
         with patch(
@@ -3852,9 +3616,7 @@ class TestPreflightPhase:
 @pytest.mark.unit
 class TestInitializeClients:
     def test_initialize_clients_passes_dry_run_to_both_hubs(self):
-        args = SimpleNamespace(
-            primary_context="hub-a", secondary_context="hub-b", dry_run=True
-        )
+        args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=True)
         logger = Mock()
 
         with patch("acm_switchover.KubeClient") as kube_client:
@@ -3871,9 +3633,7 @@ class TestInitializeClients:
         ]
 
     def test_initialize_clients_passes_dry_run_to_restore_only_secondary(self):
-        args = SimpleNamespace(
-            primary_context=None, secondary_context="restore-hub", dry_run=True
-        )
+        args = SimpleNamespace(primary_context=None, secondary_context="restore-hub", dry_run=True)
         logger = Mock()
 
         with patch("acm_switchover.KubeClient") as kube_client:
@@ -3889,9 +3649,7 @@ class TestCliOutcomesDelegation:
     """Tests that acm_switchover.py delegates outcome/report handling to lib.cli_outcomes."""
 
     def test_report_target_delegates_to_cli_outcomes_module(self):
-        args = SimpleNamespace(
-            validate_only=False, decommission=False, restore_only=True
-        )
+        args = SimpleNamespace(validate_only=False, decommission=False, restore_only=True)
 
         with patch(
             "acm_switchover.cli_outcomes.report_target",
@@ -3906,9 +3664,7 @@ class TestCliOutcomesDelegation:
         state = Mock()
         logger = Mock()
 
-        with patch(
-            "acm_switchover.cli_outcomes.write_python_report", return_value=None
-        ) as write_report:
+        with patch("acm_switchover.cli_outcomes.write_python_report", return_value=None) as write_report:
             _write_python_report(args, state, "pass", logger)
 
         write_report.assert_called_once_with(args, state, "pass", logger)
@@ -3920,9 +3676,7 @@ class TestCliOutcomesDelegation:
             "acm_switchover.cli_outcomes.phase_report_from_state",
             return_value={"preflight": {"status": "pass"}},
         ) as phase_report:
-            assert _phase_report_from_state(snapshot) == {
-                "preflight": {"status": "pass"}
-            }
+            assert _phase_report_from_state(snapshot) == {"preflight": {"status": "pass"}}
 
         phase_report.assert_called_once_with(snapshot)
 
@@ -4036,9 +3790,7 @@ class TestCliOutcomesDelegation:
 _EVIDENCE_VECTOR_CASES = {
     case["id"]: case
     for case in json.loads(
-        (
-            Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
-        ).read_text(encoding="utf-8")
+        (Path(__file__).parent / "fixtures" / "r4_04_migration_evidence_vectors.json").read_text(encoding="utf-8")
     )["cases"]
 }
 _DRY_RUN_WAIVER_ARGV = [
@@ -4070,9 +3822,7 @@ class TestDryRunRefusalWritesNothing:
             "primary": None if restore_only else "p1",
             "secondary": "p2",
         }
-        state.state["hub_identities"] = {
-            "secondary": {"context": "p2", "cluster_uid": "uid-secondary"}
-        }
+        state.state["hub_identities"] = {"secondary": {"context": "p2", "cluster_uid": "uid-secondary"}}
         if not restore_only:
             state.state["hub_identities"]["primary"] = {
                 "context": "p1",
@@ -4141,40 +3891,28 @@ class TestDryRunRefusalWritesNothing:
 
         before = os.stat(state_file)
         content = state_file.read_bytes()
-        with patch("sys.argv", argv), patch(
-            "acm_switchover._initialize_clients", return_value=clients
-        ), patch.object(StateManager, "_write_state", counting_write_state), patch(
+        with patch("sys.argv", argv), patch("acm_switchover._initialize_clients", return_value=clients), patch.object(
+            StateManager, "_write_state", counting_write_state
+        ), patch(
             "lib.argocd_resume.attempt_argocd_resume_on_failure",
             wraps=argocd_resume.attempt_argocd_resume_on_failure,
         ) as failure_hook:
             with pytest.raises(SystemExit) as exc_info:
                 main()
         after = os.stat(state_file)
-        assert (
-            len(writes) == 0
-        ), f"{len(writes)} state write(s) during a refused dry-run"
+        assert len(writes) == 0, f"{len(writes)} state write(s) during a refused dry-run"
         failure_hook.assert_not_called()
         assert state_file.read_bytes() == content
         assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
         return exc_info.value.code
 
     @pytest.mark.parametrize("failed", [False, True], ids=["resume", "failed-retry"])
-    @pytest.mark.parametrize(
-        "restore_only", [False, True], ids=["switchover", "restore-only"]
-    )
-    def test_invalid_journal_refusal_at_completed_post_activation(
-        self, tmp_path, capsys, restore_only, failed
-    ):
-        journal = _EVIDENCE_VECTOR_CASES["journal-run-id-not-uuid"]["input"][
-            "candidate"
-        ]
-        state_file = self._state_file(
-            tmp_path, Phase.FINALIZATION, journal, restore_only, failed
-        )
+    @pytest.mark.parametrize("restore_only", [False, True], ids=["switchover", "restore-only"])
+    def test_invalid_journal_refusal_at_completed_post_activation(self, tmp_path, capsys, restore_only, failed):
+        journal = _EVIDENCE_VECTOR_CASES["journal-run-id-not-uuid"]["input"]["candidate"]
+        state_file = self._state_file(tmp_path, Phase.FINALIZATION, journal, restore_only, failed)
 
-        exit_code = self._run_dry_run_main(
-            state_file, _DRY_RUN_RESUME_ON_FAILURE_ARGV, restore_only=restore_only
-        )
+        exit_code = self._run_dry_run_main(state_file, _DRY_RUN_RESUME_ON_FAILURE_ARGV, restore_only=restore_only)
 
         assert exit_code == EXIT_FAILURE
         stderr = capsys.readouterr().err
@@ -4187,14 +3925,10 @@ class TestDryRunRefusalWritesNothing:
         [Phase.PRIMARY_PREP, Phase.FINALIZATION],
         ids=["primary-prep", "finalization"],
     )
-    def test_waiver_without_recorded_names_refused_before_phase_work(
-        self, tmp_path, capsys, phase, failed
-    ):
+    def test_waiver_without_recorded_names_refused_before_phase_work(self, tmp_path, capsys, phase, failed):
         state_file = self._state_file(tmp_path, phase, failed=failed)
 
-        exit_code = self._run_dry_run_main(
-            state_file, [*_DRY_RUN_WAIVER_ARGV, *_DRY_RUN_RESUME_ON_FAILURE_ARGV]
-        )
+        exit_code = self._run_dry_run_main(state_file, [*_DRY_RUN_WAIVER_ARGV, *_DRY_RUN_RESUME_ON_FAILURE_ARGV])
 
         assert exit_code == EXIT_FAILURE
         assert "waiver_expected_names_empty" in capsys.readouterr().err

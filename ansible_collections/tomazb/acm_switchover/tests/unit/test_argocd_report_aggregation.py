@@ -3,6 +3,7 @@
 import pathlib
 
 import yaml
+from yaml_contract_helpers import _workflow_entry_sections
 
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 PLAYBOOKS_DIR = COLLECTION_DIR / "playbooks"
@@ -18,10 +19,8 @@ def _get_report_contract(playbook: list[dict]) -> dict:
             task for task in playbook[0].get("tasks", []) if task.get("name") == "Run switchover phases with reporting"
         )
         assert "rescue" not in outer
-        assert outer["block"][0].get("name") == "Establish trusted identity and checkpoint barrier"
-        assert outer["block"][1].get("name") == "Re-pause Argo CD recorded by a failure rescue"
-        assert outer["block"][2].get("name") == "Run post-barrier switchover phases"
-        assert "always" not in outer["block"][2]
+        _, _, _, phases = _workflow_entry_sections(outer)
+        assert "always" not in phases
         tasks = outer.get("always", []) or []
     else:
         tasks = [

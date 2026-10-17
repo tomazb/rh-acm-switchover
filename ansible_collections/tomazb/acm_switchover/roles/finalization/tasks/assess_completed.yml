@@ -15,6 +15,12 @@
   ansible.builtin.set_fact:
     acm_switchover_backup_lifecycle_inputs: "{{ acm_switchover_backup_checkpoint.facts.backup_continuity }}"
 
+- name: Refuse malformed raw Backup lifecycle facts
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_backup_lifecycle_inputs.invalid_reason is not defined
+    fail_msg: Backup continuity refused; invalid_backup_evidence. Preserve the original checkpoint.
+
 - name: Assess completed Backup continuity without checkpoint mutation
   when: acm_switchover_backup_lifecycle_inputs.finalization_completed | default(false) | bool
   block:

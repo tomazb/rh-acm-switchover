@@ -36,9 +36,7 @@ def backup(name, timestamp, phase="Completed", errors=0):
             "uid": name + "-uid",
             "resourceVersion": "12",
             "creationTimestamp": timestamp,
-            "labels": {
-                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
-            },
+            "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
         },
         "status": {
             "phase": phase,
@@ -163,9 +161,7 @@ def make_finalization(tmp_path, monkeypatch):
     new = backup("acm-managed-clusters-new", (now - timedelta(seconds=1)).isoformat())
 
     def make(effects, objects=None, discovery="served", **kwargs):
-        transport = BackupTransport(
-            effects, objects=[new] if objects is None else objects, discovery=discovery
-        )
+        transport = BackupTransport(effects, objects=[new] if objects is None else objects, discovery=discovery)
         client = object.__new__(KubeClient)
         client.context = "fake-secondary"
         client.dry_run = False
@@ -187,16 +183,8 @@ def make_finalization(tmp_path, monkeypatch):
 
 def complete_other_steps(fin):
     """Valid fixture-owned prerequisites, not evidence about unrelated phases."""
-    vectors = json.loads(
-        (
-            Path(__file__).parent / "fixtures/r4_04_migration_evidence_vectors.json"
-        ).read_text()
-    )
-    journal = next(
-        v["input"]["candidate"]
-        for v in vectors["cases"]
-        if v["id"] == "journal-cleanup-completed"
-    )
+    vectors = json.loads((Path(__file__).parent / "fixtures/r4_04_migration_evidence_vectors.json").read_text())
+    journal = next(v["input"]["candidate"] for v in vectors["cases"] if v["id"] == "journal-cleanup-completed")
     fin.state._set_config("migration_backups", journal)
     for step in (
         "enable_backup_schedule",
@@ -231,13 +219,9 @@ def assert_no_backup_completion(fin):
 
 
 @pytest.mark.parametrize("through_flow", [False, True])
-def test_actual_404_baseline_cannot_certify_recovered_old_completed_backup(
-    make_finalization, through_flow
-):
+def test_actual_404_baseline_cannot_certify_recovered_old_completed_backup(make_finalization, through_flow):
     old = make_finalization.old
-    fin, transport = make_finalization(
-        [ApiException(status=404, reason="baseline fault"), page([old])], [old]
-    )
+    fin, transport = make_finalization([ApiException(status=404, reason="baseline fault"), page([old])], [old])
     if through_flow:
         complete_other_steps(fin)
         refused = flow(fin) is False
@@ -253,9 +237,7 @@ def test_actual_404_baseline_cannot_certify_recovered_old_completed_backup(
         None,
         404,
     ) in transport.requests  # Fault actually reached the reader.
-    assert (
-        refused
-    ), f"Actual baseline 404 reached reader but certified old Backup: {transport.requests!r}"
+    assert refused, f"Actual baseline 404 reached reader but certified old Backup: {transport.requests!r}"
     assert fin.run_record.new_backup() is None
     assert_no_backup_completion(fin)
     assert not any(request[0] == "GET" for request in transport.requests)
@@ -265,9 +247,7 @@ def test_actual_404_baseline_cannot_certify_recovered_old_completed_backup(
     "fault",
     ["403", "transport", "discovery", "unserved", "malformed", "page404", "revision"],
 )
-def test_invalid_baseline_never_records_a_backup_or_completes_a_step(
-    make_finalization, fault
-):
+def test_invalid_baseline_never_records_a_backup_or_completes_a_step(make_finalization, fault):
     old = make_finalization.old
     effects = {
         "403": [ApiException(status=403)],
@@ -281,11 +261,7 @@ def test_invalid_baseline_never_records_a_backup_or_completes_a_step(
             {"items": [], "metadata": {"resourceVersion": "different"}},
         ],
     }[fault]
-    discovery = (
-        RuntimeError("discovery")
-        if fault == "discovery"
-        else "unserved" if fault == "unserved" else "served"
-    )
+    discovery = RuntimeError("discovery") if fault == "discovery" else "unserved" if fault == "unserved" else "served"
     fin, transport = make_finalization(effects, discovery=discovery)
     complete_other_steps(fin)
     assert flow(fin) is False
@@ -314,13 +290,9 @@ def test_positive_empty_then_new_clean_completed_backup_completes_flow(
     "poll_fault",
     [None, ApiException(status=404), ApiException(status=403), RuntimeError("poll")],
 )
-def test_poll_failure_and_recovery_cannot_erase_existing_baseline(
-    make_finalization, poll_fault
-):
+def test_poll_failure_and_recovery_cannot_erase_existing_baseline(make_finalization, poll_fault):
     old = make_finalization.old
-    effects = (
-        [page([old])] + ([] if poll_fault is None else [poll_fault]) + [page([old])]
-    )
+    effects = [page([old])] + ([] if poll_fault is None else [poll_fault]) + [page([old])]
     fin, transport = make_finalization(effects)
     with pytest.raises(SwitchoverError, match="No qualifying new backup"):
         fin._verify_new_backups(timeout=5)
@@ -329,12 +301,8 @@ def test_poll_failure_and_recovery_cannot_erase_existing_baseline(
     assert sum(request[0] == "LIST" for request in transport.requests) >= 3
 
 
-@pytest.mark.parametrize(
-    "fault", [ApiException(status=404), ApiException(status=500), RuntimeError("poll")]
-)
-def test_poll_read_failure_can_recover_to_genuinely_new_backup(
-    make_finalization, fault
-):
+@pytest.mark.parametrize("fault", [ApiException(status=404), ApiException(status=500), RuntimeError("poll")])
+def test_poll_read_failure_can_recover_to_genuinely_new_backup(make_finalization, fault):
     old, new = make_finalization.old, make_finalization.new
     fin, _ = make_finalization([page([old]), fault, page([old, new])])
     fin._verify_new_backups(timeout=5)
@@ -354,13 +322,9 @@ def test_repeated_poll_failures_exhaust_bound_without_partial_evidence(
 
 
 @pytest.mark.parametrize("readable", [False, True])
-def test_recorded_name_resume_requires_fresh_readable_baseline(
-    make_finalization, readable
-):
+def test_recorded_name_resume_requires_fresh_readable_baseline(make_finalization, readable):
     new = make_finalization.new
-    fin, transport = make_finalization(
-        [page([new])] if readable else [ApiException(status=404)]
-    )
+    fin, transport = make_finalization([page([new])] if readable else [ApiException(status=404)])
     fin.run_record.record_new_backup(new["metadata"]["name"])
     if readable:
         fin._verify_new_backups(timeout=5)
@@ -370,9 +334,7 @@ def test_recorded_name_resume_requires_fresh_readable_baseline(
             fin._verify_new_backups(timeout=5)
         assert not any(request[0] == "GET" for request in transport.requests)
         assert_no_backup_completion(fin)
-    assert (
-        fin.run_record.new_backup() == new["metadata"]["name"]
-    )  # No silent legacy-state rewrite.
+    assert fin.run_record.new_backup() == new["metadata"]["name"]  # No silent legacy-state rewrite.
 
 
 def test_valid_post_enable_baseline_resumes_without_another_backup(make_finalization):
@@ -384,12 +346,8 @@ def test_valid_post_enable_baseline_resumes_without_another_backup(make_finaliza
     assert sum(request[0] == "LIST" for request in transport.requests) == 2
 
 
-@pytest.mark.parametrize(
-    "phase,errors", [("Failed", 0), ("PartiallyFailed", 0), ("Completed", 1)]
-)
-def test_unhealthy_new_backup_cannot_complete_finalization(
-    make_finalization, phase, errors
-):
+@pytest.mark.parametrize("phase,errors", [("Failed", 0), ("PartiallyFailed", 0), ("Completed", 1)])
+def test_unhealthy_new_backup_cannot_complete_finalization(make_finalization, phase, errors):
     unhealthy = copy.deepcopy(make_finalization.new)
     unhealthy["status"].update(phase=phase, errors=errors)
     fin, _ = make_finalization([page([]), page([unhealthy])], [unhealthy])
@@ -402,12 +360,8 @@ def test_unhealthy_new_backup_cannot_complete_finalization(
     assert not fin.state.is_step_completed("verify_backup_integrity")
 
 
-@pytest.mark.parametrize(
-    "fault", [ApiException(status=404), {"items": [], "metadata": {}}]
-)
-def test_integrity_fallback_requires_complete_strict_inventory(
-    make_finalization, fault
-):
+@pytest.mark.parametrize("fault", [ApiException(status=404), {"items": [], "metadata": {}}])
+def test_integrity_fallback_requires_complete_strict_inventory(make_finalization, fault):
     effect = fault if isinstance(fault, Exception) else copy.deepcopy(fault)
     fin, _ = make_finalization([effect])
     with pytest.raises(SwitchoverError):

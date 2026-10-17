@@ -69,7 +69,9 @@ def run_module(module):
             client = get_api_client(**module.params)
         except Exception:
             raise BackupContinuityError("backup_inventory_unavailable") from None
-        proof = verify_backup_continuity(client, enabled_at=boundary, timeout=module.params["timeout"], poll_interval=module.params["poll_interval"])
+        proof = verify_backup_continuity(
+            client, enabled_at=boundary, timeout=module.params["timeout"], poll_interval=module.params["poll_interval"]
+        )
     except BackupContinuityError as exc:
         module.fail_json(changed=False, msg=str(exc), reason=exc.reason)
         return
@@ -78,7 +80,11 @@ def run_module(module):
 
 def main():
     spec = deepcopy(AUTH_ARG_SPEC)
-    spec.update(inputs={"type":"dict","required":True}, timeout={"type":"float","default":600}, poll_interval={"type":"float","default":30})
+    spec.update(
+        inputs={"type": "dict", "required": True},
+        timeout={"type": "float", "default": 600},
+        poll_interval={"type": "float", "default": 30},
+    )
     run_module(AnsibleModule(argument_spec=spec, supports_check_mode=True))
 
 

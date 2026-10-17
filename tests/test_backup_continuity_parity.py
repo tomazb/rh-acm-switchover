@@ -27,3 +27,12 @@ def test_independent_creation_boundary_decisions(case, owner, expected_key):
         assert case[expected_key] is None
         assert result["uid"] == "proof-uid"
     assert case == before
+
+
+def test_backup_ownership_constants_stay_with_each_form_factor_owner():
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils import constants as collection_constants
+    from lib import constants as python_constants
+
+    assert python_constants.ACM_BACKUP_SCHEDULE_TYPE_LABEL == collection_constants.ACM_BACKUP_SCHEDULE_TYPE_LABEL
+    assert python_constants.ACM_BACKUP_SCHEDULE_TYPES == collection_constants.ACM_BACKUP_SCHEDULE_TYPES
+    assert python_constants.ACM_BACKUP_NAME_RE.pattern == collection_constants.ACM_BACKUP_NAME_RE.pattern

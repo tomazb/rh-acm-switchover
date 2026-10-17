@@ -27,6 +27,12 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_activation.py` | parity, later integration | core switchover phase |
 | `tests/test_post_activation.py` | parity, later integration | core switchover phase |
 | `tests/test_finalization.py` | parity, later integration | core switchover phase |
+| `tests/test_backup_continuity.py`, `tests/test_finalization_backup_strict.py` | Python unit/transport | Strict initial inventory and polls, saved-name creation proof, terminal UID/health |
+| `tests/test_backup_continuity_lifecycle.py` | Python lifecycle/transport | Real bootstrap, both operation runners and outcomes; serialized legacy markers; active retry and completed no-write refusal |
+| `tests/test_backup_continuity_parity.py` | parity | Independent owners consume shared creation/health vectors without importing the other runtime |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/test_backup_continuity.py` | Collection unit/transport | Raw checkpoint facts, strict producer faults, latest-fresh selection and terminal selected-object proof |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/test_backup_continuity_runtime.py` | Collection integration | Real module HTTP and both shipped playbooks/direct role; active boundary refusal, identity/reset guard and current completed no-op |
+| `ansible_collections/tomazb/acm_switchover/tests/scenario/test_backup_continuity_compatibility.py` | Collection scenario | Actual action-loader traces, zero completed checkpoint save attempts, interruption and byte/mtime preservation |
 | `tests/test_validation.py` | later unit/integration | variable-validation semantics |
 | `tests/test_validation_parity.py` | parity | shared same-context, same-UID, unreadable-UID, and distinct-UID decision messages |
 | `ansible_collections/tomazb/acm_switchover/tests/unit/test_validation_parity_fixture.py` | parity | collection consumption of the shared validation fixture |
@@ -100,3 +106,10 @@ Current boundary tests should verify:
   `tests/test_validation_parity.py`; collection parity, integration, and
   scenario coverage use the paths above. The endpoint lanes are
   `ansible-core` 2.16 on Python 3.11 and `ansible-core` 2.21 on Python 3.12.
+
+The #342 rows describe candidate regression coverage, not terminal merge or live
+certification. Healthy shipped execute-positive acceptance still requires the separate
+[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+and both supported lanes. The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
+records the remaining history and recovery limits, including the independent #352
+residual.

@@ -100,11 +100,7 @@ class RestoreOnlyRunnerHooks:
 
 def refuse_implicit_journal_reset(args: Any, state: Any, logger: Any) -> None:
     """Refuse, before any write, a --force reset this operation's flow would make over a journal."""
-    resumable = (
-        RESTORE_ONLY_RESUMABLE_PHASES
-        if getattr(args, "restore_only", False)
-        else SWITCHOVER_RESUMABLE_PHASES
-    )
+    resumable = RESTORE_ONLY_RESUMABLE_PHASES if getattr(args, "restore_only", False) else SWITCHOVER_RESUMABLE_PHASES
     refuse_predictable_journal_reset(args, state, logger, resumable)
 
 
@@ -167,9 +163,7 @@ def run_switchover_impl(
     )
 
     if getattr(args, "validate_only", False):
-        return run_validate_only_preflight(
-            args, state, primary, secondary, logger, hooks.preflight_handler
-        )
+        return run_validate_only_preflight(args, state, primary, secondary, logger, hooks.preflight_handler)
 
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
         (hooks.preflight_handler, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
@@ -274,9 +268,7 @@ def run_restore_only_impl(
     )
 
     if getattr(args, "validate_only", False):
-        return run_validate_only_preflight(
-            args, state, None, secondary, logger, hooks.preflight_handler
-        )
+        return run_validate_only_preflight(args, state, None, secondary, logger, hooks.preflight_handler)
 
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
         (hooks.preflight_handler, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),

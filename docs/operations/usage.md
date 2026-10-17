@@ -643,18 +643,69 @@ Finalization runs in this order on every pass:
 4. Backup and MultiClusterHub verification, auto-import reset.
 5. **Old-hub disposition** (`--old-hub-action`), behind the old-hub evidence gate.
 
-Python backup continuity requires a complete strict Velero Backup inventory before it
-establishes the existing-name baseline or reuses a recorded name. An unreadable,
-unserved, malformed, or incomplete baseline fails finalization. Failed poll reads retry
-within the existing wait limit while retaining the validated baseline; exhausting the
-wait fails without recording a new name. A positively complete empty list remains valid.
-The integrity fallback uses the same strict inventory and still requires a clean
-`Completed` ACM-owned Backup.
+### Backup continuity and historical checkpoints
 
-This fixes future unreadable-baseline attempts. It does not repair a state file that
-already recorded an old Backup or completed backup verification under earlier code.
-Stored names, enable timestamps and completed-step markers are preserved; this change
-does not independently establish the validity of legacy proof.
+The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+requires fresh Backup proof on historical finalization entry and before a successful
+completed-state no-op. It preserves the original checkpoint. Compatibility acceptance
+remains blocked until the separate [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+is integrated and the healthy shipped Collection execute path passes on both supported
+Ansible lanes. Local proof-module or completed-no-op results do not satisfy that gate.
+
+Both implementations require a complete strict Velero Backup inventory. An unreadable,
+unserved, malformed or incomplete initial inventory refuses before Python can reuse a
+recorded name. A positively complete empty inventory is valid. Failed inventory polls
+may retry within the existing bound without replacing the validated baseline.
+
+A qualifying ACM-owned Backup has an aware `metadata.creationTimestamp` at or after
+the retained enable boundary and no later than the current observation. Start and
+completion timestamps cannot establish creation after enablement. Each attempt binds
+the selected name and UID and rechecks the terminal object for clean `Completed`
+status. Pending objects may complete within the existing wait; failure, errors,
+disappearance, replacement or unprovable creation refuses. This does not claim that an
+old checkpoint recorded the current object's UID.
+
+Python reads `config.backup_schedule_enabled_at` without converting falsey values to
+absence. Only an absent key may use exactly one valid historical
+`enable_backup_schedule` step timestamp. That fallback never backfills the key.
+`post_switchover_backup_name` and old verification markers remain unchanged; the markers
+cannot suppress entry proof. A missing recorded object is held rather than replaced
+with another Backup. The Collection reads its own
+`operational_data.backup_schedule_enabled_at` and has no legacy-step fallback. It
+preserves its existing latest-fresh selection and checks the selected object's health.
+A historical finalization or failed-finalization retry cannot be treated as fresh
+merely because every proof field is absent. A Collection checkpoint already in
+finalization with a missing boundary is held even if a runtime variable supplies one.
+
+An active retry performs required Argo CD re-pause before Backup proof, then refuses
+unproved history before cleanup, schedule changes or old-hub action. Its existing
+failure audit may record the failure, but cannot overwrite the historical boundary or
+its absence. A genuinely fresh entry may establish a new boundary after enablement.
+Fresh restore-only execution with no BackupSchedule retains its existing exception;
+current flags cannot turn ambiguous historical state into that exception.
+
+A completed attempt compares retained contexts and physical hub identities against
+fresh discovery, then proves Backup continuity before any phase or mutation-capable
+rescue. A valid recent Python completed state, or a valid completed Collection
+checkpoint, returns a read-only no-op. Unproved history returns non-success without
+checkpoint writes, reset, phase replay or error append. Existing Python stale-completed
+refusal still applies. Collection completed assessment also refuses active reset or
+`reset_from` controls. Dry-run, validate and native Ansible check mode cannot promote
+checkpoint proof.
+
+For read-only assessment, retain the original checkpoint and checksum, exact executable
+commit, contexts and physical hub IDs, recorded name and markers, raw boundary presence
+and source, migration journal, and sanitized fresh Backup metadata/status. Legitimate
+runs may remain held when the object was pruned, a boundary is missing or ambiguous, or
+a crash left finalization without proof. No automatic migration or recovery mutation is
+provided. Do not delete markers, rewrite timestamps, substitute names, backfill identity,
+rewind phases, reset the store or use an older executable as a general repair. Any such
+recovery needs a separately approved procedure. A human acknowledgement is not Backup
+proof. This assessment does not retroactively prove earlier phases; the independent
+[klusterlet marker residual #352](https://github.com/tomazb/rh-acm-switchover/issues/352)
+remains separate.
+
+### Old-hub evidence gate
 
 The **old-hub evidence gate** runs immediately before every integrated old-hub action. It
 requires `post_activation.completed_at`, a `completed` or `repaired` cleanup, the activation

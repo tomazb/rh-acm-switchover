@@ -3178,7 +3178,8 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
-        backup_continuity_guard=lambda *a, **k: True,)
+            backup_continuity_guard=lambda *a, **k: True,
+        )
 
         if dry_run:
             assert result is True and finalization.called
@@ -3216,7 +3217,8 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
-        backup_continuity_guard=lambda *a, **k: True,)
+            backup_continuity_guard=lambda *a, **k: True,
+        )
 
         assert result is False
         finalization.assert_not_called()
@@ -3242,7 +3244,8 @@ class TestPostActivationEvidenceReviewFindings:
             Mock(return_value=False),
             Mock(),
             Mock(),
-        backup_continuity_guard=lambda *a, **k: True,)
+            backup_continuity_guard=lambda *a, **k: True,
+        )
         finalization.assert_called_once()
 
     @staticmethod
@@ -3269,7 +3272,8 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
-        backup_continuity_guard=lambda *a, **k: True,)
+            backup_continuity_guard=lambda *a, **k: True,
+        )
         return result, finalization, failed
 
     @pytest.mark.parametrize(
