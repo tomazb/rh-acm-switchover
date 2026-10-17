@@ -3,7 +3,7 @@
 A kubeconfig that cannot be loaded and validated, or (R4-06 PR 2) a cluster whose expected
 hub endpoint cannot be determined from its import secret, fails post-activation instead of
 skipping the wrong-hub gate: verify() returns False, no spoke cluster is read or mutated, and
-the verify_klusterlet_connections step is not checkpointed, so a resume runs it again. These
+the verify_klusterlet_connections_v2 step is not checkpointed, so a resume runs it again. These
 tests drive the real loader over real files; nothing in the load path is mocked.
 """
 
@@ -21,7 +21,7 @@ from lib.utils import Phase, StateManager
 from modules.post_activation import PostActivationVerification
 
 HUB = "https://api.new-hub.example:6443"
-STEP = "verify_klusterlet_connections"
+STEP = "verify_klusterlet_connections_v2"
 
 
 def _kubeconfig(*, hub_context="secondary-ctx", server=HUB, extra_contexts=()):

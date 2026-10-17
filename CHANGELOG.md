@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python post-activation now uses `verify_klusterlet_connections_v2` at both existing gate
+  call sites, so a legacy unversioned completion cannot skip the gate on normal phase
+  entry. Historical entries and state/journal schemas remain intact; successful new
+  completions retain the existing retry skip and documented non-fatal skip behavior.
+  This is bounded partial remediation for [#352](https://github.com/tomazb/rh-acm-switchover/issues/352),
+  under its [operator approval](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521).
+  Finalization and COMPLETED checkpoints are not rewound or made safe. Unknown legacy
+  provenance requires the [operator hold](docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold);
+  the out-of-phase residual stays open in #352 pending an evidence-based disposition.
+
 - Python klusterlet remediation refreshes strict ManagedCluster discovery at selection
   and before worker dispatch (#362). Name, UID or normalized API URL drift, missing
   identity and failed inventory reads refuse the whole remediation batch without

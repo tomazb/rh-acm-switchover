@@ -26,7 +26,7 @@ NEW_HUB = "https://api.new-hub.example:6443"
 OLD_HUB = "https://api.old-hub.example:6443"
 SPOKE = "https://api.spoke.example:6443"
 CA = b"-----BEGIN CERTIFICATE-----\nMIIBcaptured\n-----END CERTIFICATE-----\n"
-STEP = "verify_klusterlet_connections"
+STEP = "verify_klusterlet_connections_v2"
 
 
 def _b64(text):

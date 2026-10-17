@@ -23,7 +23,7 @@ from modules.post_activation import PostActivationVerification
 
 NEW_HUB = "https://api.new-hub.example:6443"
 OLD_HUB = "https://api.old-hub.example:6443"
-STEP = "verify_klusterlet_connections"
+STEP = "verify_klusterlet_connections_v2"
 
 
 def _fake_api_client(host, token="t"):

@@ -252,7 +252,7 @@ class PostActivationVerification:
                         e,
                     )
                     logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
-                    with self._step("verify_klusterlet_connections") as should_run_fix:
+                    with self._step("verify_klusterlet_connections_v2") as should_run_fix:
                         klusterlet_step_checked = True
                         if should_run_fix:
                             self._verify_klusterlet_connections()
@@ -266,7 +266,7 @@ class PostActivationVerification:
         # #349) or an unproven cluster (R4-06, amendment §2.8) fails the step.
         # This may have already been done above if clusters didn't connect initially
         if not klusterlet_step_checked:
-            with self._step("verify_klusterlet_connections") as should_run:
+            with self._step("verify_klusterlet_connections_v2") as should_run:
                 if should_run:
                     self._verify_klusterlet_connections()
 

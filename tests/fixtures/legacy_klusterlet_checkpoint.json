@@ -1,0 +1,178 @@
+{
+  "version": "1.0",
+  "tool_version": "1.7.10",
+  "created_at": "2026-10-16T13:26:15.527753+00:00",
+  "current_phase": "failed",
+  "completed_steps": [
+    {
+      "name": "verify_clusters_connected",
+      "timestamp": "2026-10-16T13:26:15.530236+00:00",
+      "phase": "post_activation"
+    },
+    {
+      "name": "verify_klusterlet_connections",
+      "timestamp": "2026-10-16T13:26:15.530661+00:00",
+      "phase": "post_activation"
+    }
+  ],
+  "config": {
+    "expected_managed_cluster_names": [
+      "cluster-a",
+      "cluster-b"
+    ],
+    "expected_managed_cluster_count": 2,
+    "managed_cluster_expectation_mode": "derived_from_preflight",
+    "migration_backups": {
+      "backups": {
+        "credentials": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-credentials-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-credentials-schedule-20240101120000",
+          "warnings": 0
+        },
+        "managed_clusters": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "warnings": 0
+        },
+        "resources": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-resources-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-resources-schedule-20240101120000",
+          "warnings": 0
+        },
+        "resources_generic": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-resources-generic-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-resources-generic-schedule-20240101120000",
+          "warnings": 0
+        }
+      },
+      "cleanup": {
+        "absence_verified_at": null,
+        "activation_method": null,
+        "backup_fields": {},
+        "cleanup_before_restore": null,
+        "completed_at": null,
+        "delete_accepted_at": null,
+        "final_get_resource_version": null,
+        "generation": null,
+        "intent_at": null,
+        "mutation_kind": null,
+        "name": null,
+        "namespace": null,
+        "operation_id": null,
+        "recovery": null,
+        "repair": null,
+        "spec_fingerprint": null,
+        "state": "not_started",
+        "uid": null
+      },
+      "post_activation": {
+        "completed_at": null,
+        "names_verified_at": "2026-10-16T13:26:15.531026+00:00"
+      },
+      "resolved_at": "2024-01-01T12:30:00Z",
+      "restore": {
+        "acm_minor": "2.14",
+        "activation_method": "full",
+        "backup_fields": {
+          "veleroCredentialsBackupName": "acm-credentials-schedule-20240101120000",
+          "veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000",
+          "veleroResourcesBackupName": "acm-resources-schedule-20240101120000"
+        },
+        "backup_names_verified_at": "2024-01-01T13:00:00Z",
+        "cleanup_before_restore": "CleanupRestored",
+        "completed_at": "2024-01-01T13:05:00Z",
+        "controller_contract": "legacy_2_12_2_16",
+        "generation": 4,
+        "mutation_kind": "full_restore",
+        "name": "acm-restore",
+        "names_verified_at": "2024-01-01T13:06:00Z",
+        "namespace": "open-cluster-management-backup",
+        "spec_fingerprint": "e0082428344f8c48fa36a83d9be86597f283813fbd91ff42a5a8d6330e80586e",
+        "teardown_revalidated_at": null,
+        "uid": "uid-acm-restore",
+        "velero_restores": {
+          "activation_credentials": [],
+          "activation_resources": [],
+          "activation_resources_generic": [],
+          "credentials": [
+            {
+              "backup_name": "acm-credentials-schedule-20240101120000",
+              "name": "acm-restore-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-credentials-schedule-20240101120000"
+            }
+          ],
+          "managed_clusters": [
+            {
+              "backup_name": "acm-managed-clusters-schedule-20240101120000",
+              "name": "acm-restore-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-managed-clusters-schedule-20240101120000"
+            }
+          ],
+          "resources": [
+            {
+              "backup_name": "acm-resources-schedule-20240101120000",
+              "name": "acm-restore-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-resources-schedule-20240101120000"
+            }
+          ],
+          "resources_generic": [
+            {
+              "backup_name": "acm-resources-generic-schedule-20240101120000",
+              "name": "acm-restore-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-resources-generic-schedule-20240101120000"
+            }
+          ]
+        }
+      },
+      "run_id": "5b7c9a1e-3f2d-4c8b-9e6a-0d1f2a3b4c5d",
+      "schema_version": 2,
+      "waiver": null
+    }
+  },
+  "errors": [
+    {
+      "error": "synthetic later-step failure",
+      "phase": "post_activation_verification",
+      "timestamp": "2026-10-16T13:26:15.533081+00:00"
+    }
+  ],
+  "last_updated": "2026-10-16T13:26:15.533645+00:00",
+  "contexts": {
+    "primary": "primary-ctx",
+    "secondary": "secondary-ctx"
+  },
+  "hub_identities": {
+    "primary": {
+      "context": "primary-ctx",
+      "cluster_uid": "synthetic-physical-primary-ctx"
+    },
+    "secondary": {
+      "context": "secondary-ctx",
+      "cluster_uid": "synthetic-physical-secondary-ctx"
+    }
+  }
+}
