@@ -1,9 +1,17 @@
 """Read-only Backup continuity decisions, independent of lifecycle and storage."""
 
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Mapping
 
-from lib.constants import ACM_BACKUP_NAME_RE, ACM_BACKUP_SCHEDULE_TYPE_LABEL, ACM_BACKUP_SCHEDULE_TYPES
+from lib.constants import (
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
+    BACKUP_NAMESPACE,
+)
+from lib.strict_read import StrictReadStatus
 
 
 class BackupContinuityError(RuntimeError):
@@ -58,9 +66,16 @@ def is_acm_owned(backup):
         return False
     labels = metadata.get("labels") or {}
     name = metadata.get("name")
-    return (isinstance(labels, dict) and labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) in ACM_BACKUP_SCHEDULE_TYPES) or (
-        isinstance(name, str) and ACM_BACKUP_NAME_RE.match(name) is not None
-    )
+    if isinstance(labels, dict) and labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) in ACM_BACKUP_SCHEDULE_TYPES:
+        return True
+    if isinstance(name, str) and ACM_BACKUP_NAME_RE.match(name):
+        logging.getLogger("acm_switchover").warning(
+            "Backup %s is missing ACM ownership label %s; accepting ACM name-pattern fallback",
+            name,
+            ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+        )
+        return True
+    return False
 
 
 def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
@@ -99,3 +114,91 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
         if error_count:
             raise BackupContinuityError("backup_errors")
     return {"name": name, "uid": uid, "created_at": created.isoformat(), "phase": phase}
+
+
+def verify_backup_continuity(client, *, enabled_at, recorded_name, timeout, poll_interval, max_age_seconds=None):
+    """Fresh complete inventory and stable named observations; never persist proof."""
+    deadline = time.time() + timeout
+    if recorded_name is not None and (not isinstance(recorded_name, str) or not recorded_name):
+        raise BackupContinuityError("invalid_backup_identity")
+
+    def inventory():
+        outcome = client.list_custom_resources_strict(
+            group="velero.io", version="v1", plural="backups", namespace=BACKUP_NAMESPACE
+        )
+        if outcome.status is not StrictReadStatus.ITEMS:
+            raise BackupContinuityError("backup_inventory_unavailable")
+        return outcome.items
+
+    def select(items):
+        candidates = []
+        for backup in items:
+            if not is_acm_owned(backup):
+                continue
+            try:
+                proof = validate_backup(backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc))
+            except BackupContinuityError as exc:
+                if exc.reason == "backup_predates_enable":
+                    continue
+                raise
+            candidates.append((datetime.fromisoformat(proof["created_at"]), backup))
+        return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+    baseline = inventory()  # A failed initial read never becomes an empty baseline.
+    if recorded_name is None:
+        selected = select(baseline)
+        if selected is not None:
+            recorded_name = selected["metadata"]["name"]
+    else:
+        selected = next((b for b in baseline if b.get("metadata", {}).get("name") == recorded_name), None)
+        if selected is not None:
+            validate_backup(selected, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc))
+    while time.time() < deadline:
+        if recorded_name is None:
+            try:
+                current = inventory()
+            except BackupContinuityError:
+                current = None  # No prefix or empty substitute, and baseline remains intact.
+            if current is not None:
+                selected = select(current)
+                if selected is not None:
+                    recorded_name = selected["metadata"]["name"]
+        if recorded_name is not None:
+            outcome = client.get_custom_resource_strict(
+                group="velero.io", version="v1", plural="backups", name=recorded_name, namespace=BACKUP_NAMESPACE
+            )
+            if outcome.status is not StrictReadStatus.ITEMS or not isinstance(outcome.resource, dict):
+                raise BackupContinuityError("recorded_backup_unavailable")
+            backup = outcome.resource
+            proof = validate_backup(
+                backup,
+                enabled_at=enabled_at,
+                observed_at=datetime.now(timezone.utc),
+                expected_name=recorded_name,
+                expected_uid=selected["metadata"]["uid"] if selected is not None else None,
+            )
+            if selected is None:
+                selected = backup
+                # Establish UID from this first current observation, then read it again.
+                continue
+            if proof["phase"] == "Completed":
+                if max_age_seconds is not None:
+                    status = backup["status"]
+                    age_value = (
+                        status.get("completionTimestamp")
+                        or status.get("startTimestamp")
+                        or backup["metadata"].get("creationTimestamp")
+                    )
+                    try:
+                        finished = _timestamp(age_value, "invalid_backup_status")
+                    except BackupContinuityError:
+                        finished = None  # Preserve existing warning-only malformed age policy.
+                    if finished is not None and finished >= enabled_at:
+                        if (datetime.now(timezone.utc) - finished).total_seconds() > max_age_seconds:
+                            raise BackupContinuityError("backup_too_old")
+                return proof
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_interval, remaining))
+    raise BackupContinuityError("No qualifying new backup completed within the verification timeout")

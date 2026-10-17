@@ -105,3 +105,89 @@ def test_malformed_raw_evidence_never_becomes_absence(tmp_path, config, steps):
     inputs = RunRecord(state).backup_continuity_inputs()
     with pytest.raises(domain().BackupContinuityError):
         domain().resolve_enable_boundary(inputs, observed_at=datetime.now(timezone.utc))
+
+
+# The fixture retains real KubeClient discovery/strict producers, Finalization,
+# RunRecord and StateManager; doubles exist only at transport and clock boundaries.
+from tests.test_finalization_backup_strict import make_finalization, page
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_old_creation_cannot_be_reused_or_selected_from_later_completion(make_finalization, recorded):
+    old = copy.deepcopy(make_finalization.old)
+    old["status"]["completionTimestamp"] = make_finalization.new["metadata"]["creationTimestamp"]
+    fin, transport = make_finalization([page([old])], [old])
+    if recorded:
+        fin.run_record.record_new_backup(old["metadata"]["name"])
+    before = fin.state.capture_state_snapshot()
+    with pytest.raises(Exception, match="backup_predates_enable|No qualifying"):
+        fin._verify_new_backups(timeout=2)
+    assert fin.state.capture_state_snapshot() == before
+    assert any(r[0] == "LIST" for r in transport.requests)
+
+
+@pytest.mark.parametrize("fault", [404, 403, "transport"])
+def test_recorded_proof_named_transport_fault_never_substitutes_another_backup(make_finalization, fault):
+    from kubernetes.client.rest import ApiException
+
+    new = make_finalization.new
+    error = RuntimeError("transport") if fault == "transport" else ApiException(status=fault)
+    fin, transport = make_finalization([page([new])], [error])
+    fin.run_record.record_new_backup(new["metadata"]["name"])
+    before = fin.state.capture_state_snapshot()
+    with pytest.raises(Exception, match="recorded_backup_unavailable"):
+        fin._verify_new_backups(timeout=2)
+    assert fin.state.capture_state_snapshot() == before
+    assert any(r[0] == "GET" for r in transport.requests)
+
+
+@pytest.mark.parametrize(
+    "changed_field,changed_value",
+    [
+        ("uid", "replacement-uid"),
+        ("creationTimestamp", "2020-01-01T00:00:00Z"),
+        ("labels", {}),
+    ],
+)
+def test_terminal_named_object_rechecks_uid_creation_and_ownership(make_finalization, changed_field, changed_value):
+    new = copy.deepcopy(make_finalization.new)
+    # A neutral name makes removal of the ownership label actually remove ownership.
+    new["metadata"]["name"] = "proof-backup"
+    terminal = copy.deepcopy(new)
+    terminal["metadata"][changed_field] = changed_value
+    fin, transport = make_finalization([page([new])], [terminal])
+    with pytest.raises(Exception, match="backup_identity_changed|backup_predates_enable|backup_not_acm_owned"):
+        fin._verify_new_backups(timeout=2)
+    assert fin.run_record.new_backup() is None
+    assert any(r[0] == "GET" for r in transport.requests)
+
+
+def test_pending_backup_must_reach_clean_completion_with_same_uid(make_finalization):
+    new = make_finalization.new
+    pending = copy.deepcopy(new)
+    pending["status"]["phase"] = "InProgress"
+    fin, transport = make_finalization([page([pending])], [pending, new])
+    fin._verify_new_backups(timeout=5)
+    assert fin.run_record.new_backup() == new["metadata"]["name"]
+    assert sum(r[0] == "GET" for r in transport.requests) == 2
+
+
+def test_terminal_disappearance_never_falls_back_to_cached_pending_object(make_finalization):
+    from kubernetes.client.rest import ApiException
+
+    new = copy.deepcopy(make_finalization.new)
+    new["status"]["phase"] = "InProgress"
+    fin, _ = make_finalization([page([new])], [new, ApiException(status=404)])
+    with pytest.raises(Exception, match="recorded_backup_unavailable"):
+        fin._verify_new_backups(timeout=5)
+    assert fin.run_record.new_backup() is None
+
+
+@pytest.mark.parametrize("name", [None, "", False, 0, [], {}])
+def test_present_malformed_recorded_name_never_selects_replacement(make_finalization, name):
+    fin, _ = make_finalization([page([make_finalization.new])])
+    fin.state._set_config("post_switchover_backup_name", name)
+    before = fin.state.capture_state_snapshot()
+    with pytest.raises(Exception, match="invalid_backup_identity"):
+        fin._verify_new_backups(timeout=5)
+    assert fin.state.capture_state_snapshot() == before

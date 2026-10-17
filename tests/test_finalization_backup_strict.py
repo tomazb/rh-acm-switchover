@@ -114,12 +114,16 @@ class Clock:
 
 @pytest.fixture
 def make_finalization(tmp_path, monkeypatch):
-    monkeypatch.setattr(finalization_module, "time", Clock())
+    clock = Clock()
+    monkeypatch.setattr(finalization_module, "time", clock)
+    import modules.backup_continuity as proof_module
+
+    monkeypatch.setattr(proof_module, "time", clock)
     monkeypatch.setattr(finalization_module, "BACKUP_POLL_INTERVAL", 1)
     now = datetime.now(timezone.utc)
-    enabled = now.isoformat()
+    enabled = (now - timedelta(seconds=2)).isoformat()
     old = backup("acm-managed-clusters-old", (now - timedelta(days=3)).isoformat())
-    new = backup("acm-managed-clusters-new", (now + timedelta(seconds=1)).isoformat())
+    new = backup("acm-managed-clusters-new", (now - timedelta(seconds=1)).isoformat())
 
     def make(effects, objects=None, discovery="served", **kwargs):
         transport = BackupTransport(effects, objects=[new] if objects is None else objects, discovery=discovery)
@@ -239,7 +243,7 @@ def test_poll_failure_and_recovery_cannot_erase_existing_baseline(make_finalizat
     old = make_finalization.old
     effects = [page([old])] + ([] if poll_fault is None else [poll_fault]) + [page([old])]
     fin, transport = make_finalization(effects)
-    with pytest.raises(SwitchoverError, match="No new backup"):
+    with pytest.raises(SwitchoverError, match="No qualifying new backup"):
         fin._verify_new_backups(timeout=5)
     assert fin.run_record.new_backup() is None
     assert_no_backup_completion(fin)
@@ -257,7 +261,7 @@ def test_poll_read_failure_can_recover_to_genuinely_new_backup(make_finalization
 
 def test_repeated_poll_failures_exhaust_bound_without_partial_evidence(make_finalization):
     fin, transport = make_finalization([page([]), ApiException(status=404)])
-    with pytest.raises(SwitchoverError, match="No new backup"):
+    with pytest.raises(SwitchoverError, match="No qualifying new backup"):
         fin._verify_new_backups(timeout=5)
     assert 2 <= sum(request[0] == "LIST" for request in transport.requests) <= 7
     assert fin.run_record.new_backup() is None
@@ -286,7 +290,7 @@ def test_valid_post_enable_baseline_resumes_without_another_backup(make_finaliza
     fin._verify_new_backups(timeout=5)
     fin._verify_backup_integrity()
     assert fin.run_record.new_backup() == new["metadata"]["name"]
-    assert sum(request[0] == "LIST" for request in transport.requests) == 1
+    assert sum(request[0] == "LIST" for request in transport.requests) == 2
 
 
 @pytest.mark.parametrize("phase,errors", [("Failed", 0), ("PartiallyFailed", 0), ("Completed", 1)])
@@ -315,7 +319,7 @@ def test_integrity_fallback_requires_complete_strict_inventory(make_finalization
 def test_disappeared_recorded_backup_with_empty_fallback_refuses_completion(make_finalization):
     fin, _ = make_finalization([page([])], [ApiException(status=404)])
     fin.run_record.record_new_backup(make_finalization.new["metadata"]["name"])
-    with pytest.raises(SwitchoverError, match="No ACM-owned"):
+    with pytest.raises(SwitchoverError, match="recorded_backup_unavailable"):
         fin._verify_backup_integrity()
 
 

@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
 import modules.finalization as finalization_module
-from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME, BACKUP_SCHEDULE_PLURAL
+from lib.constants import ACM_BACKUP_SCHEDULE_TYPE_LABEL, BACKUP_SCHEDULE_DEFAULT_NAME, BACKUP_SCHEDULE_PLURAL
 from lib.decommission_outcome import DecommissionResult, SubstepExecution, SubstepOutcome
 from lib.exceptions import FatalError, SwitchoverError
 from lib.run_record import RunRecord
@@ -48,6 +48,34 @@ def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
     return mock_step
 
 
+@pytest.fixture(autouse=True)
+def backup_proof_clock(monkeypatch):
+    import modules.backup_continuity as proof_module
+
+    class Clock:
+        at = 0
+
+        def time(self):
+            self.at += 1
+            return self.at
+
+        def sleep(self, seconds):
+            self.at += seconds
+            if isinstance(finalization_module.time, Mock):
+                finalization_module.time.sleep(seconds)
+
+    class EnableClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # Fixture Backups are constructed by the test immediately after this
+            # simulated enable event, then returned by the fake API transport.
+            return datetime.now(tz) - timedelta(seconds=1)
+
+    monkeypatch.setattr(proof_module, "time", Clock())
+    monkeypatch.setattr(finalization_module, "BACKUP_POLL_INTERVAL", 1)
+    monkeypatch.setattr(finalization_module, "datetime", EnableClock)
+
+
 @pytest.fixture
 def mock_secondary_client():
     """Create a mock KubeClient for secondary hub.
@@ -67,6 +95,34 @@ def mock_secondary_client():
         resource={"metadata": {"name": decommission_module.OBSERVABILITY_NAMESPACE}},
         resource_version="dest-ns-1",
     )
+    secondary._backup_inventory = []
+
+    def strict_backup(**kwargs):
+        cached = secondary.__dict__.get("_served_backup")
+        if (
+            cached is not None
+            and cached.get("metadata", {}).get("name") == kwargs["name"]
+            and cached.get("status", {}).get("phase") == "Completed"
+        ):
+            resource = cached
+        elif secondary.get_custom_resource.side_effect is not None or not isinstance(
+            secondary.get_custom_resource.return_value, Mock
+        ):
+            resource = secondary.get_custom_resource(**kwargs)
+        else:
+            resource = next(
+                (b for b in secondary._backup_inventory if b.get("metadata", {}).get("name") == kwargs["name"]), None
+            )
+        if resource is None:
+            return StrictReadOutcome.object_absent("object_not_found")
+        resource = copy.deepcopy(resource)
+        metadata = resource.setdefault("metadata", {})
+        metadata.setdefault("uid", metadata.get("name", "backup") + "-uid")
+        metadata.setdefault("creationTimestamp", datetime.now(timezone.utc).isoformat())
+        secondary._served_backup = copy.deepcopy(resource)
+        return StrictReadOutcome.from_resource(resource, resource_version="backup-read")
+
+    secondary.get_custom_resource_strict.side_effect = strict_backup
     return secondary
 
 
@@ -97,14 +153,23 @@ def _serve_backups(secondary, reads):
     """Serve backup strict outcomes without replacing other strict resource reads."""
     previous = secondary.list_custom_resources_strict.side_effect
     default = secondary.list_custom_resources_strict.return_value
-    outcomes = [
-        StrictReadOutcome.error("read_failed") if isinstance(read, Exception) else StrictReadOutcome.from_items(read)
-        for read in reads
-    ]
+    outcomes = []
+    for read in copy.deepcopy(reads):
+        if isinstance(read, Exception):
+            outcomes.append(StrictReadOutcome.error("read_failed"))
+            continue
+        for backup in read:
+            metadata = backup.setdefault("metadata", {})
+            metadata.setdefault("uid", metadata.get("name", "backup") + "-uid")
+            metadata.setdefault("creationTimestamp", datetime.now(timezone.utc).isoformat())
+        outcomes.append(StrictReadOutcome.from_items(read))
 
     def _list(**kwargs):
         if kwargs.get("plural") == "backups":
-            return outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+            outcome = outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+            if outcome.status is StrictReadStatus.ITEMS:
+                secondary._backup_inventory = outcome.items
+            return outcome
         return previous(**kwargs) if callable(previous) else default
 
     secondary.list_custom_resources_strict.side_effect = _list
@@ -160,7 +225,11 @@ def mock_state_manager():
     # deep copies mirror StateManager's ownership contract (stored and returned
     # values are isolated from the caller); unseeded keys resolve to the
     # caller-supplied default.
-    config: dict = {}
+    config: dict = {"backup_schedule_enabled_at": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()}
+    mock.capture_state_snapshot.side_effect = lambda: {
+        "config": copy.deepcopy(config),
+        "completed_steps": copy.deepcopy(mock.state["completed_steps"]),
+    }
     mock.config = config
 
     def _set_config(key, value):
@@ -428,7 +497,13 @@ class TestFinalization:
 
         finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources_strict.call_count == 3
+        assert (
+            sum(
+                c.kwargs.get("plural") == "backups"
+                for c in mock_secondary_client.list_custom_resources_strict.call_args_list
+            )
+            == 3
+        )
 
     @patch("modules.finalization.time")
     def test_verify_new_backups_timeout(self, mock_time, finalization, mock_secondary_client):
@@ -436,7 +511,7 @@ class TestFinalization:
         mock_time.time.side_effect = [0, 10, 45, 51]
         _serve_backups(mock_secondary_client, [[]])
 
-        with pytest.raises(SwitchoverError, match="No new backup created"):
+        with pytest.raises(SwitchoverError, match="No qualifying new backup"):
             finalization._verify_new_backups(timeout=50)
 
     @patch("modules.finalization.time")
@@ -447,7 +522,7 @@ class TestFinalization:
         mock_time.time.side_effect = [0, 15, 45, 61]
         _serve_backups(mock_secondary_client, [[]])
 
-        with pytest.raises(SwitchoverError, match="No new backup created within 60s"):
+        with pytest.raises(SwitchoverError, match="No qualifying new backup"):
             finalization._verify_new_backups(timeout=60)
 
         mock_secondary_client.get_custom_resource.assert_not_called()
@@ -487,16 +562,16 @@ class TestFinalization:
         finalization._verify_new_backups(timeout=10)
 
         mock_secondary_client.get_custom_resource.assert_called_once()
-        # The reuse path must re-record the name, not merely leave the seeded value in place.
-        assert finalization.state._set_config.called
+        # Current proof preserves the existing historical name without rewriting it.
+        finalization.state._set_config.assert_not_called()
         assert RunRecord(finalization.state).new_backup() == "acm-backup-001"
 
     def test_verify_new_backups_accepts_existing_post_enable_backup_on_resume(
         self, finalization, mock_secondary_client
     ):
         """If the first post-enable ACM backup already exists on resume, do not require a second backup."""
-        backup_ts = "2026-03-06T10:05:00Z"
-        enabled_ts = "2026-03-06T10:00:00Z"
+        backup_ts = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        enabled_ts = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         existing_backup = {
             "metadata": {
                 "name": "acm-backup-001",
@@ -506,7 +581,7 @@ class TestFinalization:
             "status": {"phase": "Completed", "completionTimestamp": backup_ts},
         }
         _serve_backups(mock_secondary_client, [[existing_backup]])
-        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.get_custom_resource.return_value = existing_backup
         RunRecord(finalization.state).record_backup_watch_started(enabled_ts)
 
         finalization._verify_new_backups(timeout=10)
@@ -537,7 +612,7 @@ class TestFinalization:
             finalization._verify_new_backups(timeout=10)
 
         assert RunRecord(finalization.state).new_backup() == "acm-managed-clusters-schedule-20260306100000"
-        assert finalization_module.ACM_BACKUP_SCHEDULE_TYPE_LABEL in caplog.text
+        assert ACM_BACKUP_SCHEDULE_TYPE_LABEL in caplog.text
         assert "name-pattern fallback" in caplog.text
 
     @patch("modules.finalization.time")
@@ -584,7 +659,13 @@ class TestFinalization:
 
         finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources_strict.call_count == 3
+        assert (
+            sum(
+                c.kwargs.get("plural") == "backups"
+                for c in mock_secondary_client.list_custom_resources_strict.call_args_list
+            )
+            == 3
+        )
         assert RunRecord(finalization.state).new_backup() == "acm-backup-001"
 
     def test_verify_new_backups_wraps_initial_transient_list_error(self, finalization, mock_secondary_client):
@@ -593,11 +674,17 @@ class TestFinalization:
 
         with pytest.raises(
             SwitchoverError,
-            match="Failed to list Velero backups before waiting for a new ACM backup",
+            match="backup_inventory_unavailable",
         ):
             finalization._verify_new_backups(timeout=10)
 
-        assert mock_secondary_client.list_custom_resources_strict.call_count == 1
+        assert (
+            sum(
+                c.kwargs.get("plural") == "backups"
+                for c in mock_secondary_client.list_custom_resources_strict.call_args_list
+            )
+            == 1
+        )
 
     def test_cleanup_restore_resources_raises_when_delete_fails(
         self, finalization, mock_secondary_client, mock_state_manager
@@ -627,11 +714,12 @@ class TestFinalization:
             ],
         )
 
-        with pytest.raises(SwitchoverError, match="No new backup created"):
+        with pytest.raises(SwitchoverError, match="No qualifying new backup"):
             finalization._verify_new_backups(timeout=10)
 
-        mock_time.sleep.assert_called_once()
-        assert mock_secondary_client.list_custom_resources_strict.call_count == 2
+        assert mock_time.sleep.call_count > 0
+        assert mock_secondary_client.list_custom_resources_strict.call_count <= 8
+        assert RunRecord(finalization.state).new_backup() is None
 
     def test_verify_backup_integrity_success(self, finalization, mock_secondary_client):
         """Backup integrity should pass for a recent completed backup with no errors (recorded name path)."""
@@ -1003,8 +1091,10 @@ class TestFinalization:
 
         assert finalization._get_backup_schedule_interval_seconds() is None
 
-    def test_verify_backup_integrity_skips_age_without_new_backup(self, finalization, mock_secondary_client):
-        """Backup age enforcement should be skipped if no post-switchover backup name is recorded."""
+    def test_verify_backup_integrity_refuses_old_inventory_without_new_backup(
+        self, finalization, mock_secondary_client
+    ):
+        """Old inventory is not current continuity proof even when no name was saved."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
         backup = {
             "metadata": {
@@ -1023,7 +1113,8 @@ class TestFinalization:
         mock_secondary_client.get_pods.return_value = []
         # Nothing recorded (fixture default) → falls back to latest-by-timestamp, age check skipped
 
-        finalization._verify_backup_integrity(max_age_seconds=600)
+        with pytest.raises(SwitchoverError, match="No qualifying new backup"):
+            finalization._verify_backup_integrity(max_age_seconds=600)
 
     def test_verify_backup_integrity_fallback_ignores_unrelated_backups(self, finalization, mock_secondary_client):
         """Fallback integrity path should consider only ACM-owned backups."""
@@ -1095,10 +1186,10 @@ class TestFinalization:
         with pytest.raises(SwitchoverError):
             finalization._verify_backup_integrity(max_age_seconds=600)
 
-    def test_verify_backup_integrity_skips_age_if_backup_before_enable(self, finalization, mock_secondary_client):
-        """Backup age enforcement should be skipped if backup predates enable timestamp."""
+    def test_verify_backup_integrity_refuses_creation_before_enable(self, finalization, mock_secondary_client):
+        """A stored old name cannot pass chronology by skipping age enforcement."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
-        enabled_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        enabled_ts = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat().replace("+00:00", "Z")
         backup = {
             "metadata": {
                 "name": "backup-1",
@@ -1116,7 +1207,9 @@ class TestFinalization:
         mock_secondary_client.get_pods.return_value = []
         RunRecord(finalization.state).record_backup_watch_started(enabled_ts)
 
-        finalization._verify_backup_integrity(max_age_seconds=600)
+        RunRecord(finalization.state).record_new_backup("backup-1")
+        with pytest.raises(SwitchoverError, match="backup_predates_enable"):
+            finalization._verify_backup_integrity(max_age_seconds=600)
 
     def test_verify_backup_integrity_uses_recorded_name_not_latest(self, finalization, mock_secondary_client):
         """When backup name is recorded, that specific backup is verified — not the latest in the namespace."""
@@ -1148,7 +1241,7 @@ class TestFinalization:
         mock_secondary_client.list_custom_resources.assert_not_called()
 
     def test_verify_backup_integrity_fails_when_recorded_backup_missing(self, finalization, mock_secondary_client):
-        """If the recorded post-switchover backup is pruned, fall back to latest ACM-owned backup."""
+        """A pruned recorded name refuses rather than substituting another current Backup."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         fallback_backup = {
             "metadata": {
@@ -1171,8 +1264,8 @@ class TestFinalization:
         finalization._cached_schedules = []
         RunRecord(finalization.state).record_new_backup("acm-backup-switchover")
 
-        # Should NOT raise — should fall back to latest ACM-owned backup
-        finalization._verify_backup_integrity(max_age_seconds=600)
+        with pytest.raises(SwitchoverError, match="recorded_backup_unavailable"):
+            finalization._verify_backup_integrity(max_age_seconds=600)
 
     def test_verify_backup_integrity_fails_when_recorded_backup_is_not_acm_owned(
         self, finalization, mock_secondary_client
@@ -1192,7 +1285,7 @@ class TestFinalization:
         finalization._cached_schedules = []
         RunRecord(finalization.state).record_new_backup("manual-backup")
 
-        with pytest.raises(SwitchoverError, match="not ACM-owned"):
+        with pytest.raises(SwitchoverError, match="backup_not_acm_owned"):
             finalization._verify_backup_integrity(max_age_seconds=600)
 
     def test_verify_backup_integrity_rejects_recorded_backup_with_non_acm_owner_labels(
@@ -1217,7 +1310,7 @@ class TestFinalization:
         finalization._cached_schedules = []
         RunRecord(finalization.state).record_new_backup("manual-backup")
 
-        with pytest.raises(SwitchoverError, match="not ACM-owned"):
+        with pytest.raises(SwitchoverError, match="backup_not_acm_owned"):
             finalization._verify_backup_integrity(max_age_seconds=600)
 
         mock_secondary_client.list_custom_resources.assert_not_called()
@@ -1259,7 +1352,7 @@ class TestFinalization:
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
-        mock_wait.assert_called_once()
+        assert mock_secondary_client.get_custom_resource_strict.call_count == 2
 
     def test_verify_backup_integrity_fails_on_errors(self, finalization, mock_secondary_client):
         """Backup integrity should fail when the recorded backup reports errors."""
@@ -2470,6 +2563,7 @@ class TestFinalizationBackupOwnershipFallbackIntegration:
             acm_version="2.12.0",
         )
 
+        RunRecord(state).record_backup_watch_started((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
         fin._verify_new_backups(timeout=10)
 
         assert RunRecord(state).new_backup() == "acm-managed-clusters-schedule-20260306100000"
