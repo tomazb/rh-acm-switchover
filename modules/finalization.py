@@ -12,9 +12,6 @@ from typing import Any, Dict, List, Optional
 from kubernetes.client.rest import ApiException
 
 from lib.constants import (
-    ACM_BACKUP_NAME_RE,
-    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
-    ACM_BACKUP_SCHEDULE_TYPES,
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
@@ -77,6 +74,7 @@ from lib.run_record import RunRecord, StateStructureError
 from lib.strict_read import StrictReadStatus
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition, wait_for_restore_deletion
+from modules.backup_continuity import BackupContinuityError, resolve_enable_boundary, verify_backup_continuity
 
 from .activation import SecondaryActivation
 from .backup_schedule import BackupScheduleManager, fail_on_multiple_backup_schedules
@@ -152,97 +150,6 @@ class Finalization:
         if self.dry_run:
             return nullcontext(not self.state.is_step_completed(step_name))
         return self.state.step(step_name, logger)
-
-    @staticmethod
-    def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
-        """Return the ownership signal proving a Velero backup is ACM-owned.
-
-        Preferred signal is the ACM backup-schedule-type label. As a hardened
-        fallback, accept the well-known ACM backup naming convention if the
-        label is missing.
-        """
-        labels = backup.get("metadata", {}).get("labels", {}) or {}
-        label_value = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
-        if label_value in ACM_BACKUP_SCHEDULE_TYPES:
-            return "label"
-
-        backup_name = backup.get("metadata", {}).get("name", "")
-        if ACM_BACKUP_NAME_RE.match(backup_name):
-            return "name-pattern"
-
-        return None
-
-    def _is_acm_owned_backup(self, backup: Dict) -> bool:
-        """Return True when the backup has a recognized ACM ownership signal."""
-        return self._get_acm_backup_ownership_signal(backup) is not None
-
-    def _filter_acm_owned_backups(self, backups: List[Dict]) -> List[Dict]:
-        """Filter Velero backups down to ACM-owned backups only.
-
-        Warn when the label is missing but a known ACM backup name pattern is
-        used as the fallback ownership signal.
-        """
-        acm_backups = []
-        for backup in backups:
-            signal = self._get_acm_backup_ownership_signal(backup)
-            if signal == "name-pattern":
-                backup_name = backup.get("metadata", {}).get("name", "unknown")
-                logger.warning(
-                    "Backup %s is missing ACM ownership label %s; accepting ACM name-pattern fallback",
-                    backup_name,
-                    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
-                )
-            if signal:
-                acm_backups.append(backup)
-        return acm_backups
-
-    @staticmethod
-    def _backup_is_detectable(backup: Dict) -> bool:
-        """Return True when a backup phase proves backup creation has started."""
-        phase = backup.get("status", {}).get("phase", "unknown")
-        return phase in ("InProgress", "Completed", "New")
-
-    def _backup_effective_timestamp(self, backup: Dict) -> Optional[datetime]:
-        """Return the most useful timestamp for backup chronology checks."""
-        status = backup.get("status", {}) or {}
-        metadata = backup.get("metadata", {}) or {}
-        candidate_fields = (
-            ("completionTimestamp", status.get("completionTimestamp")),
-            ("startTimestamp", status.get("startTimestamp")),
-            ("creationTimestamp", metadata.get("creationTimestamp")),
-        )
-        for _field_name, raw_value in candidate_fields:
-            parsed = self._parse_timestamp(raw_value)
-            if parsed:
-                return parsed
-        raw_candidates = [f"{field}={value}" for field, value in candidate_fields if value]
-        if raw_candidates:
-            backup_name = metadata.get("name", "unknown")
-            logger.warning(
-                "Backup %s has unparseable timestamp(s): %s",
-                backup_name,
-                ", ".join(raw_candidates),
-            )
-        return None
-
-    def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
-        """Find an ACM-owned backup that proves continuity after enable/resume."""
-        if enabled_at is None:
-            return None
-
-        candidates = []
-        for backup in backups:
-            backup_ts = self._backup_effective_timestamp(backup)
-            if backup_ts and backup_ts >= enabled_at and self._backup_is_detectable(backup):
-                candidates.append((backup_ts, backup))
-
-        if not candidates:
-            return None
-
-        # Pick the earliest post-enable backup so resume reuses the first proof point
-        # instead of requiring a later backup to appear.
-        candidates.sort(key=lambda item: item[0])
-        return candidates[0][1]
 
     def finalize(self) -> bool:  # noqa: C901
         """
@@ -722,134 +629,38 @@ class Finalization:
             "velero_resources_restore_name": status.get("veleroResourcesRestoreName"),
         }
 
+    def _prove_backup_continuity(self, timeout, max_age_seconds=BACKUP_INTEGRITY_MAX_AGE_SECONDS):
+        """Read current proof without changing historical names or step markers."""
+        try:
+            inputs = self.run_record.backup_continuity_inputs()
+            boundary = resolve_enable_boundary(inputs, observed_at=datetime.now(timezone.utc))
+            if inputs.get("verification_steps") and not inputs.get("recorded_name_present"):
+                raise BackupContinuityError("missing_recorded_backup")
+            name = inputs.get("recorded_name") if inputs.get("recorded_name_present") else None
+            if inputs.get("recorded_name_present") and (not isinstance(name, str) or not name):
+                raise BackupContinuityError("invalid_backup_identity")
+            return verify_backup_continuity(
+                self.secondary,
+                enabled_at=boundary,
+                recorded_name=name,
+                timeout=timeout,
+                poll_interval=BACKUP_POLL_INTERVAL,
+                max_age_seconds=self._get_backup_max_age_seconds(max_age_seconds),
+            )
+        except BackupContinuityError as exc:
+            raise SwitchoverError(str(exc)) from exc
+
     @dry_run_skip(message="Skipping new backup verification")
     def _verify_new_backups(self, timeout: int = BACKUP_VERIFY_TIMEOUT):
-        """
-        Verify new backups are being created after enabling BackupSchedule.
-
-        Fails with SwitchoverError if no new backup appears within the timeout.
-        Records the detected backup name in state for downstream integrity verification.
-
-        Args:
-            timeout: Maximum wait time in seconds
-        """
-
         if self._restore_only_missing_backup_schedule():
             logger.warning(
                 "Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet"
             )
             return
-
-        logger.info("Verifying new backups are being created...")
-
-        # Get current ACM-owned backup list (Velero Backups use velero.io/v1)
-        try:
-            current_backups = self._list_acm_owned_velero_backups()
-        except TransientError as exc:
-            raise SwitchoverError(
-                "Failed to list Velero backups before waiting for a new ACM backup: " f"{exc}"
-            ) from exc
-
-        recorded_backup_name = self.run_record.new_backup()
-        if recorded_backup_name:
-            recorded_backup = self.secondary.get_custom_resource(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                name=recorded_backup_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-            if (
-                recorded_backup
-                and self._is_acm_owned_backup(recorded_backup)
-                and self._backup_is_detectable(recorded_backup)
-            ):
-                logger.info(
-                    "Reusing previously recorded post-switchover backup: %s",
-                    recorded_backup_name,
-                )
-                self.run_record.record_new_backup(recorded_backup_name)
-                return
-
-        enabled_at = self._get_backup_schedule_enabled_at()
-        existing_post_enable_backup = self._find_post_enable_backup(current_backups, enabled_at)
-        if existing_post_enable_backup:
-            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get("name")
-            logger.info(
-                "Found existing post-enable ACM backup on resume: %s",
-                existing_backup_name,
-            )
-            self.run_record.record_new_backup(existing_backup_name)
-            return
-
-        initial_backups = current_backups
-
-        initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
-
-        logger.info("Found %s existing backup(s)", len(initial_backups))
-        logger.info("Waiting for new backup to appear (timeout: %ss)...", timeout)
-
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            try:
-                current_backups = self._list_acm_owned_velero_backups()
-            except TransientError as exc:
-                logger.warning("%s", exc)
-                time.sleep(BACKUP_POLL_INTERVAL)
-                continue
-
-            current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
-
-            # Check for new backups
-            new_backups = current_backup_names - initial_backup_names
-
-            if new_backups:
-                logger.info("New backup(s) detected: %s", ", ".join(new_backups))
-
-                # Verify at least one is in progress or completed
-                for backup_name in new_backups:
-                    backup = next(
-                        (b for b in current_backups if b.get("metadata", {}).get("name") == backup_name),
-                        None,
-                    )
-
-                    if backup:
-                        phase = backup.get("status", {}).get("phase", "unknown")
-                        logger.info("Backup %s phase: %s", backup_name, phase)
-
-                        # Velero uses "InProgress" and "Completed" phases
-                        if phase in ("InProgress", "Completed", "New"):
-                            self.run_record.record_new_backup(backup_name)
-                            logger.info("New backup is being created successfully!")
-                            return
-
-            elapsed = int(time.time() - start_time)
-            logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
-            time.sleep(BACKUP_POLL_INTERVAL)
-
-        raise SwitchoverError(
-            f"No new backup created within {timeout}s after enabling BackupSchedule on new hub. "
-            "Finalization cannot succeed without proof of backup continuity."
-        )
-
-    def _list_acm_owned_velero_backups(self) -> List[Dict]:
-        """Return ACM backups only from a positively complete strict inventory.
-
-        The baseline caller fails closed; polling may retry the whole read within
-        its existing timeout without replacing the established baseline.
-        """
-        outcome = self.secondary.list_custom_resources_strict(
-            group="velero.io",
-            version="v1",
-            plural="backups",
-            namespace=BACKUP_NAMESPACE,
-        )
-        if outcome.status is not StrictReadStatus.ITEMS:
-            raise TransientError(
-                "Velero backup inventory is not positively complete: " f"{outcome.status.value} ({outcome.reason})"
-            )
-        return self._filter_acm_owned_backups(outcome.items)
+        proof = self._prove_backup_continuity(timeout)
+        inputs = self.run_record.backup_continuity_inputs()
+        if not inputs.get("recorded_name_present"):
+            self.run_record.record_new_backup(proof["name"])
 
     def _get_backup_verify_timeout(self) -> int:
         """Derive backup verification timeout from BackupSchedule cadence."""
@@ -875,18 +686,6 @@ class Finalization:
             )
             return derived_max_age
         return default_max_age
-
-    def _get_backup_schedule_enabled_at(self) -> Optional[datetime]:
-        enabled_at_raw = self.run_record.backup_watch_started_at()
-        enabled_at = self._parse_timestamp(enabled_at_raw)
-        if enabled_at:
-            return enabled_at
-
-        steps = getattr(self.state, "state", {}).get("completed_steps", [])
-        for step in steps:
-            if step.get("name") == "enable_backup_schedule":
-                return self._parse_timestamp(step.get("timestamp"))
-        return None
 
     def _get_backup_schedule_interval_seconds(self) -> Optional[int]:
         schedules = self._get_backup_schedules()
@@ -915,16 +714,6 @@ class Finalization:
                 cron_expr,
             )
         return interval
-
-    @staticmethod
-    def _parse_timestamp(timestamp: Optional[str]) -> Optional[datetime]:
-        """Parse a Kubernetes timestamp into a timezone-aware datetime."""
-        if not timestamp:
-            return None
-        try:
-            return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return None
 
     @staticmethod
     def _parse_cron_interval_seconds(cron_expr: str) -> Optional[int]:
@@ -1029,170 +818,14 @@ class Finalization:
             )
 
     @dry_run_skip(message="Skipping backup integrity verification")
-    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
-        """Verify backup status, logs, and recency for the post-switchover backup.
-
-        When a post-switchover backup name was recorded by _verify_new_backups(), that
-        specific backup is fetched and verified. This prevents unrelated backups in the
-        namespace from masking a missing or failed ACM backup.
-
-        Falls back to the latest-by-timestamp backup (with a warning) only when no
-        recorded name is available (e.g. during a dry-run).
-        """
+    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:
         if self._restore_only_missing_backup_schedule():
             logger.warning(
                 "Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet"
             )
             return
-
-        logger.info("Verifying backup integrity...")
-        effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
-
-        post_switchover_backup_name = self.run_record.new_backup()
-
-        if post_switchover_backup_name:
-            logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
-            latest_backup = self.secondary.get_custom_resource(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                name=post_switchover_backup_name,
-                namespace=BACKUP_NAMESPACE,
-            )
-            if not latest_backup:
-                logger.warning(
-                    "Post-switchover backup '%s' no longer exists (likely pruned by retention); "
-                    "falling back to latest ACM-owned backup",
-                    post_switchover_backup_name,
-                )
-                post_switchover_backup_name = None
-            elif not self._is_acm_owned_backup(latest_backup):
-                raise SwitchoverError(
-                    f"Post-switchover backup '{post_switchover_backup_name}' is not ACM-owned; "
-                    "cannot verify integrity against an unrelated Velero backup"
-                )
-            else:
-                backup_name = post_switchover_backup_name
-
-        if not post_switchover_backup_name:
-            if not self.run_record.new_backup():
-                logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
-            try:
-                backups = self._list_acm_owned_velero_backups()
-            except TransientError as exc:
-                raise SwitchoverError("Failed to list Velero backups for integrity verification: " f"{exc}") from exc
-            if not backups:
-                raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
-
-            def _backup_sort_key(backup: Dict) -> str:
-                return backup.get("metadata", {}).get("creationTimestamp", "") or ""
-
-            latest_backup = max(backups, key=_backup_sort_key)
-            backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
-
-        status = latest_backup.get("status", {}) or {}
-
-        phase = status.get("phase", "unknown")
-
-        def _to_int(value: Optional[Any]) -> int:
-            try:
-                return int(value or 0)
-            except (TypeError, ValueError):
-                return 0
-
-        if phase != "Completed":
-            if phase in ("New", "InProgress", "Finalizing"):
-                backup_verify_timeout = self._get_backup_verify_timeout()
-
-                def _poll_backup_completion() -> WaitConditionResult:
-                    backup = self.secondary.get_custom_resource(
-                        group="velero.io",
-                        version="v1",
-                        plural="backups",
-                        name=backup_name,
-                        namespace=BACKUP_NAMESPACE,
-                    )
-                    if not backup:
-                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
-                    poll_phase = backup.get("status", {}).get("phase", "unknown")
-                    if poll_phase == "Completed":
-                        return WaitConditionResult.complete("phase=Completed")
-                    if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
-                    return WaitConditionResult.pending(f"phase={poll_phase}")
-
-                completed = wait_for_condition(
-                    f"backup {backup_name} completion",
-                    _poll_backup_completion,
-                    timeout=backup_verify_timeout,
-                    interval=BACKUP_POLL_INTERVAL,
-                    logger=logger,
-                )
-                if not completed:
-                    raise SwitchoverError(
-                        f"Latest backup {backup_name} did not complete within {backup_verify_timeout}s"
-                    )
-                latest_backup = (
-                    self.secondary.get_custom_resource(
-                        group="velero.io",
-                        version="v1",
-                        plural="backups",
-                        name=backup_name,
-                        namespace=BACKUP_NAMESPACE,
-                    )
-                    or latest_backup
-                )
-                status = latest_backup.get("status", {}) or {}
-            else:
-                raise SwitchoverError(f"Latest backup {backup_name} not completed (phase={phase})")
-
-        errors = _to_int(status.get("errors"))
-        warnings = _to_int(status.get("warnings"))
-        if errors > 0:
-            raise SwitchoverError(f"Latest backup {backup_name} completed with {errors} error(s)")
-        if warnings > 0:
-            logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
-
-        enabled_at = self._get_backup_schedule_enabled_at()
-        # A backup is considered "after enable" if its name was recorded by
-        # _verify_new_backups (meaning it was detected after enabling the schedule),
-        # or if its timestamp is >= the recorded enable time.
-        is_post_switchover_backup = bool(post_switchover_backup_name)
-
-        completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
-        creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
-        ts = completion_ts or creation_ts
-        parsed_ts = self._parse_timestamp(ts)
-
-        if not parsed_ts:
-            logger.warning(
-                "Unable to parse timestamp for backup %s (timestamp=%s)",
-                backup_name,
-                ts,
-            )
-        else:
-            age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
-            backup_after_enable = False
-            if enabled_at:
-                backup_after_enable = parsed_ts >= enabled_at
-            else:
-                backup_after_enable = is_post_switchover_backup
-
-            if not backup_after_enable:
-                logger.warning(
-                    "No new backups detected since enabling BackupSchedule; "
-                    "skipping backup age enforcement for %s (latest: %ss old)",
-                    backup_name,
-                    age_seconds,
-                )
-            else:
-                if age_seconds > effective_max_age_seconds:
-                    raise SwitchoverError(
-                        f"Latest backup {backup_name} is too old ({age_seconds}s > {effective_max_age_seconds}s)"
-                    )
-                logger.info("Latest backup %s completed %ss ago", backup_name, age_seconds)
-
-        self._check_velero_logs_for_backup(backup_name)
+        proof = self._prove_backup_continuity(self._get_backup_verify_timeout(), max_age_seconds)
+        self._check_velero_logs_for_backup(proof["name"])
 
     def _get_backup_schedules(self, force_refresh: bool = False) -> List[Dict]:
         """Get backup schedules with caching.

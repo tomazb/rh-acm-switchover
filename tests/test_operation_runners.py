@@ -150,6 +150,7 @@ def test_run_switchover_impl_uses_validate_only_preflight_shortcut():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
@@ -176,6 +177,7 @@ def test_run_switchover_impl_passes_expected_phase_flow_to_run_phase_flow():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
@@ -217,6 +219,7 @@ def test_run_switchover_impl_tolerates_missing_optional_args():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
@@ -248,6 +251,7 @@ def test_run_restore_only_impl_uses_validate_only_preflight_shortcut():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
@@ -273,6 +277,7 @@ def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_p
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
@@ -312,6 +317,7 @@ def test_run_restore_only_impl_tolerates_missing_optional_args():
         fail_phase=Mock(return_value=False),
         fail_unexpected_phase_state=Mock(return_value=False),
         on_phase_failure=Mock(),
+        backup_continuity_guard=lambda *a, **k: True,
     )
 
     with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(

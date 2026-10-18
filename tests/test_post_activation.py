@@ -3178,6 +3178,7 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
+            backup_continuity_guard=lambda *a, **k: True,
         )
 
         if dry_run:
@@ -3216,6 +3217,7 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
+            backup_continuity_guard=lambda *a, **k: True,
         )
 
         assert result is False
@@ -3242,6 +3244,7 @@ class TestPostActivationEvidenceReviewFindings:
             Mock(return_value=False),
             Mock(),
             Mock(),
+            backup_continuity_guard=lambda *a, **k: True,
         )
         finalization.assert_called_once()
 
@@ -3269,6 +3272,7 @@ class TestPostActivationEvidenceReviewFindings:
             fail_phase,
             Mock(),
             Mock(),
+            backup_continuity_guard=lambda *a, **k: True,
         )
         return result, finalization, failed
 

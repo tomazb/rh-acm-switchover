@@ -211,7 +211,7 @@ can be exercised without a live client.
 Owns phase-flow execution and state-driven entry decisions:
 
 - `run_phase_flow` — drives the ordered phase handlers
-- `handle_completed_state` — handles reruns against a recently completed state
+- `handle_completed_state` — requires current read-only Backup proof before a recent completed no-op
 - `handle_failed_state` — prepares a failed state for retry, or exits when the retry phase is unknown
 - `run_validate_only_preflight` — the validate-only path
 - `refuse_predictable_journal_reset` — refuses, before any write, a `--force` run whose implicit
@@ -246,9 +246,10 @@ Provides the operational scaffolding:
 - error history
 
 Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
-Dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
+Active dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
 validate-only runtime checkpoints, which intentionally preserve discovered run facts while restoring phase and error
-state.
+state. Completed Backup assessment takes neither write path: bootstrap and outcomes validate retained state read-only,
+including interruption and unexpected failure.
 
 The main switchover and restore-only phase loops assert the expected durable phase
 after each handler that returns success. This keeps resume and completion
@@ -475,11 +476,40 @@ and import-endpoint/client-binding checks; it does not close races after the rea
 - verifying new backups after promotion
 - handling the old hub according to `--old-hub-action`
 
-Backup continuity and the integrity fallback share
-`Finalization._list_acm_owned_velero_backups`, which consumes only `ITEMS` from
-`KubeClient.list_custom_resources_strict`. An unreadable initial inventory fails before
-recorded-name reuse; failed polling reads retain the established baseline and may retry
-within the existing wait. No new strict-read outcome or checkpoint is introduced.
+`modules/backup_continuity.py` owns read-only Backup proof. `Finalization` calls it
+for continuity and integrity; the CLI wires the same proof into workflow-owned active
+and completed entry guards. `RunRecord.backup_continuity_inputs()` exposes raw boundary
+presence, name and step facts without changing the persisted format. Complete strict
+inventory precedes recorded-name reuse, and bounded failed polls retain the good
+baseline. Creation must fall between the trustworthy enable boundary and observation;
+terminal GETs must retain name/UID, ownership and clean `Completed` status.
+
+The Collection independently implements the rule in
+`plugins/module_utils/backup_continuity.py`, behind `acm_backup_continuity`.
+`assess_completed.yml` runs before ordinary checkpoint entry in both playbooks and
+the direct finalization role. Completed identity and Backup assessment stay outside
+mutation-capable rescue; active retry proof follows required re-pause and precedes
+cleanup/enable. Raw finalization history with no boundary refuses rather than creating
+one. No proof cache, checkpoint version or generic lifecycle mechanism is added.
+
+```mermaid
+flowchart TD
+    E[Invocation entry] --> C{Already completed?}
+    C -->|yes| I[Read-only retained identity and current Backup proof]
+    I -->|proved| N[Read-only no-op]
+    I -->|unproved| R[Refuse without checkpoint writes or replay]
+    C -->|no| P[Existing identity and required Argo CD re-pause]
+    P --> H{Historical Backup evidence?}
+    H -->|yes| V[Fresh Backup proof before cleanup or enable]
+    V -->|unproved| A[Refuse; existing active failure audit only]
+    V -->|proved| F[Ordinary finalization]
+    H -->|fresh entry| F
+```
+
+The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
+records the Python absent-only legacy fallback, independent Collection selection,
+read-only recovery boundary, and the separate #367 shipped-positive acceptance hold.
+The diagram describes the #342 candidate, not a completed merge or live certification.
 
 The Restore-cleanup decisions are pure functions in `lib/migration_cleanup.py`; `Finalization`
 owns the strict reads, the guarded DELETE and the journal writes. The order is:

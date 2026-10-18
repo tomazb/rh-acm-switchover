@@ -1,0 +1,7 @@
+---
+- name: Prove current creation-bound clean Backup continuity
+  tomazb.acm_switchover.acm_backup_continuity:
+    inputs: "{{ acm_switchover_backup_lifecycle_inputs }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_switchover_backup_proof

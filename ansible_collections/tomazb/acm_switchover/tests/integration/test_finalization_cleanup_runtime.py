@@ -418,6 +418,31 @@ def test_the_role_entry_derives_the_repair_request_from_the_operator_input(
     recovered = run_finalization("full_restore", hub, None)
     assert recovered.journal["cleanup"]["state"] == "recovery_required"
 
+    # The transaction fragment stopped before enablement. This independent role-entry
+    # repair-input contract supplies valid Backup proof as an explicit non-live
+    # prerequisite, so the historical-entry guard does not mask the cleanup refusal.
+    from datetime import datetime, timedelta, timezone
+
+    observed = datetime.now(timezone.utc)
+    checkpoint = json.loads(recovered.path.read_text())
+    checkpoint["operational_data"]["backup_schedule_enabled_at"] = (observed - timedelta(minutes=2)).isoformat()
+    recovered.path.write_text(json.dumps(checkpoint))
+    for backup in hub.backups.values():
+        backup["metadata"]["creationTimestamp"] = "2024-01-02T12:00:00Z"
+    name = "acm-managed-clusters-repair-contract"
+    hub.backups[name] = {
+        "apiVersion": "velero.io/v1",
+        "kind": "Backup",
+        "metadata": {
+            "name": name,
+            "namespace": "open-cluster-management-backup",
+            "uid": "uid-repair-proof",
+            "resourceVersion": "42",
+            "creationTimestamp": (observed - timedelta(minutes=1)).isoformat(),
+        },
+        "status": {"phase": "Completed", "errors": 0},
+    }
+
     blocked = run_finalization("full_restore", hub, None, entry="main")
     assert blocked.completed.returncode != 0
     assert "cleanup_recovery_required" in blocked.output

@@ -37,13 +37,15 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 | Migrate checkpoint between runs | Use the collection checkpoint JSON as-is. |
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
-`checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
+`checkpoint_phase` action plugin normally skips phases listed in `completed_phases` on resume.
+The #342 candidate assesses completed finalization before that skip, including when all
+prior phases are complete, and refuses reset controls on that read-only assessment.
 Checkpoints written under pre-2.19 ansible-core (classic Jinja) may carry
 stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
 types); the facts layer coerces digit strings and Ansible's boolean vocabulary
 back to native types on read, so those checkpoints resume identically.
-A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
-pre-existing checkpoint file.
+Outside completed Backup assessment, a fresh run or an explicitly permitted
+`checkpoint.reset: true` starts from the beginning under the existing reset contract.
 
 Corrupt state is handled alike on both sides (R4-04 PR B). A Python state file or
 collection checkpoint that is not valid JSON, or whose top level is not a JSON
@@ -55,8 +57,9 @@ also fails without touching the original. Earlier collection releases moved the
 corrupt checkpoint aside instead, so the next run silently started fresh.
 Non-mutating collection runs report the corruption without making the copy. An
 unreadable file blocks on both sides without a copy. Python also treats a state
-file with an unknown `current_phase` as corrupt; the collection checks no
-checkpoint field beyond the top-level object.
+file with an unknown `current_phase` as corrupt. The Collection's generic loader
+checks the top-level object; Backup lifecycle assessment additionally refuses malformed
+`operational_data` or `completed_phases` before normal checkpoint entry.
 
 A recorded R4-04 migration journal is dropped only by the explicit full reset on
 both sides (`--reset-state` / `checkpoint.reset: true`). Python refuses the implicit
@@ -153,15 +156,18 @@ Shared behavior:
   the current finalization pass it refuses before any request ("Refusing the old-hub action: no
   validated migration journal and Restore-cleanup result from this finalization pass is
   available").
-- **Backup continuity (#342).** Python accepts only a complete strict Backup inventory
-  for the initial baseline, polling, and integrity fallback. An unreadable baseline
-  blocks before recorded-name reuse. Poll failures may retry within the existing wait
-  while retaining the baseline. The Collection independently requires a Backup created
-  at or after its persisted enable timestamp, then clean `Completed` status. No parity
-  status changes. Legacy stored Python names or completed checkpoints are not migrated.
-  Real task-level comparison isolates the pre-existing Collection timeout-template
-  failure tracked by [#367](https://github.com/tomazb/rh-acm-switchover/issues/367);
-  it does not establish a full unchanged-role pass.
+- **Backup continuity (#342 candidate).** Both independent proof owners require a complete
+  strict inventory, trustworthy enable boundary, current creation-time proof and terminal
+  name/UID/ownership/health checks. Old markers cannot skip historical-entry or completed
+  assessment. Completed refusal is read-only across bootstrap, phase and rescue paths;
+  valid proof permits a read-only no-op. Active retry re-pauses first and preserves raw
+  historical boundary presence/value during existing failure auditing. Python retains its
+  stored-name and absent-only legacy-step input model; Collection selects the latest fresh
+  candidate against its own persisted boundary, without a step fallback. Missing or
+  ambiguous history may remain held. No store migration, cross-runtime resume or parity
+  status change is introduced. See the [operator contract](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints).
+  The separate [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+  still blocks shipped execute-positive acceptance on both supported lanes.
 - **Cleanup recovery and repair.** The same states, transitions, reason codes
   (`absent_without_completion`, `replacement_uid`, `replacement_during_poll`), conflict retry
   bound (three retries), and 300-second elapsed poll bound. Each absence-poll read is bounded by

@@ -106,7 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before recording or reusing a Backup name. Failed polls retain the existing baseline
   and retry within the existing wait; the integrity fallback also uses strict inventory.
   This prevents a baseline LIST 404 followed by a recovered old Backup from certifying
-  continuity (#342). Existing stored names and completed checkpoints are not migrated.
+  continuity (#342). Historical names and verification markers now require fresh, read-only
+  Backup creation and terminal-health proof against the persisted enable boundary in both
+  form factors. A refused COMPLETED assessment preserves checkpoint bytes and does not replay
+  phases. Missing or ambiguous proof remains held; no checkpoint migration or recovery
+  mutation is introduced. Refs #342; the separate #352 provenance hold remains.
 - Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
   Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
   the existing 600-second minimum, completion grace, fixed cadences, and fallback.

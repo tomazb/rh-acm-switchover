@@ -1,11 +1,17 @@
 ---
+# This read-only entry stays outside every phase/checkpoint/Argo CD rescue.
+- name: Assess completed Backup continuity before finalization entry
+  ansible.builtin.include_tasks: assess_completed.yml
+
 - name: Enter checkpointed phase
   tomazb.acm_switchover.checkpoint_phase:
     phase: finalization
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
   register: _checkpoint_enter
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not (acm_switchover_backup_completed_assessed | bool)
 
 # PR C decisions amendment 2.2 rule 3: the Argo CD re-pause a failure rescue left runs
 # before any finalization work, outside the phase rescue (a failed re-pause resumes nothing).
@@ -13,10 +19,14 @@
   ansible.builtin.include_role:
     name: tomazb.acm_switchover.argocd_manage
     tasks_from: repause_recovery
-  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+  when:
+    - not (acm_switchover_backup_completed_assessed | bool)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
 
 - name: Run finalization phase
-  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+  when:
+    - not (acm_switchover_backup_completed_assessed | bool)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     # The direct role entry (docs/variable-reference.md) proves its operator inputs
     # before any mutation.
@@ -24,6 +34,13 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/guard_role_entry.yml"
       vars:
         _acm_role_entry_phase: finalization
+
+    # Historical boundary proof runs after required re-pause, before cleanup/enable.
+    - name: Prove historical Backup continuity before finalization mutations
+      ansible.builtin.include_tasks: verify_backup_proof.yml
+      when: >-
+        (acm_switchover_backup_lifecycle_inputs.enabled_at_present | default(false) | bool)
+        or (acm_switchover_backup_lifecycle_inputs.phase | default('')) == 'finalization'
 
     # R4-04: the journal comes only from the checkpoint enter and is validated before any
     # Restore cleanup, old-hub action or BackupSchedule enablement. Restore-only and full
@@ -60,13 +77,10 @@
     - name: Reconcile the journaled Restore cleanup
       ansible.builtin.include_tasks: cleanup_journaled_restore.yml
 
-    - name: Restore backup verification baseline from checkpoint
+    - name: Restore the validated backup verification boundary
       ansible.builtin.set_fact:
-        acm_switchover_backup_schedule_enabled_at: >-
-          {{ ((_checkpoint_enter | default({})).get('facts', {})).get('backup_schedule_enabled_at') }}
-      when:
-        - acm_switchover_execution.checkpoint.enabled | default(false)
-        - (((_checkpoint_enter | default({})).get('facts', {})).get('backup_schedule_enabled_at', '')) | length > 0
+        acm_switchover_backup_schedule_enabled_at: "{{ acm_switchover_backup_lifecycle_inputs.enabled_at }}"
+      when: acm_switchover_backup_lifecycle_inputs.enabled_at_present | default(false) | bool
 
     - name: Restore saved BackupSchedule from checkpoint
       ansible.builtin.set_fact:
@@ -189,9 +203,18 @@
                 (acm_switchover_features.argocd.manage | default(false) | bool)
                 and (acm_switchover_features.argocd.resume_on_failure | default(false) | bool)
               }}
-            operational_data:
-              backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
-              saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
+            # Historical boundary presence or absence belongs to the checkpoint.
+            # A retry must never copy a runtime fact over the original raw evidence.
+            operational_data: >-
+              {{
+                {'saved_backup_schedule': (acm_switchover_saved_backup_schedule | default(''))}
+                | combine(
+                    {} if (
+                      (acm_switchover_backup_lifecycle_inputs.enabled_at_present | default(false) | bool)
+                      or (acm_switchover_backup_lifecycle_inputs.phase | default('')) == 'finalization'
+                    ) else {'backup_schedule_enabled_at': (acm_switchover_backup_schedule_enabled_at | default(''))}
+                  )
+              }}
           register: _acm_fail_transition
 
         - name: Acknowledge the durable Argo CD re-pause marker
@@ -220,4 +243,5 @@
       saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not (acm_switchover_backup_completed_assessed | bool)
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

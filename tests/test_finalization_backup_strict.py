@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from kubernetes.client.rest import ApiException
 
+import acm_switchover as cli
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_NAMESPACE
 from lib.exceptions import SwitchoverError
@@ -37,7 +38,12 @@ def backup(name, timestamp, phase="Completed", errors=0):
             "creationTimestamp": timestamp,
             "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
         },
-        "status": {"phase": phase, "completionTimestamp": timestamp, "errors": errors, "warnings": 0},
+        "status": {
+            "phase": phase,
+            "completionTimestamp": timestamp,
+            "errors": errors,
+            "warnings": 0,
+        },
     }
 
 
@@ -62,7 +68,14 @@ class BackupTransport:
         return copy.deepcopy(effect)
 
     def list_namespaced_custom_object(self, **kwargs):
-        assert (kwargs["group"], kwargs["version"], kwargs["plural"], kwargs["namespace"]) == (
+        if kwargs["plural"] == "backupschedules":
+            return page([])
+        assert (
+            kwargs["group"],
+            kwargs["version"],
+            kwargs["plural"],
+            kwargs["namespace"],
+        ) == (
             "velero.io",
             "v1",
             "backups",
@@ -71,7 +84,13 @@ class BackupTransport:
         try:
             result = self._next(self.effects)
         except Exception as exc:
-            self.requests.append(("LIST", kwargs.get("_continue"), getattr(exc, "status", type(exc).__name__)))
+            self.requests.append(
+                (
+                    "LIST",
+                    kwargs.get("_continue"),
+                    getattr(exc, "status", type(exc).__name__),
+                )
+            )
             raise
         self.requests.append(("LIST", kwargs.get("_continue"), result))
         return result
@@ -81,6 +100,22 @@ class BackupTransport:
         return self._next(self.objects)
 
     def call_api(self, path, method, **kwargs):
+        if path == "/apis/cluster.open-cluster-management.io/v1beta1":
+            return SimpleNamespace(
+                data=json.dumps(
+                    {
+                        "kind": "APIResourceList",
+                        "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+                        "resources": [
+                            {
+                                "name": "backupschedules",
+                                "kind": "BackupSchedule",
+                                "namespaced": True,
+                            }
+                        ],
+                    }
+                ).encode()
+            )
         assert (path, method) == ("/apis/velero.io/v1", "GET")
         self.requests.append(("discovery", path))
         if isinstance(self.discovery, Exception):
@@ -114,12 +149,16 @@ class Clock:
 
 @pytest.fixture
 def make_finalization(tmp_path, monkeypatch):
-    monkeypatch.setattr(finalization_module, "time", Clock())
+    clock = Clock()
+    monkeypatch.setattr(finalization_module, "time", clock)
+    import modules.backup_continuity as proof_module
+
+    monkeypatch.setattr(proof_module, "time", clock)
     monkeypatch.setattr(finalization_module, "BACKUP_POLL_INTERVAL", 1)
     now = datetime.now(timezone.utc)
-    enabled = now.isoformat()
+    enabled = (now - timedelta(seconds=2)).isoformat()
     old = backup("acm-managed-clusters-old", (now - timedelta(days=3)).isoformat())
-    new = backup("acm-managed-clusters-new", (now + timedelta(seconds=1)).isoformat())
+    new = backup("acm-managed-clusters-new", (now - timedelta(seconds=1)).isoformat())
 
     def make(effects, objects=None, discovery="served", **kwargs):
         transport = BackupTransport(effects, objects=[new] if objects is None else objects, discovery=discovery)
@@ -169,6 +208,7 @@ def flow(fin):
         lambda *args: False,
         lambda *args: False,
         lambda *args: None,
+        backup_continuity_guard=cli._verify_backup_continuity_entry,
     )
 
 
@@ -192,14 +232,21 @@ def test_actual_404_baseline_cannot_certify_recovered_old_completed_backup(make_
             fin._verify_backup_integrity()
         except SwitchoverError:
             refused = True
-    assert ("LIST", None, 404) in transport.requests  # Fault actually reached the reader.
+    assert (
+        "LIST",
+        None,
+        404,
+    ) in transport.requests  # Fault actually reached the reader.
     assert refused, f"Actual baseline 404 reached reader but certified old Backup: {transport.requests!r}"
     assert fin.run_record.new_backup() is None
     assert_no_backup_completion(fin)
     assert not any(request[0] == "GET" for request in transport.requests)
 
 
-@pytest.mark.parametrize("fault", ["403", "transport", "discovery", "unserved", "malformed", "page404", "revision"])
+@pytest.mark.parametrize(
+    "fault",
+    ["403", "transport", "discovery", "unserved", "malformed", "page404", "revision"],
+)
 def test_invalid_baseline_never_records_a_backup_or_completes_a_step(make_finalization, fault):
     old = make_finalization.old
     effects = {
@@ -209,7 +256,10 @@ def test_invalid_baseline_never_records_a_backup_or_completes_a_step(make_finali
         "unserved": [page([])],
         "malformed": [{"items": [old], "metadata": {}}],
         "page404": [page([old], "next"), ApiException(status=404)],
-        "revision": [page([old], "next"), {"items": [], "metadata": {"resourceVersion": "different"}}],
+        "revision": [
+            page([old], "next"),
+            {"items": [], "metadata": {"resourceVersion": "different"}},
+        ],
     }[fault]
     discovery = RuntimeError("discovery") if fault == "discovery" else "unserved" if fault == "unserved" else "served"
     fin, transport = make_finalization(effects, discovery=discovery)
@@ -222,7 +272,9 @@ def test_invalid_baseline_never_records_a_backup_or_completes_a_step(make_finali
         assert not any(request[0] == "LIST" for request in transport.requests)
 
 
-def test_positive_empty_then_new_clean_completed_backup_completes_flow(make_finalization):
+def test_positive_empty_then_new_clean_completed_backup_completes_flow(
+    make_finalization,
+):
     new = make_finalization.new
     fin, _ = make_finalization([page([]), page([new])])
     complete_other_steps(fin)
@@ -234,12 +286,15 @@ def test_positive_empty_then_new_clean_completed_backup_completes_flow(make_fina
     assert RunRecord(reloaded).new_backup() == new["metadata"]["name"]
 
 
-@pytest.mark.parametrize("poll_fault", [None, ApiException(status=404), ApiException(status=403), RuntimeError("poll")])
+@pytest.mark.parametrize(
+    "poll_fault",
+    [None, ApiException(status=404), ApiException(status=403), RuntimeError("poll")],
+)
 def test_poll_failure_and_recovery_cannot_erase_existing_baseline(make_finalization, poll_fault):
     old = make_finalization.old
     effects = [page([old])] + ([] if poll_fault is None else [poll_fault]) + [page([old])]
     fin, transport = make_finalization(effects)
-    with pytest.raises(SwitchoverError, match="No new backup"):
+    with pytest.raises(SwitchoverError, match="No qualifying new backup"):
         fin._verify_new_backups(timeout=5)
     assert fin.run_record.new_backup() is None
     assert_no_backup_completion(fin)
@@ -255,9 +310,11 @@ def test_poll_read_failure_can_recover_to_genuinely_new_backup(make_finalization
     assert fin.run_record.new_backup() == new["metadata"]["name"]
 
 
-def test_repeated_poll_failures_exhaust_bound_without_partial_evidence(make_finalization):
+def test_repeated_poll_failures_exhaust_bound_without_partial_evidence(
+    make_finalization,
+):
     fin, transport = make_finalization([page([]), ApiException(status=404)])
-    with pytest.raises(SwitchoverError, match="No new backup"):
+    with pytest.raises(SwitchoverError, match="No qualifying new backup"):
         fin._verify_new_backups(timeout=5)
     assert 2 <= sum(request[0] == "LIST" for request in transport.requests) <= 7
     assert fin.run_record.new_backup() is None
@@ -286,7 +343,7 @@ def test_valid_post_enable_baseline_resumes_without_another_backup(make_finaliza
     fin._verify_new_backups(timeout=5)
     fin._verify_backup_integrity()
     assert fin.run_record.new_backup() == new["metadata"]["name"]
-    assert sum(request[0] == "LIST" for request in transport.requests) == 1
+    assert sum(request[0] == "LIST" for request in transport.requests) == 2
 
 
 @pytest.mark.parametrize("phase,errors", [("Failed", 0), ("PartiallyFailed", 0), ("Completed", 1)])
@@ -312,10 +369,12 @@ def test_integrity_fallback_requires_complete_strict_inventory(make_finalization
     assert fin.run_record.new_backup() is None
 
 
-def test_disappeared_recorded_backup_with_empty_fallback_refuses_completion(make_finalization):
+def test_disappeared_recorded_backup_with_empty_fallback_refuses_completion(
+    make_finalization,
+):
     fin, _ = make_finalization([page([])], [ApiException(status=404)])
     fin.run_record.record_new_backup(make_finalization.new["metadata"]["name"])
-    with pytest.raises(SwitchoverError, match="No ACM-owned"):
+    with pytest.raises(SwitchoverError, match="recorded_backup_unavailable"):
         fin._verify_backup_integrity()
 
 

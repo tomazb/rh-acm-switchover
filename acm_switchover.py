@@ -38,6 +38,7 @@ from lib import (
     runtime_bootstrap,
     setup_logging,
     validate_decommission_permissions,
+    workflow,
 )
 from lib.argocd_register import ArgocdPauseRegister
 from lib.constants import (
@@ -494,6 +495,7 @@ def _build_switchover_runner_hooks() -> operation_runners.SwitchoverRunnerHooks:
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        backup_continuity_guard=_verify_backup_continuity_entry,
         rescue_repause=_repause_argocd_after_rescue,
     )
 
@@ -508,6 +510,7 @@ def _build_restore_only_runner_hooks() -> operation_runners.RestoreOnlyRunnerHoo
         fail_phase=_fail_phase,
         fail_unexpected_phase_state=_fail_unexpected_phase_state,
         on_phase_failure=_attempt_argocd_resume_on_failure,
+        backup_continuity_guard=_verify_backup_continuity_entry,
         rescue_repause=_repause_argocd_after_rescue,
     )
 
@@ -530,7 +533,11 @@ def run_switchover(
     """Execute the main switchover workflow."""
     # The public wrapper owns dry-run rollback because the library runner still
     # performs durable phase bookkeeping to exercise the real workflow path.
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot()
+        if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state)
+        else None
+    )
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
     except MigrationJournalResetRefused:
@@ -624,7 +631,11 @@ def run_restore_only(
     """Execute restore-only workflow for single-hub restore from backup."""
     # Keep dry-run rollback at the wrapper boundary so restore-only and full
     # switchover discard all durable state written by shared runner helpers.
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot()
+        if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state)
+        else None
+    )
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
     except MigrationJournalResetRefused:
@@ -1042,6 +1053,40 @@ def _require_waivable_expectation(args: argparse.Namespace, expected_names: list
         )
 
 
+def _verify_backup_continuity_entry(args, state, primary, secondary, logger, *, completed: bool) -> bool:
+    """Wire domain proof; workflow owns historical/completed applicability."""
+    if not completed and not _require_waivable_recorded_expectation(args, state, logger):
+        return False
+    inputs = RunRecord(state).backup_continuity_inputs()
+    historical = (
+        workflow.historical_finalization_backup_assessment(state)
+        or inputs.get("invalid_reason")
+        or inputs.get("enabled_at_present")
+        or inputs.get("recorded_name_present")
+        or inputs.get("verification_steps")
+        or inputs.get("legacy_enable_steps")
+    )
+    if not completed and not historical:
+        return True
+    try:
+        finalization = Finalization(
+            secondary,
+            state,
+            RunRecord(state).hub_facts().secondary_version,
+            primary_client=primary,
+            old_hub_action="none",
+        )
+        finalization._prove_backup_continuity(finalization._get_backup_verify_timeout())
+        return True
+    except SwitchoverError as exc:
+        logger.error("%s", exc)
+    except Exception:
+        logger.error(
+            "Backup continuity cannot be established from fresh evidence; preserve the checkpoint for assessment."
+        )
+    return False
+
+
 def _run_phase_finalization(
     args: argparse.Namespace,
     state: StateManager,
@@ -1278,11 +1323,20 @@ def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namesp
     preserve the wiped state (parity audit finding H10). main() restores the
     returned guard after the rehearsal completes.
     """
+    if workflow.completed_backup_assessment(args, state):
+        state.validate_retained_contexts(
+            getattr(args, "primary_context", None),
+            getattr(args, "secondary_context", None),
+        )
+        return None
     dry_run_state_guard = None
     if getattr(args, "dry_run", False):
         dry_run_state_guard = state.capture_state_snapshot()
     try:
-        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
+        state.ensure_contexts(
+            getattr(args, "primary_context", None),
+            getattr(args, "secondary_context", None),
+        )
     except MigrationJournalResetRefused:
         # Refused before any change: there is nothing to restore, and restoring would write.
         raise
@@ -1339,7 +1393,7 @@ def _prepare_runtime(
     if should_bind_state:
         try:
             dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
-        except MigrationJournalResetRefused as exc:
+        except (MigrationJournalResetRefused, StateIdentityMismatch) as exc:
             # ensure_contexts refused a reset that would drop a migration journal.
             logger.error("%s", exc)
             sys.exit(EXIT_FAILURE)
@@ -1404,6 +1458,10 @@ def _bind_runtime_hub_identities(
             validate_distinct_hub_identities(hub_identities)
     except (runtime_bootstrap.HubIdentityVerificationError, ValidationError) as exc:
         raise _PhysicalHubIdentityRefusal(str(exc)) from None
+
+    if workflow.completed_backup_assessment(args, state):
+        state.validate_retained_hub_identities(hub_identities)
+        return
 
     # #332: a --force reset this run would refuse over a migration journal refuses before
     # identity is persisted, so the refused state file stays unchanged.

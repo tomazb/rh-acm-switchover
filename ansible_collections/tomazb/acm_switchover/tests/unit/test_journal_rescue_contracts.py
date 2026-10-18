@@ -9,6 +9,7 @@ import pathlib
 
 import pytest
 import yaml
+from yaml_contract_helpers import _workflow_entry_sections
 
 COLLECTION = pathlib.Path(__file__).resolve().parents[2]
 PLAYBOOKS = COLLECTION / "playbooks"
@@ -137,27 +138,16 @@ def test_the_retry_repause_clears_the_marker_only_after_every_hub_paused():
 
 def test_both_playbooks_repause_after_the_identity_barrier_and_before_phase_work():
     outer, _ = _switchover_rescue()
-    names = [task.get("name") for task in outer["block"]]
-    assert names[:3] == [
-        "Establish trusted identity and checkpoint barrier",
-        "Re-pause Argo CD recorded by a failure rescue",
-        "Run post-barrier switchover phases",
-    ]
-    # Review finding 2: the identity barrier is outside the resume-enabled rescue, as in switchover.
+    _, _, sw_recovery, _ = _workflow_entry_sections(outer)
     restore_outer = _restore_only_outer()
-    assert "rescue" not in restore_outer
-    assert [task.get("name") for task in restore_outer["block"]] == [
-        "Establish trusted identity and checkpoint barrier",
-        "Re-pause Argo CD recorded by a failure rescue",
-        "Run post-barrier restore-only phases",
-    ]
-    block = restore_outer["block"]
-    assert block[0][INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.preflight", "tasks_from": "identity_barrier"}
-    assert _restore_only_block()["block"][0][INCLUDE_ROLE] == {
+    _, _, restore_recovery, restore_phases = _workflow_entry_sections(restore_outer)
+    assert next(t for t in restore_phases["block"] if t.get(INCLUDE_ROLE, {}).get("tasks_from") == "post_identity")[
+        INCLUDE_ROLE
+    ] == {
         "name": "tomazb.acm_switchover.preflight",
         "tasks_from": "post_identity",
     }
-    for task in (outer["block"][1], block[1]):
+    for task in (sw_recovery, restore_recovery):
         assert task[INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.argocd_manage", "tasks_from": "repause_recovery"}
 
 

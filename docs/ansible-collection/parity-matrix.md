@@ -23,13 +23,19 @@ Intentional parity changes require explicit operator approval before implementat
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 | RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 
-Backup continuity remains `dual-supported` (#342). Python now refuses an unreadable
-strict baseline instead of treating it as empty, retaining that baseline across failed
-polls. The Collection independently uses timestamp freshness. Its unchanged freshness
-and completion tasks were compared with real Ansible and a local fake API using fixture
-timeout/retries. This is task-level evidence, not a complete shipped-role pass. The
-separate pre-existing timeout-template blocker is tracked in
-[issue #367](https://github.com/tomazb/rh-acm-switchover/issues/367).
+Backup continuity remains `dual-supported`. The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+adds independent creation-time and terminal Backup proof before historical finalization
+or a completed no-op. Existing names, markers, boundaries and journal formats remain
+unchanged. Python alone has its absent-only historical enable-step fallback and recorded
+name; Collection keeps its current latest-fresh selection. These existing input models
+do not authorize cross-runtime resume or an intentional parity change. The
+[operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
+owns details and read-only assessment guidance. Acceptance remains blocked by the
+separate [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+until both supported lanes pass the healthy shipped execute path. Task fragments,
+module positives and completed no-ops do not substitute for that gate. The unrelated
+[#352 klusterlet marker residual](https://github.com/tomazb/rh-acm-switchover/issues/352)
+remains separately tracked.
 
 ## Milestone Gates
 
