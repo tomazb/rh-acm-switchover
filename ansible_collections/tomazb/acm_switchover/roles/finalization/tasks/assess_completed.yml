@@ -4,6 +4,7 @@
   ansible.builtin.set_fact:
     acm_switchover_backup_completed_assessed: false
     acm_switchover_backup_lifecycle_inputs: {}
+    acm_switchover_backup_schedule_enabled_at: ""
 
 - name: Read actual checkpoint facts before any phase entry
   tomazb.acm_switchover.checkpoint_phase:

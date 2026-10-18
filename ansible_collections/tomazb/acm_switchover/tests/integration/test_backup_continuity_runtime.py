@@ -687,3 +687,72 @@ def test_actual_application_repause_patch_precedes_backup_refusal(run_backup_ent
     )
     assert saved["phase"] == "finalization" and saved["phase_status"] == "fail"
     assert not any("/restores" in r["path"] or "/backupschedules" in r["path"] for r in primary.requests + requests)
+
+
+@pytest.mark.parametrize("route", ["role", "playbook"])
+@pytest.mark.parametrize("restore", [False, True])
+def test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass(run_backup_entry, route, restore):
+    """BC15 exercises shipped cadence and proof after actual schedule creation."""
+
+    def fresh_predecessor(state):
+        state.update(phase="post_activation", phase_status="pass")
+        state["operational_data"]["saved_backup_schedule"] = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "BackupSchedule",
+            "metadata": {"name": "fixture-schedule", "namespace": "open-cluster-management-backup"},
+            "spec": {"paused": True, "veleroSchedule": "*/5 * * * *", "veleroTTL": "24h0m0s"},
+        }
+
+    result, primary, secondary, checkpoint, _, _ = run_backup_entry(
+        route=route,
+        restore=restore,
+        good=True,
+        completed=False,
+        boundary="missing",
+        state_edit=fresh_predecessor,
+        old_action="none",
+        complete_after_enable=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    requests = secondary.requests
+    schedule_writes = [
+        index
+        for index, request in enumerate(requests)
+        if request["method"] in {"POST", "PATCH"} and "backupschedules" in request["path"]
+    ]
+    backup_reads = [
+        index
+        for index, request in enumerate(requests)
+        if request["method"] == "GET" and (request["path"] == BACKUPS or request["path"].startswith(BACKUPS + "/"))
+    ]
+    assert schedule_writes and backup_reads and min(schedule_writes) < min(backup_reads), requests
+    assert any(request["path"] == BACKUPS + "/acm-managed-clusters-current" for request in requests)
+    saved = json.loads(checkpoint.read_bytes())
+    assert saved["phase"] == "finalization" and saved["phase_status"] == "pass", saved
+    assert "finalization" in saved["completed_phases"]
+    assert saved["operational_data"]["backup_schedule_enabled_at"]
+    assert "Publish backup verification result" in output
+    assert "rescued=0" in output
+    assert not primary.writes
+
+
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize("reset", [None, {"reset": True}, {"reset_from": "finalization"}])
+def test_active_direct_entry_wrong_identity_refuses_before_backup_or_mutation(run_backup_entry, restore, reset):
+    result, primary, secondary, path, before, stat = run_backup_entry(
+        route="role",
+        restore=restore,
+        completed=False,
+        good=True,
+        wrong_identity=True,
+        reset=reset,
+        old_action="none",
+    )
+    output = result.stdout + result.stderr
+    # Old active entry reads Backup proof without establishing its physical hub.
+    assert not any(r["path"] == BACKUPS for r in secondary.requests), output
+    assert result.returncode != 0, output
+    assert not primary.writes and not secondary.writes
+    assert path.read_bytes() == before
+    assert any(r["path"] == "/api/v1/namespaces/kube-system" for r in secondary.requests)

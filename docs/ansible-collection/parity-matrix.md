@@ -30,9 +30,10 @@ unchanged. Python alone has its absent-only historical enable-step fallback and 
 name; Collection keeps its current latest-fresh selection. These existing input models
 do not authorize cross-runtime resume or an intentional parity change. The
 [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
-owns details and read-only assessment guidance. Acceptance remains blocked by the
-separate [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
-until both supported lanes pass the healthy shipped execute path. Task fragments,
+owns details and read-only assessment guidance. The separate
+[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+is integrated. Acceptance requires both supported lanes to pass the healthy shipped
+role and playbook execute paths, alongside the compatibility validation and review gates. Task fragments,
 module positives and completed no-ops do not substitute for that gate. The unrelated
 [#352 klusterlet marker residual](https://github.com/tomazb/rh-acm-switchover/issues/352)
 remains separately tracked.

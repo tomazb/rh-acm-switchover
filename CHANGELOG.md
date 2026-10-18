@@ -110,7 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Backup creation and terminal-health proof against the persisted enable boundary in both
   form factors. A refused COMPLETED assessment preserves checkpoint bytes and does not replay
   phases. Missing or ambiguous proof remains held; no checkpoint migration or recovery
-  mutation is introduced. Refs #342; the separate #352 provenance hold remains.
+  mutation is introduced. Canonical unfinished pre-enable cleanup can resume or consume
+  its existing audited repair, then must establish new Backup proof; historical restore-only
+  no-schedule success remains held. Refs #342; the separate #352 provenance hold remains.
 - Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
   Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
   the existing 600-second minimum, completion grace, fixed cadences, and fallback.

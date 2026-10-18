@@ -78,8 +78,8 @@ def is_acm_owned(backup):
     return False
 
 
-def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
-    """Validate one current object's creation, ownership, identity and health."""
+def _candidate_identity_creation(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
+    """Validate creation and identity before choosing a current candidate."""
     if not isinstance(backup, dict) or not isinstance(backup.get("metadata"), dict):
         raise BackupContinuityError("invalid_backup_identity")
     metadata = backup["metadata"]
@@ -95,6 +95,18 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
         raise BackupContinuityError("invalid_backup_creation")
     if created < enabled_at:
         raise BackupContinuityError("backup_predates_enable")
+    return {"name": name, "uid": uid, "created_at": created.isoformat()}
+
+
+def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expected_uid=None):
+    """Validate the selected object's creation, ownership, identity and health."""
+    proof = _candidate_identity_creation(
+        backup,
+        enabled_at=enabled_at,
+        observed_at=observed_at,
+        expected_name=expected_name,
+        expected_uid=expected_uid,
+    )
     status = backup.get("status")
     if not isinstance(status, dict):
         raise BackupContinuityError("invalid_backup_status")
@@ -113,7 +125,7 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
             raise BackupContinuityError("invalid_backup_status")
         if error_count:
             raise BackupContinuityError("backup_errors")
-    return {"name": name, "uid": uid, "created_at": created.isoformat(), "phase": phase}
+    return {**proof, "phase": phase}
 
 
 def verify_backup_continuity(client, *, enabled_at, recorded_name, timeout, poll_interval, max_age_seconds=None):
@@ -135,8 +147,17 @@ def verify_backup_continuity(client, *, enabled_at, recorded_name, timeout, poll
         for backup in items:
             if not is_acm_owned(backup):
                 continue
+            status = backup.get("status")
+            if not isinstance(status, dict):
+                raise BackupContinuityError("invalid_backup_status")
+            # Keep Python's earliest detectable candidate rule. Unselected siblings
+            # do not own the chosen object's terminal health decision.
+            if status.get("phase") not in ("New", "InProgress", "Completed"):
+                continue
             try:
-                proof = validate_backup(backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc))
+                proof = _candidate_identity_creation(
+                    backup, enabled_at=enabled_at, observed_at=datetime.now(timezone.utc)
+                )
             except BackupContinuityError as exc:
                 if exc.reason == "backup_predates_enable":
                     continue

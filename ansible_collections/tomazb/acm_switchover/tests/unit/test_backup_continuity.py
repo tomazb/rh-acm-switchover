@@ -55,6 +55,32 @@ def test_malformed_checkpoint_fact_containers_refuse(checkpoint):
         )
 
 
+@pytest.mark.parametrize("case", ["pending", "boundary", "completed", "passed", "malformed", "terminal", "absent"])
+def test_pre_enable_cleanup_retry_requires_canonical_pending_cleanup_and_raw_absence(case):
+    vectors = json.loads((VECTORS.parent / "r4_04_migration_evidence_vectors.json").read_text())
+    name = "journal-cleanup-completed" if case == "terminal" else "journal-cleanup-intent-persisted"
+    journal = copy.deepcopy(next(c["input"]["candidate"] for c in vectors["cases"] if c["id"] == name))
+    checkpoint: dict = {
+        "phase": "finalization",
+        "phase_status": "fail",
+        "completed_phases": [],
+        "operational_data": {"migration_backups": journal},
+    }
+    if case == "boundary":
+        checkpoint["operational_data"]["backup_schedule_enabled_at"] = None
+    elif case == "completed":
+        checkpoint["completed_phases"] = ["finalization"]
+    elif case == "passed":
+        checkpoint["phase_status"] = "invalid-status"
+    elif case == "malformed":
+        journal["cleanup"]["uid"] = "another-owner"
+    elif case == "absent":
+        checkpoint["operational_data"] = {}
+    original = copy.deepcopy(checkpoint)
+    assert backup_continuity_facts(checkpoint)["pre_enable_cleanup_retry"] == (case == "pending")
+    assert checkpoint == original
+
+
 def test_strict_transport_creation_bound_positive():
     from ansible_collections.tomazb.acm_switchover.tests.unit.test_k8s_read_outcome import (
         _FakeClient,

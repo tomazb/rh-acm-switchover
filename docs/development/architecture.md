@@ -489,8 +489,11 @@ The Collection independently implements the rule in
 `assess_completed.yml` runs before ordinary checkpoint entry in both playbooks and
 the direct finalization role. Completed identity and Backup assessment stay outside
 mutation-capable rescue; active retry proof follows required re-pause and precedes
-cleanup/enable. Raw finalization history with no boundary refuses rather than creating
-one. No proof cache, checkpoint version or generic lifecycle mechanism is added.
+cleanup/enable. Raw finalization history with no boundary refuses unless a canonical
+unfinished cleanup journal and absence of all Backup history prove a pre-enable retry.
+Workflow wiring permits that cleanup/repair, then requires new Backup proof and forbids
+historical restore-only no-schedule success. Terminal journals cannot prove the exception.
+No proof cache, checkpoint version or generic lifecycle mechanism is added.
 
 ```mermaid
 flowchart TD
@@ -504,11 +507,16 @@ flowchart TD
     V -->|unproved| A[Refuse; existing active failure audit only]
     V -->|proved| F[Ordinary finalization]
     H -->|fresh entry| F
+    H -->|canonical unfinished cleanup; all Backup history absent| U[Resume guarded cleanup or repair]
+    U --> B[New enable boundary and strict Backup proof required]
+    B -->|proved| F
+    B -->|unproved or no schedule| A
 ```
 
 The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
 records the Python absent-only legacy fallback, independent Collection selection,
-read-only recovery boundary, and the separate #367 shipped-positive acceptance hold.
+read-only recovery boundary, and the shipped-positive acceptance required on both
+supported lanes after the separately reviewed #367 cadence correction.
 The diagram describes the #342 candidate, not a completed merge or live certification.
 
 The Restore-cleanup decisions are pure functions in `lib/migration_cleanup.py`; `Finalization`

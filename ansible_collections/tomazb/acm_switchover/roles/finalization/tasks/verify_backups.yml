@@ -25,6 +25,7 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_operation.restore_only | default(false)
+    - not ((acm_switchover_backup_lifecycle_inputs | default({})).pre_enable_cleanup_retry | default(false) | bool)
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
     - acm_enable_backup_schedule_operation.operation.action == 'none'
 

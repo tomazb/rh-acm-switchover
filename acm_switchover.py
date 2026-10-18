@@ -1063,6 +1063,7 @@ def _verify_backup_continuity_entry(args, state, primary, secondary, logger, *, 
         or inputs.get("invalid_reason")
         or inputs.get("enabled_at_present")
         or inputs.get("recorded_name_present")
+        or inputs.get("detected_marker_present")
         or inputs.get("verification_steps")
         or inputs.get("legacy_enable_steps")
     )
@@ -1097,6 +1098,7 @@ def _run_phase_finalization(
     if not _require_waivable_recorded_expectation(args, state, logger):
         return False
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
+    require_backup_continuity = workflow.pre_enable_cleanup_retry(state)
     state.set_phase(Phase.FINALIZATION)
 
     is_restore_only = getattr(args, "restore_only", False)
@@ -1113,6 +1115,7 @@ def _run_phase_finalization(
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         restore_only=is_restore_only,
+        require_backup_continuity=require_backup_continuity,
         acknowledge_observability_not_migrated=getattr(args, "acknowledge_observability_not_migrated", False),
         migration_cleanup_repair=migration_cleanup_repair_request(args),
     )

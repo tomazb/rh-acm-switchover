@@ -108,8 +108,9 @@ Current boundary tests should verify:
   `ansible-core` 2.16 on Python 3.11 and `ansible-core` 2.21 on Python 3.12.
 
 The #342 rows describe candidate regression coverage, not terminal merge or live
-certification. Healthy shipped execute-positive acceptance still requires the separate
-[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
-and both supported lanes. The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
+certification. The separately reviewed
+[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367) is integrated.
+Healthy shipped role and playbook execute-positive acceptance is covered on both supported
+lanes by `test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass`. The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
 records the remaining history and recovery limits, including the independent #352
 residual.

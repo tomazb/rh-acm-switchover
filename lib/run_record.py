@@ -331,9 +331,15 @@ class RunRecord:
                 "enabled_at": config.get(_KEY_BACKUP_WATCH_STARTED_AT),
                 "recorded_name_present": _KEY_NEW_BACKUP_NAME in config,
                 "recorded_name": config.get(_KEY_NEW_BACKUP_NAME),
+                "detected_marker_present": _KEY_NEW_BACKUP_DETECTED in config,
                 "legacy_enable_steps": [step for step in steps if step["name"] == "enable_backup_schedule"],
                 "verification_steps": [
                     step["name"] for step in steps if step["name"] in ("verify_new_backups", "verify_backup_integrity")
+                ],
+                "enable_followup_steps": [
+                    step["name"]
+                    for step in steps
+                    if step["name"] in ("verify_backup_schedule_enabled", "fix_backup_collision")
                 ],
             }
         )

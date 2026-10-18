@@ -166,10 +166,21 @@ def test_each_phase_role_repauses_and_guards_its_entry_before_any_work(role):
     # The re-pause runs outside the phase rescue: a failed re-pause resumes nothing.
     assert enter < recovery < phase
     assert "rescue" not in tasks[recovery]
-    # The guard is the first work of the phase: its refusal is an ordinary phase failure.
-    guard = tasks[phase]["block"][0]
+    if role == "finalization":
+        # Finalization validates direct caller inputs read-only before physical
+        # identity discovery or phase entry; ordinary work remains after re-pause.
+        guard_index = names.index(f"Guard the {role} role entry")
+        identity = next(i for i, task in enumerate(tasks) if task.get(CHECKPOINT, {}).get("identity_barrier"))
+        assert guard_index < identity < enter
+        assert tasks[identity]["check_mode"] is True
+        guard = tasks[guard_index]
+        assert guard["vars"]["_checkpoint_enter"] == "{{ acm_switchover_backup_checkpoint }}"
+    else:
+        # Other phase guards remain the first ordinary work within phase rescue.
+        guard = tasks[phase]["block"][0]
+        assert guard["vars"] == {"_acm_role_entry_phase": role}
     assert guard["name"] == f"Guard the {role} role entry"
-    assert guard["vars"] == {"_acm_role_entry_phase": role}
+    assert guard["vars"]["_acm_role_entry_phase"] == role
     assert guard["ansible.builtin.include_tasks"] == "{{ role_path }}/../common/tasks/guard_role_entry.yml"
 
 

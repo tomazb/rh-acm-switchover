@@ -79,7 +79,8 @@ Collection inputs. The Collection requires its own raw saved enable boundary; an
 active retry already in finalization cannot substitute a runtime boundary when the
 saved key is absent. Completed assessment precedes ordinary checkpoint skips and
 refuses reset controls. See [Backup continuity and historical checkpoints](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints)
-for proof requirements, preserved history and the separate #367 acceptance hold.
+for proof requirements, preserved history and shipped execute acceptance after the
+separately reviewed #367 cadence correction.
 These checks do not repair the unrelated #352 klusterlet marker residual.
 
 The `old_hub_action: secondary` finalization adapter

@@ -211,7 +211,32 @@ def backup_continuity_facts(checkpoint) -> dict:
             "phase": checkpoint.get("phase"),
             "phase_status": checkpoint.get("phase_status"),
             "operation_identity": checkpoint.get("operation_identity"),
+            "pre_enable_cleanup_retry": _pre_enable_cleanup_retry(checkpoint, data, phases),
         }
+    )
+
+
+def _pre_enable_cleanup_retry(checkpoint: dict, data: dict, phases: list) -> bool:
+    """Only unfinished owned cleanup can establish a history-free pre-enable retry.
+
+    Canonical intent requires copied Restore identity plus completed teardown and
+    post-activation evidence. Enablement requires terminal cleanup. Identity is
+    separately checked by checkpoint entry before any cleanup mutation.
+    """
+    if (
+        checkpoint.get("phase") != "finalization"
+        # Enter preserves the previous phase's status; a mid-phase journal
+        # update can therefore retain 'pass' without completing finalization.
+        or checkpoint.get("phase_status") not in ("enter", "pass", "fail")
+        or "finalization" in phases
+        or KEY_BACKUP_SCHEDULE_ENABLED_AT in data
+    ):
+        return False
+    outcome, journal = classify_migration_backups(checkpoint)
+    return outcome == MIGRATION_JOURNAL_VALID and journal["cleanup"]["state"] in (
+        "intent_persisted",
+        "delete_accepted",
+        "recovery_required",
     )
 
 

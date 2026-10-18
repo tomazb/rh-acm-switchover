@@ -191,3 +191,48 @@ def test_present_malformed_recorded_name_never_selects_replacement(make_finaliza
     with pytest.raises(Exception, match="invalid_backup_identity"):
         fin._verify_new_backups(timeout=5)
     assert fin.state.capture_state_snapshot() == before
+
+
+@pytest.mark.parametrize("phase,errors", [("Failed", 0), ("PartiallyFailed", 1), ("Completed", 1)])
+@pytest.mark.parametrize("sibling_first", [False, True])
+def test_unnamed_selection_proves_earliest_detectable_without_unrelated_health_veto(
+    make_finalization, phase, errors, sibling_first
+):
+    selected = copy.deepcopy(make_finalization.new)
+    sibling = copy.deepcopy(selected)
+    sibling["metadata"].update(
+        name="acm-resources-unrelated", uid="unrelated-uid", creationTimestamp=datetime.now(timezone.utc).isoformat()
+    )
+    sibling["status"].update(phase=phase, errors=errors)
+    inventory = [sibling, selected] if sibling_first else [selected, sibling]
+    fin, transport = make_finalization([page(inventory)], [selected])
+    fin._verify_new_backups(timeout=2)
+    assert fin.run_record.new_backup() == selected["metadata"]["name"]
+    assert [r[1] for r in transport.requests if r[0] == "GET"] == [selected["metadata"]["name"]]
+
+
+@pytest.mark.parametrize("recorded", [False, True])
+def test_selected_unhealthy_candidate_never_falls_back_to_healthy_sibling(make_finalization, recorded):
+    selected = copy.deepcopy(make_finalization.new)
+    selected["status"]["errors"] = 1
+    later = copy.deepcopy(selected)
+    later["metadata"].update(
+        name="acm-resources-later", uid="later-uid", creationTimestamp=datetime.now(timezone.utc).isoformat()
+    )
+    later["status"]["errors"] = 0
+    fin, _ = make_finalization([page([later, selected])], [selected])
+    if recorded:
+        fin.run_record.record_new_backup(selected["metadata"]["name"])
+    before = fin.state.capture_state_snapshot()
+    with pytest.raises(Exception, match="backup_errors"):
+        fin._verify_new_backups(timeout=2)
+    assert fin.state.capture_state_snapshot() == before
+
+
+def test_lone_failed_backup_cannot_be_selected_as_continuity(make_finalization):
+    failed = copy.deepcopy(make_finalization.new)
+    failed["status"]["phase"] = "Failed"
+    fin, _ = make_finalization([page([failed])], [failed])
+    with pytest.raises(Exception, match="No qualifying|backup_not_completed"):
+        fin._verify_new_backups(timeout=2)
+    assert fin.run_record.new_backup() is None

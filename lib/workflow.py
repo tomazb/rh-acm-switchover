@@ -16,7 +16,6 @@ from lib.constants import (
     WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE,
     WORKFLOW_FORCE_RESET_FRESH_MESSAGE,
     WORKFLOW_FORCE_RESET_RETRY_OPTION,
-    WORKFLOW_FORCE_STALE_STATE_OPTION,
     WORKFLOW_LAST_ERROR_MESSAGE,
     WORKFLOW_LEADING_BANNER,
     WORKFLOW_NEXT_STEPS_HEADER,
@@ -26,13 +25,8 @@ from lib.constants import (
     WORKFLOW_OPTIONS_MESSAGE,
     WORKFLOW_REMOVE_STATE_FILE_OPTION,
     WORKFLOW_RESET_STATE_FRESH_OPTION,
-    WORKFLOW_RESET_STATE_OPTION,
     WORKFLOW_RESUMING_FAILED_STATE_MESSAGE,
     WORKFLOW_RETRY_FROM_PHASE_MESSAGE,
-    WORKFLOW_STALE_COMPLETED_DETAIL_MESSAGE,
-    WORKFLOW_STALE_COMPLETED_STATE_MESSAGE,
-    WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE,
-    WORKFLOW_START_FRESH_MESSAGE,
     WORKFLOW_STATE_AGE_MESSAGE,
     WORKFLOW_STATE_FILE_MESSAGE,
 )
@@ -121,9 +115,45 @@ def _refuse_reset_of_migration_journal(state: StateManager, logger: logging.Logg
         raise MigrationJournalResetRefused(MIGRATION_JOURNAL_IMPLICIT_RESET_REFUSAL)
 
 
+def pre_enable_cleanup_retry(state: StateManager) -> bool:
+    """Recognize unfinished canonical cleanup before any Backup history.
+
+    Cleanup intent copies the owned Restore identity and requires completed
+    teardown/post-activation evidence. Enablement requires terminal cleanup,
+    so these nonterminal states cannot follow a supported enable operation.
+    Terminal journals and absent/malformed history cannot prove this case.
+    Live identity validation still precedes this workflow eligibility decision.
+    """
+    if state.get_current_phase() != Phase.FINALIZATION:
+        return False
+    inputs = RunRecord(state).backup_continuity_inputs()
+    if any(
+        inputs.get(key)
+        for key in (
+            "invalid_reason",
+            "enabled_at_present",
+            "recorded_name_present",
+            "detected_marker_present",
+            "legacy_enable_steps",
+            "verification_steps",
+            "enable_followup_steps",
+        )
+    ):
+        return False
+    try:
+        journal = RunRecord(state).migration_backups()
+    except ValueError:
+        return False
+    return journal is not None and journal["cleanup"]["state"] in (
+        "intent_persisted",
+        "delete_accepted",
+        "recovery_required",
+    )
+
+
 def historical_finalization_backup_assessment(state: StateManager) -> bool:
     """A finalization retry cannot replace a missing historical enable boundary."""
-    return state.get_current_phase() == Phase.FINALIZATION
+    return state.get_current_phase() == Phase.FINALIZATION and not pre_enable_cleanup_retry(state)
 
 
 def completed_backup_assessment(args: Any, state: StateManager) -> bool:

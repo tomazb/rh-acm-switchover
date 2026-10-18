@@ -93,6 +93,8 @@ def run_finalization(tmp_path):
         published=None,
         tz=None,
         entry=None,
+        restore=False,
+        old_action="secondary",
     ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
@@ -105,7 +107,12 @@ def run_finalization(tmp_path):
                         "phase_status": "pass",
                         "completed_phases": ["preflight", "primary_prep", "activation", "post_activation"],
                         "operational_data": {} if journal is None else {"migration_backups": journal},
-                        "operation_identity": _identity(operation),
+                        "operation_identity": dict(
+                            _identity(operation),
+                            restore_only=restore,
+                            old_hub_action=old_action,
+                            **({"primary_context": "", "primary_cluster_uid": ""} if restore else {}),
+                        ),
                         "errors": [],
                         "report_refs": [],
                     }
@@ -121,19 +128,27 @@ def run_finalization(tmp_path):
         kubeconfig = tmp_path / "secondary.kubeconfig"
         write_kubeconfig(kubeconfig, context="secondary-hub", server=hub.url, token="fixture-token")
         primary_kubeconfig = ""
+        primary_hub = None
         if entry == "main":
             # The role entry guard validates the hub inputs as preflight would.
             primary_kubeconfig = str(tmp_path / "primary.kubeconfig")
-            write_kubeconfig(Path(primary_kubeconfig), context="primary-hub", server=hub.url, token="fixture-token")
+            if not restore:
+                primary_hub = FakeMigrationHub(cluster_uid="uid-primary")
+                write_kubeconfig(
+                    Path(primary_kubeconfig), context="primary-hub", server=primary_hub.url, token="fixture-token"
+                )
         variables = {
             "acm_switchover_hubs": {
-                "primary": {"context": "primary-hub", "kubeconfig": primary_kubeconfig},
+                "primary": {
+                    "context": "" if restore else "primary-hub",
+                    "kubeconfig": "" if restore else primary_kubeconfig,
+                },
                 "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
             },
             "acm_switchover_operation": dict(
                 operation,
-                restore_only=False,
-                old_hub_action="secondary",
+                restore_only=restore,
+                old_hub_action=old_action,
                 **({"migration_cleanup_repair": repair} if entry == "main" and repair else {}),
             ),
             "acm_switchover_execution": {
@@ -144,7 +159,7 @@ def run_finalization(tmp_path):
             "_acm_cleanup_poll_delays": [0, 0, 0],
             "acm_finalization_mch_info": {"resources": [{"status": {"currentVersion": hub.version}}]},
             "acm_finalization_restores_info": {"resources": []},
-            "acm_switchover_saved_backup_schedule": {},
+            **({"acm_switchover_saved_backup_schedule": {}} if entry != "main" else {}),
             **(extra or {}),
         }
         # main.yml publishes these facts before the transaction; the role entry guard
@@ -234,15 +249,19 @@ def run_finalization(tmp_path):
         command = ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"]
         if check:
             command.append("--check")
-        completed = subprocess.run(
-            command,
-            cwd=_repo_root(),
-            capture_output=True,
-            text=True,
-            check=False,
-            env=dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {})),
-            timeout=300,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=_repo_root(),
+                capture_output=True,
+                text=True,
+                check=False,
+                env=dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {})),
+                timeout=300,
+            )
+        finally:
+            if primary_hub is not None:
+                primary_hub.close()
         return Run(completed, hub, path)
 
     return _run
@@ -250,7 +269,7 @@ def run_finalization(tmp_path):
 
 @pytest.fixture
 def hub():
-    fake = FakeMigrationHub(restores=[passive_restore()], controller=complete_on_mutation)
+    fake = FakeMigrationHub(cluster_uid="uid-secondary", restores=[passive_restore()], controller=complete_on_mutation)
     yield fake
     fake.close()
 
@@ -417,31 +436,6 @@ def test_the_role_entry_derives_the_repair_request_from_the_operator_input(
     run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_delays": []})
     recovered = run_finalization("full_restore", hub, None)
     assert recovered.journal["cleanup"]["state"] == "recovery_required"
-
-    # The transaction fragment stopped before enablement. This independent role-entry
-    # repair-input contract supplies valid Backup proof as an explicit non-live
-    # prerequisite, so the historical-entry guard does not mask the cleanup refusal.
-    from datetime import datetime, timedelta, timezone
-
-    observed = datetime.now(timezone.utc)
-    checkpoint = json.loads(recovered.path.read_text())
-    checkpoint["operational_data"]["backup_schedule_enabled_at"] = (observed - timedelta(minutes=2)).isoformat()
-    recovered.path.write_text(json.dumps(checkpoint))
-    for backup in hub.backups.values():
-        backup["metadata"]["creationTimestamp"] = "2024-01-02T12:00:00Z"
-    name = "acm-managed-clusters-repair-contract"
-    hub.backups[name] = {
-        "apiVersion": "velero.io/v1",
-        "kind": "Backup",
-        "metadata": {
-            "name": name,
-            "namespace": "open-cluster-management-backup",
-            "uid": "uid-repair-proof",
-            "resourceVersion": "42",
-            "creationTimestamp": (observed - timedelta(minutes=1)).isoformat(),
-        },
-        "status": {"phase": "Completed", "errors": 0},
-    }
 
     blocked = run_finalization("full_restore", hub, None, entry="main")
     assert blocked.completed.returncode != 0

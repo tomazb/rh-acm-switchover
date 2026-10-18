@@ -803,3 +803,68 @@ def test_fresh_predecessor_without_backup_history_runs_actual_cli(attempt, resto
         assert after["config"]["migration_backups"] == saved["config"]["migration_backups"]
         assert after["hub_identities"] == saved["hub_identities"]
         assert any(r[0] == "GET" for r in st.requests) == (not no_schedule)
+
+
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize("crash_at", ["name", "verify_new_backups", "verify_backup_integrity"])
+@pytest.mark.parametrize("later_valid", [False, True])
+def test_disk_interrupt_after_each_backup_save_requires_fresh_retry_proof(
+    attempt, restore, crash_at, later_valid, monkeypatch
+):
+    args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label="none", good=True)
+    # Explicit non-live input with a retained enable boundary and no selected name.
+    # The real current finalizer must select and durably record the current Backup.
+    initial = json.loads(raw)
+    initial["config"].pop("post_switchover_backup_name")
+    st.schedules = [
+        {
+            "metadata": {"name": "fixture-schedule", "namespace": "open-cluster-management-backup"},
+            "spec": {"paused": False, "veleroSchedule": "*/5 * * * *"},
+        }
+    ]
+    path.write_text(json.dumps(initial))
+    runtime = cli._prepare_runtime(args, logger, str(path))
+    original_save = StateManager.save_state
+    interrupted = []
+
+    def crash_after_actual_save(state, *a, **k):
+        result = original_save(state, *a, **k)
+        persisted = json.loads(path.read_bytes())
+        markers = {step["name"] for step in persisted["completed_steps"]}
+        reached = "post_switchover_backup_name" in persisted["config"] if crash_at == "name" else crash_at in markers
+        if reached and not interrupted:
+            interrupted.append(persisted)
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(StateManager, "save_state", crash_after_actual_save)
+    options = dict(
+        should_bind_state=True,
+        should_record_state_errors=True,
+        hooks=cli._build_cli_operation_hooks(),
+        exit_success=0,
+        exit_failure=1,
+        exit_interrupt=130,
+    )
+    assert run_operation_mode(args, runtime.state, primary, secondary, logger, **options) == 130
+    assert len(interrupted) == 1
+    disk = json.loads(path.read_bytes())
+    assert disk["current_phase"] == "finalization"
+    assert disk["config"]["post_switchover_backup_name"] == st.objects[0]["metadata"]["name"]
+    if crash_at != "name":
+        assert crash_at in {step["name"] for step in disk["completed_steps"]}
+    monkeypatch.setattr(StateManager, "save_state", original_save)
+    previous_reads = len(st.requests)
+    if not later_valid:
+        stale = copy.deepcopy(st.objects[0])
+        stale["metadata"]["creationTimestamp"] = "2020-01-01T00:00:00Z"
+        st.effects, st.objects = [page([stale])], [stale]
+    reloaded = StateManager(str(path))
+    assert run_operation_mode(args, reloaded, primary, secondary, logger, **options) == (0 if later_valid else 1)
+    assert len(st.requests) > previous_reads
+    after = json.loads(path.read_bytes())
+    assert (after["current_phase"] == "completed") is later_valid
+    for key in ("backup_schedule_enabled_at", "post_switchover_backup_name", "migration_backups"):
+        assert after["config"][key] == disk["config"][key]
+    assert after["hub_identities"] == disk["hub_identities"]
+    assert all(marker in after["completed_steps"] for marker in disk["completed_steps"])

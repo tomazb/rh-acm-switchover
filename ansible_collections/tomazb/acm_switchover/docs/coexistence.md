@@ -89,7 +89,11 @@ identity data must be reset or explicitly backfilled with `--force`.
 The collection records the same live cluster UIDs in checkpoint operation
 identity data. Preflight discovers these UIDs before checkpoint entry, and the
 checkpoint action plugin rejects resume when the stored context and current
-cluster UID do not match. Execute-mode collection preflight also refreshes
+cluster UID do not match.
+The finalization entry independently repeats the read-only live identity comparison
+before checkpoint entry, Argo CD recovery or cleanup, including direct role invocation.
+Reset directives cannot excuse a mismatch during that comparison.
+Execute-mode collection preflight also refreshes
 MultiClusterHub discovery even if discovery variables were pre-seeded, so stale
 cached MCH status cannot authorize a later live mutation.
 
@@ -166,8 +170,9 @@ Shared behavior:
   candidate against its own persisted boundary, without a step fallback. Missing or
   ambiguous history may remain held. No store migration, cross-runtime resume or parity
   status change is introduced. See the [operator contract](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints).
-  The separate [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
-  still blocks shipped execute-positive acceptance on both supported lanes.
+  The separately reviewed [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+  is integrated. The healthy shipped role and playbook execute paths remain required
+  acceptance gates on both supported lanes, alongside compatibility validation and review.
 - **Cleanup recovery and repair.** The same states, transitions, reason codes
   (`absent_without_completion`, `replacement_uid`, `replacement_during_poll`), conflict retry
   bound (three retries), and 300-second elapsed poll bound. Each absence-poll read is bounded by

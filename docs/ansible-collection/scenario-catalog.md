@@ -166,8 +166,10 @@ The existing journal-rescue integration suite covers actual Argo CD Application 
 Shared creation/health decisions are covered by
 `tests/fixtures/backup_continuity_compatibility.json` in both independent proof owners.
 Serialized old-source history is retained under `tests/fixtures/backup_continuity_history`.
-These tests are non-live evidence. The healthy shipped execute-positive gate remains
-blocked until the separately authorized [#367 correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
-is integrated and exercised on both supported lanes. A module positive, completed no-op
+These tests are non-live evidence. The separately reviewed
+[#367 correction](https://github.com/tomazb/rh-acm-switchover/issues/367) is integrated.
+`test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass` exercises the healthy
+shipped role and both playbooks on each supported lane, proving actual schedule enablement,
+Backup reads and finalization pass publication. A module positive, completed no-op
 or test that expects the cadence failure cannot satisfy that gate. See the
 [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints).

@@ -108,6 +108,7 @@ class Finalization:
         restore_only: bool = False,
         acknowledge_observability_not_migrated: bool = False,
         migration_cleanup_repair: Optional[Dict] = None,
+        require_backup_continuity: bool = False,
     ):
         # `disable_observability_on_secondary` is deprecated and intentionally
         # unused: old-hub observability cleanup is now driven by detected
@@ -123,6 +124,9 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.restore_only = restore_only
+        # Workflow-owned pre-enable retry: cleanup may resume, but historical
+        # restore-only absence cannot authorize a no-schedule success.
+        self.require_backup_continuity = require_backup_continuity
         # Operator acknowledgement that destination observability was never migrated.
         # CLI validation restricts it to old_hub_action=decommission; it converts one
         # proven-absent destination block and nothing else.
@@ -854,7 +858,7 @@ class Finalization:
 
     def _restore_only_missing_backup_schedule(self, schedules: Optional[List[Dict]] = None) -> bool:
         """Return True when restore-only finalization should tolerate no BackupSchedule."""
-        if not self.restore_only:
+        if not self.restore_only or self.require_backup_continuity:
             return False
         if schedules is None:
             schedules = self._get_backup_schedules()
