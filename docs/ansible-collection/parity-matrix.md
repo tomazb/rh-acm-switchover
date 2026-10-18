@@ -23,6 +23,14 @@ Intentional parity changes require explicit operator approval before implementat
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 | RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 
+Backup continuity remains `dual-supported` (#342). Python now refuses an unreadable
+strict baseline instead of treating it as empty, retaining that baseline across failed
+polls. The Collection independently uses timestamp freshness. Its unchanged freshness
+and completion tasks were compared with real Ansible and a local fake API using fixture
+timeout/retries. This is task-level evidence, not a complete shipped-role pass. The
+separate pre-existing timeout-template blocker is tracked in
+[issue #367](https://github.com/tomazb/rh-acm-switchover/issues/367).
+
 ## Milestone Gates
 
 1. Collection preview

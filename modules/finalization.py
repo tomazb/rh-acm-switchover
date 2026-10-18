@@ -55,7 +55,7 @@ from lib.constants import (
 )
 from lib.decommission_outcome import UNSUCCESSFUL_OUTCOMES
 from lib.exceptions import FatalError, SwitchoverError, TransientError
-from lib.kube_client import KubeClient, is_retryable_error
+from lib.kube_client import KubeClient
 from lib.migration_cleanup import (
     absence_poll,
     cleanup_intent,
@@ -834,22 +834,22 @@ class Finalization:
         )
 
     def _list_acm_owned_velero_backups(self) -> List[Dict]:
-        """List Velero backups, filter to ACM-owned backups, and normalize API failures."""
-        try:
-            backups = self.secondary.list_custom_resources(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                namespace=BACKUP_NAMESPACE,
-            )
-        except ApiException as exc:
-            if is_retryable_error(exc):
-                raise TransientError(f"Transient error listing Velero backups: {exc}") from exc
-            raise SwitchoverError(
-                "Failed to list Velero backups while waiting for a new ACM backup: " f"{exc.status} {exc.reason}"
-            ) from exc
+        """Return ACM backups only from a positively complete strict inventory.
 
-        return self._filter_acm_owned_backups(backups)
+        The baseline caller fails closed; polling may retry the whole read within
+        its existing timeout without replacing the established baseline.
+        """
+        outcome = self.secondary.list_custom_resources_strict(
+            group="velero.io",
+            version="v1",
+            plural="backups",
+            namespace=BACKUP_NAMESPACE,
+        )
+        if outcome.status is not StrictReadStatus.ITEMS:
+            raise TransientError(
+                "Velero backup inventory is not positively complete: " f"{outcome.status.value} ({outcome.reason})"
+            )
+        return self._filter_acm_owned_backups(outcome.items)
 
     def _get_backup_verify_timeout(self) -> int:
         """Derive backup verification timeout from BackupSchedule cadence."""

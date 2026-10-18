@@ -333,7 +333,7 @@ python acm_switchover.py --restore-only \
    - Delete the journaled Restore through the durable Restore-cleanup transaction (recoverable; see [usage](docs/operations/usage.md#migration-evidence))
    - Enable BackupSchedule on new hub, after a fresh read proves the journaled Restore gone
    - Fix BackupSchedule collision if detected
-   - Verify new backups are created
+   - Verify new backups are created, using a complete strict inventory for the Python baseline and polls
    - Verify backup integrity (status, age, and Velero logs)
    - Handle old hub based on `--old-hub-action`, only after the old-hub migration-evidence gate passes:
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)

@@ -153,6 +153,15 @@ Shared behavior:
   the current finalization pass it refuses before any request ("Refusing the old-hub action: no
   validated migration journal and Restore-cleanup result from this finalization pass is
   available").
+- **Backup continuity (#342).** Python accepts only a complete strict Backup inventory
+  for the initial baseline, polling, and integrity fallback. An unreadable baseline
+  blocks before recorded-name reuse. Poll failures may retry within the existing wait
+  while retaining the baseline. The Collection independently requires a Backup created
+  at or after its persisted enable timestamp, then clean `Completed` status. No parity
+  status changes. Legacy stored Python names or completed checkpoints are not migrated.
+  Real task-level comparison isolates the pre-existing Collection timeout-template
+  failure tracked by [#367](https://github.com/tomazb/rh-acm-switchover/issues/367);
+  it does not establish a full unchanged-role pass.
 - **Cleanup recovery and repair.** The same states, transitions, reason codes
   (`absent_without_completion`, `replacement_uid`, `replacement_during_poll`), conflict retry
   bound (three retries), and 300-second elapsed poll bound. Each absence-poll read is bounded by

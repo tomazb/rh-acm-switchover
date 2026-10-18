@@ -691,6 +691,19 @@ Finalization runs in this order on every pass:
 4. Backup and MultiClusterHub verification, auto-import reset.
 5. **Old-hub disposition** (`--old-hub-action`), behind the old-hub evidence gate.
 
+Python backup continuity requires a complete strict Velero Backup inventory before it
+establishes the existing-name baseline or reuses a recorded name. An unreadable,
+unserved, malformed, or incomplete baseline fails finalization. Failed poll reads retry
+within the existing wait limit while retaining the validated baseline; exhausting the
+wait fails without recording a new name. A positively complete empty list remains valid.
+The integrity fallback uses the same strict inventory and still requires a clean
+`Completed` ACM-owned Backup.
+
+This fixes future unreadable-baseline attempts. It does not repair a state file that
+already recorded an old Backup or completed backup verification under earlier code.
+Stored names, enable timestamps and completed-step markers are preserved; this change
+does not independently establish the validity of legacy proof.
+
 The **old-hub evidence gate** runs immediately before every integrated old-hub action. It
 requires `post_activation.completed_at`, a `completed` or `repaired` cleanup, the activation
 name check or a waiver covering it, and a fresh strict read proving that nothing occupies the

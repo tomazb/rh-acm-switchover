@@ -475,6 +475,12 @@ and import-endpoint/client-binding checks; it does not close races after the rea
 - verifying new backups after promotion
 - handling the old hub according to `--old-hub-action`
 
+Backup continuity and the integrity fallback share
+`Finalization._list_acm_owned_velero_backups`, which consumes only `ITEMS` from
+`KubeClient.list_custom_resources_strict`. An unreadable initial inventory fails before
+recorded-name reuse; failed polling reads retain the established baseline and may retry
+within the existing wait. No new strict-read outcome or checkpoint is introduced.
+
 The Restore-cleanup decisions are pure functions in `lib/migration_cleanup.py`; `Finalization`
 owns the strict reads, the guarded DELETE and the journal writes. The order is:
 
@@ -498,7 +504,7 @@ flowchart TD
     H{old hub action secondary<br/>with observability?} -->|yes| I[Old-hub evidence gate,<br/>then MCO teardown]
     H -->|no| J
     I --> J[Generic cleanup of other switchover<br/>Restores, fresh locator-absence gate]
-    J --> K[Enable BackupSchedule,<br/>verify backups and MCH]
+    J --> K[Enable BackupSchedule,<br/>strict Backup baseline and bounded polls,<br/>verify clean completion and MCH]
     K --> L{old hub action}
     L -->|secondary / decommission| M[Old-hub evidence gate,<br/>then old-hub action]
     L -->|none| N[Leave old hub unchanged]
