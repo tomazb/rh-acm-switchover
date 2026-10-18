@@ -223,6 +223,17 @@ materialized in a private directory, with the same refusals, held equal by
 `tests/fixtures/r4_06_credential_vectors.json`. The snapshot lives for one Python run or one
 collection module invocation.
 
+Python refreshes its complete strict inventory at selection and again before any
+remediation worker dispatch (#362). The latter compares the whole selected non-local
+batch by name, UID and normalized URL, refusing all writes on drift or an unproven
+inventory while retaining the selected snapshots. The collection already reads and
+proves each mapped target afresh within every remediation invocation, classifies it
+again, and blocks mutations if any prepared peer is unproven. It does not retain UID
+continuity across invocations. These checks preserve the shared safety outcome under
+the existing input and snapshot lifetimes; `dual-supported` status is unchanged.
+Neither form factor makes hub discovery and spoke mutation atomic. Python's final
+batch read leaves a race during subsequent worker execution.
+
 The input models differ by design (operator decision 1, 2026-10-15). These are recorded
 differences, not parity gaps, and the capability stays `dual-supported`:
 
@@ -234,6 +245,27 @@ differences, not parity gaps, and the capability stays `dual-supported`:
 | `endpoint_unavailable` scope | every non-local cluster | mapped clusters |
 | No matching context | `no_context`, non-fatal skip | not applicable (an unmapped cluster is skipped) |
 | Unreadable embedded hub kubeconfig YAML | `unreachable`, non-fatal skip | `failed` (pre-existing, unchanged) |
+
+### Klusterlet retry checkpoints
+
+The [approved bounded #352 change](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521)
+replaces Python's two unversioned klusterlet step identifiers with
+`verify_klusterlet_connections_v2`. A normal Python post-activation entry rechecks an old
+marker once and preserves it for audit; a later retry with the new marker skips the gate.
+The state and journal schemas are unchanged. The marker retains the gate's documented
+non-fatal skips and is not fresh per-invocation evidence.
+
+The collection has no Python klusterlet substep marker to convert. A partially completed
+`post_activation` phase executes its probe again on retry. A phase in `completed_phases`
+is skipped after the existing journal validity/completion barriers, without another
+probe. These independent checkpoint granularities preserve the shared fail-closed gate
+contract; no parity status or checkpoint interchange is introduced.
+
+Neither behavior certifies unknown historical gate provenance beyond post-activation.
+Python finalization and COMPLETED checkpoints are not automatically rewound or reset.
+Follow the [operator hold](../../../../docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold)
+for the population still owned by open #352. Existing missing-completion rewind guidance
+is not a recovery procedure for unknown marker provenance.
 
 ## Auto-import reset obligation (issue #214, audit C3/C4)
 

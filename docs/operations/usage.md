@@ -336,6 +336,54 @@ python acm_switchover.py \
 > no expected name exists (for example in `--restore-only`). To lift the name check
 > itself, use the audited waiver described under [Migration evidence](#migration-evidence).
 
+### Legacy Python klusterlet checkpoint hold
+
+The [approved bounded #352 change](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521)
+uses `verify_klusterlet_connections_v2` at both Python post-activation call sites.
+On normal entry into `post_activation_verification`, including a failed retry attributed
+to that phase, the old `verify_klusterlet_connections` entry cannot skip the current gate.
+The tool keeps that historical entry and all unrelated steps. It records the new entry
+only after the gate returns successfully. A later retry with the new entry keeps the
+existing skip behavior. Neither entry proves a fresh observation on every invocation,
+and the documented non-fatal skips below still apply.
+
+Before resuming a checkpoint across this change, preserve a copy and inspect its JSON:
+
+- In `completed_steps`, identify entries whose `name` is
+  `verify_klusterlet_connections` and whether `verify_klusterlet_connections_v2` is absent.
+  An unversioned entry cannot distinguish a genuine pass from a historical silent skip.
+  `tool_version: "1.7.10"` does not distinguish the affected unreleased dev builds.
+- Check `current_phase`. If it is `failed`, inspect `errors` to establish the failed
+  phase. The automatic recheck applies only when the normal runner enters
+  `post_activation_verification`, including forward entry from activation.
+- Inspect `config.migration_backups`, its `schema_version`, `restore.completed_at`, and
+  `post_activation.completed_at`. A usable schema-2 completed-Restore journal can coexist
+  with the unsafe old marker. Journal-free states from released versions through 1.7.10
+  already refuse execute-mode entry with `journal_required`; malformed or incomplete
+  journals also refuse. Do not manufacture a journal to resume them.
+
+For an applicable post-activation retry with a valid journal, correct kubeconfig and read
+access first, retain the journal and step history, and resume with the same arguments.
+The current gate may discover a wrong hub and invoke its existing guarded remediation.
+It must succeed before the new marker and post-activation completion can be recorded.
+
+**Operator hold for checkpoints beyond post-activation.** If the checkpoint is at
+`finalization`, failed at finalization, or `completed`, and the old marker's provenance is
+unknown, stop before further operational work and obtain an operator assessment of its
+history and current cluster state. This change does not revisit those phases or make
+those checkpoints safe. An already recorded `post_activation.completed_at` may itself
+have followed a skipped gate; the existing journal barrier does not prove the marker's
+provenance. A recent completed run remains a no-op.
+
+Do not remove markers, rewind a phase, reset the state, synthesize evidence, or downgrade
+as a generic remedy. Finalization may already have performed cleanup or old-hub actions.
+The missing-journal-completion guidance above does not authorize recovery of this
+unknown-provenance case. Any phase re-entry or recovery procedure needs a separate
+operator decision. [Open issue #352](https://github.com/tomazb/rh-acm-switchover/issues/352)
+owns this residual and requires an evidence-based disposition before full remediation or
+closure can be claimed. The separate [#362 endpoint freshness issue](https://github.com/tomazb/rh-acm-switchover/issues/362)
+is outside this change.
+
 **Post-activation klusterlet remediation:**
 After activation, the tool verifies that managed clusters are joined and
 available, then checks whether each reachable klusterlet still points at the old
@@ -398,6 +446,21 @@ cluster entries with the same server give `context_ambiguous`. A context with
 the same host but a different scheme, port or path gives
 `endpoint_mismatch_unverified`. No matching context at all remains the
 documented non-fatal skip.
+
+Python reads a fresh complete strict ManagedCluster inventory at klusterlet target
+selection. If any cluster needs remediation, it reads the complete inventory again
+after classification and before dispatching any remediation worker. Every selected
+non-local name, UID and normalized API URL must still match, including verified or
+skipped peers. Missing identity, added or disappeared clusters, replacement UIDs,
+changed endpoints, or an unsuccessful inventory read refuse the whole batch with
+zero spoke writes and no completion marker. Retry to discover and verify the current
+targets. A run with no remediation does not newly require UIDs. Status,
+resourceVersion, list order and normalized-equivalent URL spelling do not cause refusal.
+The original context and credential snapshot remain selected throughout the attempt.
+
+This final inventory read establishes a fresh batch boundary. Changes after that
+read can still race worker execution; it is not an atomic transaction across the
+hub inventory and spoke writes.
 
 The collection never discovers contexts: `acm_switchover_managed_clusters` maps
 each cluster to one kubeconfig file and, optionally, a context. Every mapped
