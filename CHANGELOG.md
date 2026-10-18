@@ -107,6 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and retry within the existing wait; the integrity fallback also uses strict inventory.
   This prevents a baseline LIST 404 followed by a recovered old Backup from certifying
   continuity (#342). Existing stored names and completed checkpoints are not migrated.
+- Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
+  Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
+  the existing 600-second minimum, completion grace, fixed cadences, and fallback.
 
 - Python post-activation now uses `verify_klusterlet_connections_v2` at both existing gate
   call sites, so a legacy unversioned completion cannot skip the gate on normal phase
