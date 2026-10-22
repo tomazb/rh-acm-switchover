@@ -14,16 +14,24 @@ import pytest
 import acm_switchover as cli
 import modules.backup_continuity as proof_module
 import modules.finalization as finalization_module
-from lib.exceptions import FatalError
+from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
 from lib.strict_read import StrictReadOutcome
 from lib.utils import StateManager
 from tests.test_backup_continuity_lifecycle import attempt  # noqa: F401
-from tests.test_finalization import ABSENT, CLEANUP_INTENT, REPAIR_REQUEST, _accepted, _cleanup_fin, _live
+from tests.test_finalization import (
+    ABSENT,
+    CLEANUP_INTENT,
+    REPAIR_REQUEST,
+    _accepted,
+    _cleanup_fin,
+    _journal_vector,
+    _live,
+)
 
 
 @pytest.mark.parametrize("restore", [False, True])
-@pytest.mark.parametrize("failure", ["poll-timeout", "recovery-required"])
+@pytest.mark.parametrize("failure", ["poll-timeout", "recovery-required", "unreadable-controller", "teardown-barrier"])
 @pytest.mark.parametrize("backup", ["fresh", "stale", "no-schedule"])
 def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore, failure, backup, monkeypatch, caplog):
     args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label="none", good=True)
@@ -31,7 +39,10 @@ def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore,
     for key in ("backup_schedule_enabled_at", "post_switchover_backup_name", "new_backup_detected"):
         initial["config"].pop(key, None)
     initial["completed_steps"] = []
-    initial["config"]["migration_backups"] = copy.deepcopy(CLEANUP_INTENT)
+    not_started = failure in ("unreadable-controller", "teardown-barrier")
+    initial["config"]["migration_backups"] = copy.deepcopy(
+        _journal_vector("journal-post-activation-completed") if not_started else CLEANUP_INTENT
+    )
     path.write_text(json.dumps(initial))
     state = StateManager(str(path))
     producer = Mock(name="explicit-cleanup-transport")
@@ -41,15 +52,31 @@ def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore,
     )
     producer.list_custom_resources_strict.return_value = controller
     producer.delete_restore_guarded.return_value = _accepted()
-    if failure == "poll-timeout":
+    if failure == "unreadable-controller":
+        producer.list_custom_resources_strict.return_value = StrictReadOutcome.error("transport_error")
+    elif failure == "poll-timeout":
         producer.get_custom_resource_strict.return_value = _live()
     else:
         producer.get_custom_resource_strict.side_effect = [_live(), ABSENT, _live(uid="replacement", rv="3003")]
-    with patch.object(finalization_module.time, "sleep", lambda *_: None), pytest.raises(FatalError) as generated:
+    with (
+        patch.object(finalization_module.time, "sleep", lambda *_: None),
+        patch(
+            "modules.finalization.SecondaryActivation.revalidate_completion_evidence",
+            side_effect=(
+                SwitchoverError("transient teardown read unavailable") if failure == "teardown-barrier" else None
+            ),
+        ),
+        pytest.raises(SwitchoverError) as generated,
+    ):
         _cleanup_fin(state, producer)._run_restore_cleanup_transaction()
     production = RunRecord(state).migration_backups()
-    expected = "delete_accepted" if failure == "poll-timeout" else "recovery_required"
+    expected = "not_started" if not_started else "delete_accepted" if failure == "poll-timeout" else "recovery_required"
     assert production["cleanup"]["state"] == expected
+    if not_started:
+        assert production["cleanup"]["operation_id"] is None and production["cleanup"]["uid"] is None
+        assert ("MultiClusterHub read failed" if failure == "unreadable-controller" else "transient teardown") in str(
+            generated.value
+        )
     assert "backup_schedule_enabled_at" not in state.state["config"]
     cli._fail_phase(state, str(generated.value), logger)
     if failure == "recovery-required":
@@ -59,7 +86,7 @@ def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore,
             setattr(args, "cleanup_repair_" + ("evidence" if field == "inspected_evidence" else field), value)
 
     original_get, original_list = secondary.get_custom_resource_strict, secondary.list_custom_resources_strict
-    cleanup_reads = iter([_live(), ABSENT, ABSENT] if failure == "poll-timeout" else [])
+    cleanup_reads = iter([] if failure == "recovery-required" else [_live(), ABSENT, ABSENT])
 
     def read(**kwargs):
         if kwargs["plural"] == "restores":
@@ -82,13 +109,17 @@ def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore,
             obj["metadata"]["creationTimestamp"] = now
             obj["status"]["completionTimestamp"] = now
     monkeypatch.setattr(cli, "parse_args", lambda: args)
-    with pytest.raises(SystemExit) as stopped:
+    with (
+        patch("modules.finalization.SecondaryActivation.revalidate_completion_evidence") as teardown,
+        pytest.raises(SystemExit) as stopped,
+    ):
         cli.main()
     after = json.loads(path.read_bytes())
     # This is the first assertion that fails under the old phase-only guard.
     assert after["config"]["migration_backups"]["cleanup"]["state"] == (
-        "completed" if failure == "poll-timeout" else "repaired"
+        "repaired" if failure == "recovery-required" else "completed"
     )
+    assert teardown.call_count == int(not_started)
     assert "missing_enable_boundary" not in caplog.text
     assert stopped.value.code == (0 if backup == "fresh" else 1)
     assert (after["current_phase"] == "completed") == (backup == "fresh")
@@ -102,15 +133,26 @@ def test_generated_pre_enable_cleanup_retry_requires_new_proof(attempt, restore,
 
 @pytest.mark.parametrize("restore", [False, True])
 @pytest.mark.parametrize(
+    "journal_case",
+    [
+        "journal-cleanup-intent-persisted",
+        "journal-post-activation-completed",
+        "journal-cleanup-completed",
+        "journal-cleanup-repaired",
+    ],
+)
+@pytest.mark.parametrize(
     "history", ["boundary", "name", "detected", "enable", "verify", "collision", "malformed-journal"]
 )
-def test_unfinished_cleanup_does_not_override_present_or_contradictory_history(attempt, restore, history, monkeypatch):
+def test_unfinished_cleanup_does_not_override_present_or_contradictory_history(
+    attempt, restore, journal_case, history, monkeypatch
+):
     args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label="none", good=True)
     initial = json.loads(raw)
     for key in ("backup_schedule_enabled_at", "post_switchover_backup_name", "new_backup_detected"):
         initial["config"].pop(key, None)
     initial["completed_steps"] = []
-    initial["config"]["migration_backups"] = copy.deepcopy(CLEANUP_INTENT)
+    initial["config"]["migration_backups"] = copy.deepcopy(_journal_vector(journal_case))
     if history in ("boundary", "name", "detected"):
         key = {
             "boundary": "backup_schedule_enabled_at",

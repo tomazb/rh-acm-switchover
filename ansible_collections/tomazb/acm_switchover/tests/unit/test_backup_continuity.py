@@ -55,10 +55,29 @@ def test_malformed_checkpoint_fact_containers_refuse(checkpoint):
         )
 
 
-@pytest.mark.parametrize("case", ["pending", "boundary", "completed", "passed", "malformed", "terminal", "absent"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "pending",
+        "not-started",
+        "revalidated",
+        "boundary",
+        "completed",
+        "passed",
+        "malformed",
+        "terminal",
+        "repaired",
+        "absent",
+    ],
+)
 def test_pre_enable_cleanup_retry_requires_canonical_pending_cleanup_and_raw_absence(case):
     vectors = json.loads((VECTORS.parent / "r4_04_migration_evidence_vectors.json").read_text())
-    name = "journal-cleanup-completed" if case == "terminal" else "journal-cleanup-intent-persisted"
+    name = {
+        "not-started": "journal-post-activation-completed",
+        "revalidated": "journal-teardown-revalidated",
+        "terminal": "journal-cleanup-completed",
+        "repaired": "journal-cleanup-repaired",
+    }.get(case, "journal-cleanup-intent-persisted")
     journal = copy.deepcopy(next(c["input"]["candidate"] for c in vectors["cases"] if c["id"] == name))
     checkpoint: dict = {
         "phase": "finalization",
@@ -77,8 +96,26 @@ def test_pre_enable_cleanup_retry_requires_canonical_pending_cleanup_and_raw_abs
     elif case == "absent":
         checkpoint["operational_data"] = {}
     original = copy.deepcopy(checkpoint)
-    assert backup_continuity_facts(checkpoint)["pre_enable_cleanup_retry"] == (case == "pending")
+    assert backup_continuity_facts(checkpoint)["pre_enable_cleanup_retry"] == (
+        case in ("pending", "not-started", "revalidated", "terminal", "repaired")
+    )
     assert checkpoint == original
+
+
+@pytest.mark.parametrize("terminal", ["completed", "repaired"])
+@pytest.mark.parametrize("boundary", [None, "", False, 0, 1, [], {}, "invalid", "2020-01-01T00:00:00Z"])
+def test_terminal_recovery_never_overrides_any_present_boundary(terminal, boundary):
+    vectors = json.loads((VECTORS.parent / "r4_04_migration_evidence_vectors.json").read_text())
+    journal = next(c["input"]["candidate"] for c in vectors["cases"] if c["id"] == "journal-cleanup-" + terminal)
+    checkpoint = {
+        "phase": "finalization",
+        "phase_status": "fail",
+        "completed_phases": [],
+        "operational_data": {"migration_backups": journal, "backup_schedule_enabled_at": boundary},
+    }
+    before = copy.deepcopy(checkpoint)
+    assert not backup_continuity_facts(checkpoint)["pre_enable_cleanup_retry"]
+    assert checkpoint == before
 
 
 def test_strict_transport_creation_bound_positive():

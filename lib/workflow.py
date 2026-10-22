@@ -116,12 +116,14 @@ def _refuse_reset_of_migration_journal(state: StateManager, logger: logging.Logg
 
 
 def pre_enable_cleanup_retry(state: StateManager) -> bool:
-    """Recognize unfinished canonical cleanup before any Backup history.
+    """Recognize active history-free retries that require a new Backup proof.
 
-    Cleanup intent copies the owned Restore identity and requires completed
-    teardown/post-activation evidence. Enablement requires terminal cleanup,
-    so these nonterminal states cannot follow a supported enable operation.
-    Terminal journals and absent/malformed history cannot prove this case.
+    not_started must re-run controller and teardown checks before creating
+    cleanup intent. Later states carry the copied Restore identity and completed
+    prerequisites. Enablement requires terminal cleanup, so these nonterminal
+    states cannot follow a supported enable operation. A valid terminal journal
+    does not prove prior enable chronology: its retry is an explicitly authorized
+    new enable-and-proof attempt, never historical proof.
     Live identity validation still precedes this workflow eligibility decision.
     """
     if state.get_current_phase() != Phase.FINALIZATION:
@@ -145,9 +147,12 @@ def pre_enable_cleanup_retry(state: StateManager) -> bool:
     except ValueError:
         return False
     return journal is not None and journal["cleanup"]["state"] in (
+        "not_started",
         "intent_persisted",
         "delete_accepted",
         "recovery_required",
+        "completed",
+        "repaired",
     )
 
 

@@ -741,17 +741,31 @@ its absence. A genuinely fresh entry may establish a new boundary after enableme
 Fresh restore-only execution with no BackupSchedule retains its existing exception;
 current flags cannot turn ambiguous historical state into that exception.
 
-A canonical journal with unfinished cleanup (`intent_persisted`, `delete_accepted`
-or `recovery_required`) can establish that a retry stopped before enablement:
-cleanup intent retains the owned Restore identity and completed teardown and
-post-activation prerequisites, and enablement requires terminal cleanup. This narrow
+A canonical journal with unfinished cleanup (`not_started`, `intent_persisted`,
+`delete_accepted` or `recovery_required`) can establish that a retry stopped before
+enablement, because enablement requires terminal cleanup. A `not_started` retry must
+re-run the controller and teardown checks before creating cleanup intent. Later
+states retain the copied Restore identity and completed prerequisites. This narrow
 case also requires raw absence of all recorded Backup boundary, name and enable or
 verification history. It permits the existing guarded cleanup or acknowledged repair
 after the normal identity and Argo CD gates. It does not prove Backup continuity.
 The retry must establish a genuinely new enable boundary and fresh Backup proof before
 success; restore-only cannot use the no-schedule exception on this historical path.
-Terminal or malformed journals cannot establish this exception. Completed assessment
-always requires current proof and remains read-only.
+Terminal journals cannot establish this pre-enable exception. A separately approved
+active FINALIZATION recovery may instead use a valid `completed` or `repaired` journal
+and raw absence of all Backup history to attempt ordinary enablement and new proof.
+This does not establish what happened before the retry. Existing pre-enable operations,
+including any owed old-hub observability cleanup, retain their reviewed order and
+migration/journal/locator gates. The retry must record a new watch boundary and prove
+a qualifying Backup created at or after it before later old-hub handling or success.
+It cannot use the restore-only no-schedule exception. Any present Backup history,
+malformed journal or completed lifecycle retains the existing assessment/refusal;
+COMPLETED always remains read-only.
+
+This bounded new-attempt procedure was [explicitly approved under #342](https://github.com/tomazb/rh-acm-switchover/issues/342#issuecomment-6261269794).
+It covers a current failure or interruption after cleanup, including enablement before
+the boundary was persisted, without claiming to distinguish that history from an older
+history-free terminal journal. Existing journal facts remain intact.
 
 A completed attempt compares retained contexts and physical hub identities against
 fresh discovery, then proves Backup continuity before any phase or mutation-capable
@@ -772,8 +786,9 @@ For read-only assessment, retain the original checkpoint and checksum, exact exe
 commit, contexts and physical hub IDs, recorded name and markers, raw boundary presence
 and source, migration journal, and sanitized fresh Backup metadata/status. Legitimate
 runs may remain held when the object was pruned, a boundary is missing or ambiguous, or
-a crash left finalization without proof. No automatic migration or recovery mutation is
-provided. Do not delete markers, rewrite timestamps, substitute names, backfill identity,
+a crash left finalization without proof outside the bounded active procedure above.
+No general checkpoint migration or recovery mutation is provided. Do not delete markers,
+rewrite timestamps, substitute names, backfill identity,
 rewind phases, reset the store or use an older executable as a general repair. Any such
 recovery needs a separately approved procedure. A human acknowledgement is not Backup
 proof. This assessment does not retroactively prove earlier phases; the independent

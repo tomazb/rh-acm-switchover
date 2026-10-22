@@ -167,8 +167,12 @@ Shared behavior:
   valid proof permits a read-only no-op. Active retry re-pauses first and preserves raw
   historical boundary presence/value during existing failure auditing. Python retains its
   stored-name and absent-only legacy-step input model; Collection selects the latest fresh
-  candidate against its own persisted boundary, without a step fallback. Missing or
-  ambiguous history may remain held. No store migration, cross-runtime resume or parity
+  candidate against its own persisted boundary, without a step fallback. Canonical
+  active cleanup with raw absence of all Backup history can resume or repair; terminal
+  cleanup can enter the approved ordinary new enable-and-proof attempt. Existing
+  pre-enable observability ordering remains. Neither route supplies historical proof
+  or a restore-only no-schedule exception. Other missing or ambiguous history remains
+  held. No store migration, cross-runtime resume or parity
   status change is introduced. See the [operator contract](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints).
   The separately reviewed [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
   is integrated. The healthy shipped role and playbook execute paths remain required

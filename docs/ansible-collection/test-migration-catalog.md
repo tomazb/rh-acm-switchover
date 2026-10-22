@@ -114,3 +114,8 @@ Healthy shipped role and playbook execute-positive acceptance is covered on both
 lanes by `test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass`. The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
 records the remaining history and recovery limits, including the independent #352
 residual.
+The approved bounded active terminal-journal procedure adds generated failure/retry and
+enable-before-boundary interruption coverage in Python
+`tests/test_backup_continuity_terminal_retry.py` and Collection
+`tests/integration/test_backup_terminal_retry_runtime.py`. Their new Backup events use
+distinct names/UIDs and preserve the frozen objects. These remain non-live evidence.

@@ -31,7 +31,7 @@ def hub():
 
 
 @pytest.mark.parametrize("restore", [False, True])
-@pytest.mark.parametrize("failure", ["poll-timeout", "recovery-required"])
+@pytest.mark.parametrize("failure", ["poll-timeout", "recovery-required", "unreadable-controller"])
 @pytest.mark.parametrize("evidence", ["fresh", "no-schedule", "malformed-boundary", "wrong-uid"])
 def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
     run_activation, run_finalization, hub, restore, failure, evidence  # noqa: F811
@@ -39,12 +39,28 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
     journal = completed_journal(run_activation, "full_restore", hub)
     original_restore = copy.deepcopy(hub.acm[journal["restore"]["name"]])
     options = {"restore": restore, "old_action": "none"}
-    failed = run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_delays": []}, **options)
-    assert failed.journal["cleanup"]["state"] == "delete_accepted", failed.output
+    if failure == "unreadable-controller":
+        mch = "/apis/operator.open-cluster-management.io/v1/namespaces/open-cluster-management/multiclusterhubs"
+        hub.failures[("GET", mch)] = 503
+        failed = run_finalization("full_restore", hub, journal, entry="main", **options)
+        del hub.failures[("GET", mch)]
+        assert failed.completed.returncode != 0 and "MultiClusterHub read failed" in failed.output, failed.output
+        assert any(r["method"] == "GET" and r["path"] == mch for r in hub.requests)
+        assert failed.journal["cleanup"]["operation_id"] is None and failed.journal["cleanup"]["uid"] is None
+    else:
+        failed = run_finalization("full_restore", hub, journal, extra={"_acm_cleanup_poll_delays": []}, **options)
+        assert failed.journal["cleanup"]["state"] == "delete_accepted", failed.output
     if failure == "recovery-required":
         failed = run_finalization("full_restore", hub, None, **options)
     generated = copy.deepcopy(failed.journal)
-    assert generated["cleanup"]["state"] == ("delete_accepted" if failure == "poll-timeout" else "recovery_required")
+    assert (
+        generated["cleanup"]["state"]
+        == {
+            "poll-timeout": "delete_accepted",
+            "recovery-required": "recovery_required",
+            "unreadable-controller": "not_started",
+        }[failure]
+    )
     raw = json.loads(failed.path.read_bytes())
     assert "backup_schedule_enabled_at" not in raw["operational_data"]
     if evidence == "malformed-boundary":
@@ -56,6 +72,7 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
         hub.acm[journal["restore"]["name"]] = original_restore
     request = dict(REPAIR, run_id=journal["run_id"], operation_id=generated["cleanup"]["operation_id"])
     extra = {"acm_switchover_features": {"skip_observability_checks": True}}
+    proof_faults = []
     if evidence == "fresh":
         raw = json.loads(failed.path.read_bytes())
         raw["operational_data"]["primary_has_observability"] = False
@@ -74,8 +91,17 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
         hub.complete_backup_after_enable = True
     elif evidence == "no-schedule":
         # Prove that historical no-schedule does not silently skip the reader;
-        # denied discovery refuses immediately without substituting a shorter poll.
-        hub.failures[("GET", BACKUPS)] = 403
+        # allow frozen Backup revalidation, then deny only the proof inventory.
+        original_failure = hub._failure
+
+        def deny_proof_inventory(method, path):
+            cleanup_state = ((hub.journal_probe() or {}).get("cleanup") or {}).get("state")
+            if method == "GET" and path == BACKUPS and cleanup_state in ("completed", "repaired"):
+                proof_faults.append({"path": path, "cleanup_state": cleanup_state, "status": 403})
+                return 403
+            return original_failure(method, path)
+
+        hub._failure = deny_proof_inventory
     elif evidence == "wrong-uid":
         hub.cluster_uid = "wrong-live-secondary"
     writes = len(hub.writes)
@@ -99,6 +125,7 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
                 "before_retry": raw,
                 "after_retry": after,
                 "requests": hub.requests,
+                "proof_faults": proof_faults,
                 "returncode": retry.completed.returncode,
                 "output": retry.output,
             },
@@ -116,7 +143,9 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
             assert after == raw
             assert "identity" in retry.output.lower()
         return
-    assert retry.journal["cleanup"]["state"] == ("completed" if failure == "poll-timeout" else "repaired"), retry.output
+    assert retry.journal["cleanup"]["state"] == (
+        "repaired" if failure == "recovery-required" else "completed"
+    ), retry.output
     assert "missing_enable_boundary" not in retry.output
     assert "backup_schedule_enabled_at" in after["operational_data"]
     if evidence == "fresh":
@@ -127,4 +156,6 @@ def test_generated_cleanup_retry_reaches_repair_and_requires_new_backup_proof(
     else:
         assert retry.completed.returncode != 0, retry.output
         assert ("backup_inventory_unavailable" if restore else "No BackupSchedule") in retry.output, retry.output
+        if restore:
+            assert proof_faults, "The intended post-cleanup proof inventory fault was not exercised"
         assert "finalization" not in after["completed_phases"]

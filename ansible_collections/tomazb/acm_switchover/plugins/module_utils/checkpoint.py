@@ -217,11 +217,13 @@ def backup_continuity_facts(checkpoint) -> dict:
 
 
 def _pre_enable_cleanup_retry(checkpoint: dict, data: dict, phases: list) -> bool:
-    """Only unfinished owned cleanup can establish a history-free pre-enable retry.
+    """Recognize active history-free retries that require a new Backup proof.
 
-    Canonical intent requires copied Restore identity plus completed teardown and
-    post-activation evidence. Enablement requires terminal cleanup. Identity is
-    separately checked by checkpoint entry before any cleanup mutation.
+    not_started re-runs controller and teardown checks before creating intent.
+    Later states carry copied Restore identity and completed prerequisites.
+    Enablement requires terminal cleanup. A terminal journal is admitted only for
+    an explicitly authorized new enable-and-proof attempt, not as historical
+    proof. Read-only physical identity validation still precedes phase entry.
     """
     if (
         checkpoint.get("phase") != "finalization"
@@ -234,9 +236,12 @@ def _pre_enable_cleanup_retry(checkpoint: dict, data: dict, phases: list) -> boo
         return False
     outcome, journal = classify_migration_backups(checkpoint)
     return outcome == MIGRATION_JOURNAL_VALID and journal["cleanup"]["state"] in (
+        "not_started",
         "intent_persisted",
         "delete_accepted",
         "recovery_required",
+        "completed",
+        "repaired",
     )
 
 

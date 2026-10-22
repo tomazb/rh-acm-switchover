@@ -76,8 +76,10 @@ This is a pre-existing difference in rewind tooling, not a behavior divergence.
 The #342 candidate adds no recovery flag or state translation. Python's saved
 `post_switchover_backup_name` and historical `enable_backup_schedule` step are not
 Collection inputs. The Collection requires its own raw saved enable boundary; an
-active retry already in finalization cannot substitute a runtime boundary when the
-saved key is absent. Completed assessment precedes ordinary checkpoint skips and
+active retry already in finalization cannot substitute a runtime boundary for historical
+proof. The approved history-free canonical-journal route instead attempts ordinary new
+enablement and proof, including terminal cleanup, with no historical no-schedule success.
+It retains existing pre-enable observability ordering. Completed assessment precedes ordinary checkpoint skips and
 refuses reset controls. See [Backup continuity and historical checkpoints](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints)
 for proof requirements, preserved history and shipped execute acceptance after the
 separately reviewed #367 cadence correction.

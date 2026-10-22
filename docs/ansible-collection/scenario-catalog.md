@@ -162,6 +162,13 @@ completed no-write refusal, identity/reset refusal, current-proof no-op, active 
 raw-boundary preservation and interruption. The scenario wrapper records loaded source
 hashes and checkpoint save attempts so byte equality cannot hide write-then-restore.
 The existing journal-rescue integration suite covers actual Argo CD Application PATCHes.
+`tests/test_backup_continuity_terminal_retry.py` and Collection
+`tests/integration/test_backup_terminal_retry_runtime.py` cover production-generated
+completed/repaired cleanup, transient pre-boundary inventory failure, process loss after
+real enablement before boundary persistence, and a new distinct Backup after the retry's
+new boundary. No-schedule remains refused; generic missing history without a canonical
+journal and every present-history assessment retain their controls. The Collection
+interruption wrapper records durable state immediately after the actual enable write.
 
 Shared creation/health decisions are covered by
 `tests/fixtures/backup_continuity_compatibility.json` in both independent proof owners.

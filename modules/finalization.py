@@ -124,8 +124,8 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.restore_only = restore_only
-        # Workflow-owned pre-enable retry: cleanup may resume, but historical
-        # restore-only absence cannot authorize a no-schedule success.
+        # Workflow-owned history-free recovery requires ordinary enablement and new
+        # proof, including terminal-journal retries; no historical no-schedule success.
         self.require_backup_continuity = require_backup_continuity
         # Operator acknowledgement that destination observability was never migrated.
         # CLI validation restricts it to old_hub_action=decommission; it converts one

@@ -490,9 +490,12 @@ The Collection independently implements the rule in
 the direct finalization role. Completed identity and Backup assessment stay outside
 mutation-capable rescue; active retry proof follows required re-pause and precedes
 cleanup/enable. Raw finalization history with no boundary refuses unless a canonical
-unfinished cleanup journal and absence of all Backup history prove a pre-enable retry.
-Workflow wiring permits that cleanup/repair, then requires new Backup proof and forbids
-historical restore-only no-schedule success. Terminal journals cannot prove the exception.
+journal and raw absence of all supported Backup history permit the bounded active route.
+Unfinished cleanup resumes its existing checks or audited repair. Valid terminal cleanup
+permits the separately approved ordinary new enable-and-proof attempt; it does not prove
+historical enablement. Owed old-hub observability cleanup retains its existing pre-enable
+order and journal/locator gates. New proof precedes later old-hub handling and success.
+Historical restore-only cannot use the no-schedule exception. COMPLETED remains read-only.
 No proof cache, checkpoint version or generic lifecycle mechanism is added.
 
 ```mermaid
@@ -507,10 +510,12 @@ flowchart TD
     V -->|unproved| A[Refuse; existing active failure audit only]
     V -->|proved| F[Ordinary finalization]
     H -->|fresh entry| F
-    H -->|canonical unfinished cleanup; all Backup history absent| U[Resume guarded cleanup or repair]
-    U --> B[New enable boundary and strict Backup proof required]
-    B -->|proved| F
-    B -->|unproved or no schedule| A
+    H -->|canonical journal; all Backup history absent| U[Reconcile cleanup or terminal journal]
+    U --> O[Owed observability cleanup under existing gates]
+    O --> B[Ordinary enable and new watch boundary]
+    B --> Q[Strict post-boundary Backup proof]
+    Q -->|proved| L[Later old-hub handling and success]
+    Q -->|unproved or no schedule| A
 ```
 
 The [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)

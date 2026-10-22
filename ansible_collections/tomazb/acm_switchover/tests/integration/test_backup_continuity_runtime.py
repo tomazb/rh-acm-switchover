@@ -22,7 +22,10 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.argocd_fake_api
     application,
     write_kubeconfig,
 )
-from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_api import FakeMigrationHub
+from ansible_collections.tomazb.acm_switchover.tests.integration.migration_fake_api import (
+    LEGACY_INVENTORY,
+    FakeMigrationHub,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 COLLECTION = ROOT / "ansible_collections/tomazb/acm_switchover"
@@ -31,6 +34,14 @@ BACKUPS = "/apis/velero.io/v1/namespaces/open-cluster-management-backup/backups"
 
 class BackupLifecycleHub(FakeMigrationHub):
     """Supply unrelated healthy MCH/Pod prerequisites for full-role controls."""
+
+    def __init__(self, **kwargs):
+        if kwargs.get("backups") is None:
+            # Explicit immutable creation metadata for the fixture's frozen cohort.
+            kwargs["backups"] = copy.deepcopy(LEGACY_INVENTORY)
+            for item in kwargs["backups"]:
+                item["metadata"]["creationTimestamp"] = item["status"]["startTimestamp"]
+        super().__init__(**kwargs)
 
     def _discovery(self):
         result = super()._discovery()
@@ -41,9 +52,19 @@ class BackupLifecycleHub(FakeMigrationHub):
 
     def _list_payload(self, path):
         if path == BACKUPS and getattr(self, "complete_backup_after_enable", False) and self.schedules:
-            for backup in self.backups.values():
-                backup["metadata"]["creationTimestamp"] = datetime.now(timezone.utc).isoformat()
-                backup["status"] = {"phase": "Completed", "errors": 0}
+            name = "acm-managed-clusters-after-enable"
+            self.backups[name] = {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                    "name": name,
+                    "namespace": "open-cluster-management-backup",
+                    "uid": "new-controller-backup-uid",
+                    "resourceVersion": "501",
+                    "creationTimestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                "status": {"phase": "Completed", "errors": 0},
+            }
             self.complete_backup_after_enable = False
         if path == "/api/v1/namespaces/open-cluster-management/pods":
             return {
@@ -522,6 +543,8 @@ def test_historical_finalization_missing_boundary_refuses_before_mutation(
 ):
     def historical(state):
         state["phase_status"] = phase_status
+        # Generic ambiguity has no canonical journal authorizing a new attempt.
+        state["operational_data"].pop("migration_backups", None)
         state["operational_data"]["saved_backup_schedule"] = {
             "apiVersion": "cluster.open-cluster-management.io/v1beta1",
             "kind": "BackupSchedule",
@@ -603,6 +626,10 @@ def test_genuinely_fresh_restore_only_no_schedule_keeps_existing_exception(run_b
 def test_active_retry_repauses_before_backup_refusal(run_backup_entry, route, restore, boundary):
     def failed_retry(state):
         state["phase_status"] = "fail"
+        if boundary == "missing":
+            # Generic absent-history refusal; valid terminal journals now have
+            # the separately tested approved new enable-and-proof route.
+            state["operational_data"].pop("migration_backups", None)
         state["operational_data"].update(
             argocd_repause_required={"failed_phase": "finalization", "recorded_at": "2026-10-01T00:00:00Z"},
             argocd_run_id="backup-retry-fixture",
@@ -638,6 +665,10 @@ def test_active_retry_repauses_before_backup_refusal(run_backup_entry, route, re
 def test_actual_application_repause_patch_precedes_backup_refusal(run_backup_entry, route, restore, boundary):
     def failed_retry(state):
         state["phase_status"] = "fail"
+        if boundary == "missing":
+            # Generic absent-history refusal; valid terminal journals now have
+            # the separately tested approved new enable-and-proof route.
+            state["operational_data"].pop("migration_backups", None)
         state["operational_data"].update(
             argocd_repause_required={"failed_phase": "finalization", "recorded_at": "2026-10-01T00:00:00Z"},
             argocd_run_id="backup-retry-fixture",
@@ -678,7 +709,8 @@ def test_actual_application_repause_patch_precedes_backup_refusal(run_backup_ent
     if restore:
         assert not primary.requests and not primary.writes
     assert saved["operation_identity"] == original["operation_identity"]
-    assert saved["operational_data"]["migration_backups"] == original["operational_data"]["migration_backups"]
+    assert saved["operational_data"].get("migration_backups") == original["operational_data"].get("migration_backups")
+    assert ("migration_backups" in saved["operational_data"]) == ("migration_backups" in original["operational_data"])
     assert saved["operational_data"].get("backup_schedule_enabled_at") == original["operational_data"].get(
         "backup_schedule_enabled_at"
     )
@@ -727,7 +759,7 @@ def test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass(run_backu
         if request["method"] == "GET" and (request["path"] == BACKUPS or request["path"].startswith(BACKUPS + "/"))
     ]
     assert schedule_writes and backup_reads and min(schedule_writes) < min(backup_reads), requests
-    assert any(request["path"] == BACKUPS + "/acm-managed-clusters-current" for request in requests)
+    assert any(request["path"] == BACKUPS + "/acm-managed-clusters-after-enable" for request in requests)
     saved = json.loads(checkpoint.read_bytes())
     assert saved["phase"] == "finalization" and saved["phase_status"] == "pass", saved
     assert "finalization" in saved["completed_phases"]

@@ -29,6 +29,9 @@ or a completed no-op. Existing names, markers, boundaries and journal formats re
 unchanged. Python alone has its absent-only historical enable-step fallback and recorded
 name; Collection keeps its current latest-fresh selection. These existing input models
 do not authorize cross-runtime resume or an intentional parity change. The
+approved active terminal-journal route requires ordinary new enablement and strict
+post-boundary proof in both forms; it never certifies historical enablement or permits
+COMPLETED replay. Existing pre-enable observability ordering is retained. The
 [operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
 owns details and read-only assessment guidance. The separate
 [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)

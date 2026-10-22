@@ -696,6 +696,8 @@ def test_historical_finalization_without_any_boundary_or_marker_refuses_before_c
     args.dry_run = dry_run
     saved = json.loads(raw)
     saved["current_phase"] = phase
+    # Generic absent history has no canonical journal authorizing the approved new attempt.
+    saved["config"].pop("migration_backups", None)
     if phase == "failed":
         saved["errors"] = [{"phase": "finalization", "error": "fixture interruption before any proof was retained"}]
     for key in ("backup_schedule_enabled_at", "post_switchover_backup_name", "new_backup_detected"):
@@ -751,7 +753,7 @@ def test_historical_finalization_without_any_boundary_or_marker_refuses_before_c
     after = json.loads(path.read_bytes())
     assert "backup_schedule_enabled_at" not in after["config"]
     assert "post_switchover_backup_name" not in after["config"]
-    assert after["config"]["migration_backups"] == saved["config"]["migration_backups"]
+    assert "migration_backups" not in after["config"]
     assert after["hub_identities"] == saved["hub_identities"]
     assert after["completed_steps"] == saved["completed_steps"]
     assert not any(r[0] == "restore_get" or r == ("resource_list", "restores") for r in st.requests), st.requests

@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,7 @@ def run_finalization(tmp_path):
         entry=None,
         restore=False,
         old_action="secondary",
+        interrupt_after_enable=False,
     ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
@@ -249,6 +251,18 @@ def run_finalization(tmp_path):
         command = ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"]
         if check:
             command.append("--check")
+        env = dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {}))
+        if interrupt_after_enable:
+            command = [
+                sys.executable,
+                str(
+                    _repo_root()
+                    / "ansible_collections/tomazb/acm_switchover/tests/support/terminal_recovery_trace_runner.py"
+                ),
+                *command[1:],
+            ]
+            env["ACM_TERMINAL_CHECKPOINT"] = str(path)
+            env["ACM_TERMINAL_TRACE"] = str(tmp_path / "enable-interruption.json")
         try:
             completed = subprocess.run(
                 command,
@@ -256,7 +270,7 @@ def run_finalization(tmp_path):
                 capture_output=True,
                 text=True,
                 check=False,
-                env=dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {})),
+                env=env,
                 timeout=300,
             )
         finally:
