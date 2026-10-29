@@ -1,7 +1,15 @@
 # Shared Parity Scenario Catalog
 
-Date: 2026-05-12
+Established: 2026-05-12; evidence descriptions reconciled 2026-10-29.
 Purpose: Define scenarios that both implementations must eventually satisfy
+
+The initial scenarios describe intended behavior. The coverage tables below link to concrete
+tests and state their exercised scope; a test for one component is not evidence that the
+entire scenario runs end to end. All listed evidence is static, in-process, fake-backed, or
+fixture-backed. None is live ACM certification evidence. See the
+[testing guide](../development/testing.md) for gate commands and evidence tiers, and the
+[test-migration catalog](test-migration-catalog.md) for additional targeted tests. These
+coverage descriptions do not change capability status in the [parity matrix](parity-matrix.md).
 
 ## Scenario Schema
 
@@ -124,30 +132,60 @@ resume compatibility remain in
 
 ## Collection Coverage (Phase 2)
 
-| Scenario ID | Python | Collection | Notes |
+| Scenario ID | Python evidence | Collection evidence | Exercised scope |
 |-------------|--------|------------|-------|
-| `preflight-passive-success` | yes | yes | Matching report contract required |
-| `preflight-input-failure` | yes | yes | Missing secondary context blocks execution |
-| `preflight-version-mismatch` | yes | yes | Minor version mismatch fails preflight |
-| `preflight-backup-failure` | yes | yes | Missing backup artifacts or BSL health fails preflight |
+| `preflight-passive-success` | [Validator units][python-preflight] | [Preflight fixture][collection-preflight] | Validator success cases and fixture report status; no live preflight proof |
+| `preflight-input-failure` | [Input units][python-inputs] | [Preflight fixture][collection-preflight] | Input refusal; Collection fixture asserts a failed process and written report |
+| `preflight-version-mismatch` | [Version validator units][python-preflight] | [Preflight fixture][collection-preflight] | Version mismatch refusal |
+| `preflight-backup-failure` | [Backup validator units][python-preflight] | [Preflight fixture][collection-preflight] | Missing, incomplete, or unhealthy backup inputs; fixture failure reporting |
 
 ## Collection Coverage (Phase 3)
 
-| Scenario ID | Python | Collection | Notes |
+| Scenario ID | Python evidence | Collection evidence | Exercised scope |
 |-------------|--------|------------|-------|
-| `switchover-passive-success` | yes | yes | All phases pass; all four phase reports present in report artifact |
-| `switchover-post-activation-cluster-failure` | yes | yes | Cluster not joined/available; post_activation status=fail, report written before play exits |
-| `switchover-finalization-backup-recovery` | yes | yes | Full end-to-end fixture; backup enable + MCH verify + old hub disposition emitted |
+| `switchover-passive-success` | [Phase-flow stubs][python-flow] | [Switchover fixtures][collection-switchover], [report composition][collection-composition] | Python phase order, Collection primary-prep/activation pass, and four phase-report keys; not an all-phase live execution |
+| `switchover-post-activation-cluster-failure` | [Post-activation units][python-post-activation] | [Post-activation fake API][collection-post-activation] | Targeted unavailable/missing-inventory refusal and journal behavior. The previously claimed named whole-playbook failure/report fixture is not present; retain that evidence gap under [#268](https://github.com/tomazb/rh-acm-switchover/issues/268) |
+| `switchover-finalization-backup-recovery` | [Finalization units][python-finalization] | [Switchover fixtures][collection-switchover], [report composition][collection-composition] | Backup-enable plan, finalization report, and multi-phase report composition; no live backup-continuity or recovery proof |
 
 ## Collection Coverage (Phase 6 and Safety Realignment)
 
-| Scenario ID | Python | Collection | Notes |
+| Scenario ID | Python evidence | Collection evidence | Exercised scope |
 |-------------|--------|------------|-------|
-| `restore-only-success` | yes | yes | Restore-only report and secondary-only preflight are dual-supported |
-| `argocd-resume-on-failure` | yes | yes | Collection preserves pause `run_id` through retry checkpoints |
-| `decommission-observability-auto` | yes | yes | Collection defaults to namespace autodetection with explicit override support |
-| `rbac-bootstrap-operator` | yes | yes | Bootstrap validation covers the permissions shipped by manifests |
-| `machine-readable-reports` | yes | yes | Python and collection emit schema version `1.0` report artifacts |
-| `runtime-parity-safety` | yes | yes | Backup, restore, post-activation, finalization, RBAC, and decommission safety paths are covered by targeted regression tests |
-| `release-1.7.10-artifact-guardrails` | yes | yes | Release tests cover required fields for switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts |
-| `distinct-physical-hub` | yes | yes | Same-context, same-live-UID, unreadable evidence, resume drift, recovery boundary, native-check freshness, restore-only, and decommission exclusions are pinned by focused tests |
+| `restore-only-success` | [Restore-only phase-flow stubs][python-flow] | [Recovery contracts][collection-restore-only], [Argo fixture][collection-argocd] | Targeted routing/recovery and restore-only Argo pause/resume; these do not establish a complete restore-only success run |
+| `argocd-resume-on-failure` | [Journal rescue units][python-rescue] | [Journal rescue runtime][collection-rescue] | Durable re-pause marker, retry order, journal retention, and secondary-only restore recovery over fake hubs |
+| `decommission-observability-auto` | [Decommission units][python-decommission] | [Role contracts][collection-decommission], [dry-run fixture][collection-noncore] | Targeted teardown/wiring and dry-run summary; not live autodetection or decommission certification |
+| `rbac-bootstrap-operator` | [RBAC units][python-rbac], [permission parity][rbac-parity] | [Bootstrap module units][collection-rbac], [dry-run fixture][collection-noncore] | Permission expansion and bootstrap prediction; no live apply-and-validate evidence |
+| `machine-readable-reports` | [Report units][python-reports] | [Report module units][collection-reports] | Local report serialization/artifact contracts |
+| `runtime-parity-safety` | [Activation][activation-parity], [post-activation][post-activation-parity], [cleanup][cleanup-parity] parity | Same shared parity tests call Collection helpers in-process | Normalized transaction decisions over shared fake inputs; broader targeted coverage is in the test-migration catalog, not one full-runtime parity scenario |
+| `release-1.7.10-artifact-guardrails` | [Release metadata units][release-metadata] | [Source-schema contracts][collection-schema] | Metadata and required report fields; no installed-artifact or live release certification |
+| `distinct-physical-hub` | [Validation parity][identity-parity] | [Identity barrier runtime][collection-identity], [checkpoint scenarios][collection-checkpoint] | Same-context/UID and unavailable-evidence refusals, resume drift, recovery boundaries, check-mode freshness, and one-hub exclusions |
+
+[python-preflight]: ../../tests/test_preflight_validators_unit.py
+[python-inputs]: ../../tests/test_validation.py
+[python-flow]: ../../tests/test_main_phase_flow.py
+[python-post-activation]: ../../tests/test_post_activation.py
+[python-finalization]: ../../tests/test_finalization.py
+[python-rescue]: ../../tests/test_argocd_rescue_journal.py
+[python-decommission]: ../../tests/test_decommission.py
+[python-rbac]: ../../tests/test_rbac_validator.py
+[python-reports]: ../../tests/test_report_artifacts.py
+[rbac-parity]: ../../tests/test_rbac_collection_parity.py
+[activation-parity]: ../../tests/test_activation_transaction_parity.py
+[post-activation-parity]: ../../tests/test_post_activation_transaction_parity.py
+[cleanup-parity]: ../../tests/test_restore_cleanup_transaction_parity.py
+[release-metadata]: ../../tests/release/checks/test_metadata.py
+[identity-parity]: ../../tests/test_validation_parity.py
+[collection-preflight]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_preflight_role.py
+[collection-switchover]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py
+[collection-composition]: ../../ansible_collections/tomazb/acm_switchover/tests/scenario/test_core_switchover.py
+[collection-post-activation]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_post_activation_evidence_runtime.py
+[collection-restore-only]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py
+[collection-argocd]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py
+[collection-rescue]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_journal_rescue_runtime.py
+[collection-decommission]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/test_decommission_role_contracts.py
+[collection-noncore]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_noncore_roles.py
+[collection-rbac]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_rbac_bootstrap.py
+[collection-reports]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_report_artifact.py
+[collection-schema]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/test_release_source_schema.py
+[collection-identity]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_distinct_hub_identity_barrier.py
+[collection-checkpoint]: ../../ansible_collections/tomazb/acm_switchover/tests/scenario/test_checkpoint_resume.py

@@ -1,6 +1,10 @@
 # Property-Based Testing — PR Workflow and Process Contract
 
-Status: PBT-01 (documentation only). Part of issue #136.
+Status: original PBT rollout/process contract from issue #136. The seven suites and
+scaffolding now exist under `tests/properties/`; the
+[PBT guide](property-based-testing.md#running-the-existing-suites) owns current commands and
+profile behavior. The PR identifiers and dependency sequence below are historical rollout
+context, not pending implementation status.
 Companion documents: [`property-based-testing.md`](property-based-testing.md)
 (plan) and [`property-based-testing-spec.md`](property-based-testing-spec.md)
 (suite specifications).
@@ -15,7 +19,7 @@ each PR, the hard-fail rules, and the merge-readiness requirements.
 | PR | Branch scope | Delivers | Spec authority |
 | --- | --- | --- | --- |
 | PBT-01 | docs only | This documentation set | issue #136 |
-| PBT-02 | scaffolding | Hypothesis dependency, `tests/property/` layout, shared strategies, `property` marker, CI wiring | spec §"Scaffolding contract" |
+| PBT-02 | scaffolding | Hypothesis dependency, `tests/properties/` layout, shared strategies, `property` marker, CI wiring | spec §"Scaffolding contract" |
 | PBT-03 | tests only | Suite 1 — validation parity properties | spec §Suite 1 |
 | PBT-04 | tests only | Suite 2 — path-safety properties | spec §Suite 2 |
 | PBT-05 | tests only | Suite 3 — checkpoint/resume properties | spec §Suite 3 |
