@@ -1,15 +1,18 @@
 # Property-Based Testing — Implementation Specification
 
-Status: PBT-01 (documentation only). Part of issue #136.
+Status: the seven suite files and shared scaffolding are present in `tests/properties/`
+and selected by the default root gate. Originally published as PBT-01 for issue #136.
 Companion documents: [`property-based-testing.md`](property-based-testing.md)
 (plan) and
 [`property-based-testing-pr-workflow.md`](property-based-testing-pr-workflow.md)
 (process contract).
 
-This specification defines the seven property-based testing (PBT) suites to
-be implemented by PRs PBT-03 through PBT-09, after PBT-02 lands the shared
-scaffolding. It is the acceptance authority for those PRs: a suite PR is
-complete when it satisfies its section here.
+This specification retains the original acceptance contracts for the seven property-based
+testing (PBT) suites and their PBT-03 through PBT-09 rollout identifiers. The
+[PBT guide](property-based-testing.md#running-the-existing-suites) lists the current files,
+profile selection, and commands. Suite presence does not by itself establish every original
+acceptance claim; in particular, CI profile enforcement remains pending under R3-09b in the
+[Thermos tracker](../../thermos-resolution-plan.md).
 
 ## Conventions that apply to every suite
 
@@ -41,14 +44,17 @@ complete when it satisfies its section here.
   `null`, booleans, finite numbers, strings, lists, and dictionaries with
   string keys. Merely being accepted by `json.dumps` is not enough if the
   value would change shape on load (for example, tuples or non-string keys).
-- **Determinism**: suites run derandomized/seeded in CI; counterexamples are
-  pinned as explicit regression examples when fixed.
+- **Determinism requirement**: suites must run derandomized/seeded in CI, with
+  counterexamples pinned as regression examples when fixed. Current profile definitions
+  do not explicitly seed or derandomize, and hosted root CI selects `dev` unless overridden.
+  See the PBT guide for implemented profile behavior; suite/profile presence alone is not
+  proof of this requirement, and this documentation correction does not waive it.
 - **Layout** (established by PBT-02): property tests live under
-  `tests/property/` with a dedicated pytest marker (`property`), so they run
+  `tests/properties/` with a dedicated pytest marker (`property`), so they run
   in the default gate and can also be selected in isolation.
-- **Verification commands** listed per suite are for the future suite PRs.
-  PBT-01 adds no tooling and no tests; the commands are not expected to work
-  until PBT-02 and the corresponding PBT-03 through PBT-09 suite PR land.
+- **Verification commands** below use the current suite paths. They are focused
+  selections, not a replacement for the complete relevant gates in the
+  [testing guide](../development/testing.md).
 
 ---
 
@@ -109,10 +115,10 @@ complete when it satisfies its section here.
   dual-supported, agreement property included; no live-cluster or network
   use; suite passes derandomized; existing validation tests remain green.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_validation_properties.py -q
-pytest -m property tests/property/ -q
+pytest tests/properties/test_validation_properties.py -q
+pytest -m property tests/properties/ -q
 ```
 
 ---
@@ -199,9 +205,9 @@ pytest -m property tests/property/ -q
   restricted to `tmp_path`; both form factors run on the same candidates;
   suite passes derandomized.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_path_safety_properties.py -q
+pytest tests/properties/test_path_safety_properties.py -q
 pytest tests/test_path_safety.py -q   # existing example suite stays green
 ```
 
@@ -297,9 +303,9 @@ pytest tests/test_path_safety.py -q   # existing example suite stays green
   phase inputs sourced from the real `Phase` enum; suite passes
   derandomized and remains root-test import-safe without `ansible-core`.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_checkpoint_properties.py -q
+pytest tests/properties/test_checkpoint_properties.py -q
 python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # collection suite stays green
 ```
 
@@ -396,9 +402,9 @@ python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q  # col
   derandomized, remains root-test import-safe, and
   `tests/test_report_artifacts.py` stays green.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_report_artifact_properties.py -q
+pytest tests/properties/test_report_artifact_properties.py -q
 pytest tests/test_report_artifacts.py -q
 ```
 
@@ -475,9 +481,9 @@ pytest tests/test_report_artifacts.py -q
   root test collection remains import-safe without `ansible-core`; suite
   passes derandomized and `tests/test_backup_schedule.py` stays green.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_backup_schedule_properties.py -q
+pytest tests/properties/test_backup_schedule_properties.py -q
 pytest tests/test_backup_schedule.py -q
 ```
 
@@ -557,9 +563,9 @@ pytest tests/test_backup_schedule.py -q
   blocker rules, marker reliability); suite passes derandomized and existing
   Argo CD tests stay green.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_argocd_safety_properties.py -q
+pytest tests/properties/test_argocd_properties.py -q
 pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
 ```
 
@@ -647,9 +653,9 @@ pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q
   without `ansible-core`; suite passes derandomized and existing RBAC tests
   stay green.
 
-**Verification commands** (future PR)
+**Verification commands** (focused selection)
 ```bash
-pytest tests/property/test_rbac_set_properties.py -q
+pytest tests/properties/test_rbac_properties.py -q
 pytest tests/test_rbac_validator.py tests/test_rbac_collection_parity.py -q
 ```
 
@@ -661,8 +667,8 @@ PBT-02 provides what every suite above assumes, and nothing more:
 
 - The PBT dependency (Hypothesis) added to the appropriate dev/test
   requirements, constrained per the project's dependency policy.
-- `tests/property/` package with a shared generator module
-  (`tests/property/strategies.py`) hosting cross-suite generators
+- `tests/properties/` package with a shared generator module
+  (`tests/properties/strategies.py`) hosting cross-suite generators
   (Kubernetes names, paths, phases, Application dicts, permission tuples).
 - An import-safe collection-module loader/helper, only where needed, modeled
   on `tests/test_rbac_collection_parity.py`, so root property-test collection

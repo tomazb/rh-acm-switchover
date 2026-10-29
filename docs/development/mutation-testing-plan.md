@@ -1,16 +1,45 @@
-# Mutation Testing Design Handoff
+# Mutation Testing: On-Demand Usage and Design History
 
-> Status: deferred design handoff. This is not an implementation plan and it is
-> not approval to add mutation testing to the normal developer or CI path.
+Status: local on-demand tooling is configured. `requirements-dev.txt` includes `mutmut`,
+and the `[mutmut]` section in `setup.cfg` selects the current source and tests. Neither
+`./run_tests.sh` nor required CI runs mutation testing. This page also retains the original
+design handoff and revision-bound baseline records; those are not fresh current-head results.
 
-This document captures why mutation testing is worth considering for
-`rh-acm-switchover`, what an approved design/spec should decide, and how a later
-implementation should keep mutation testing scoped, parity-aware, and useful.
-Implementation remains deferred until the current Thermos PR sequence is complete
-or explicitly paused.
+## Current on-demand usage
 
-When the start conditions at the end of this document are met, use this handoff
-with a fresh Superpowers workflow:
+Use an isolated, clean worktree with the repository's test dependencies installed. Read
+the existing [mutation-testing skill](../../.claude/skills/mutation-testing/SKILL.md) before
+choosing or running a target. The current checked-in configuration selects
+`lib/validation.py` with `tests/test_validation.py` and `tests/test_validation_parity.py`.
+Verify the unmutated selection first:
+
+```bash
+python -m pytest tests/test_validation.py tests/test_validation_parity.py -q
+```
+
+Only after that passes, run the configured mutation target and inspect the results:
+
+```bash
+mutmut run
+mutmut results
+```
+
+Read `setup.cfg` again before each run: changing the source without its test selection,
+copied dependencies, and reviewed exclusions changes what the evidence proves. Inspect a
+reported mutant with `mutmut show` and its exact identifier. Triage surviving mutants using
+the policy below; a survivor is not automatically a production defect. Do not add these
+commands to the default runner or required CI as part of this documentation correction.
+
+Historical baseline commands, paths (including since-removed tests), counts, and triage
+decisions below apply to their recorded revisions. Preserve that provenance; do not treat
+them as current runnable selections or current coverage claims.
+
+## Original design handoff
+
+The candidate tooling, wrapper, and optional CI proposals below record the original design
+discussion. They do not imply those integrations are installed or authorize new work. A
+future expansion beyond the existing manual configuration requires its own scoped design
+and implementation. When pursuing that expansion, use the handoff with a fresh workflow:
 
 1. Use `superpowers:brainstorming` to write and approve a design/spec.
 2. Use `superpowers:writing-plans` to turn the approved design into an implementation plan.

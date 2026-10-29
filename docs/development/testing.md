@@ -208,27 +208,27 @@ and are deliberately not restated here.
 For what a result proves about a claim, see
 [Verification evidence validity](../../AGENTS.md#verification-evidence-validity) in `AGENTS.md`.
 
+### Root dependency and import gap
+
+`AGENTS.md` requires root jobs to run without installing `ansible-core` and root tests to
+remain import-safe without it. The current root jobs install `requirements-dev.txt`, which
+includes Ansible, and `tests/test_managed_cluster_expectation_parity.py` imports its engine at
+module scope. [Issue #371](https://github.com/tomazb/rh-acm-switchover/issues/371) owns the
+dependency/test-ownership correction. Success with the declared development dependencies
+does not establish full-root no-Ansible import safety. This is an unsatisfied requirement,
+not an intentional parity change or permission to drop engine-dependent assertions.
+
 ## Test Structure
 
-```
-tests/
-├── __init__.py
-├── test_utils.py             # Tests for lib/utils.py
-├── test_kube_client.py       # Tests for lib/kube_client.py
-├── test_preflight.py         # Tests for the modules/preflight/ package
-├── test_backup_schedule.py   # Tests for modules/backup_schedule.py
-├── test_primary_prep.py      # Tests for modules/primary_prep.py
-├── test_decommission.py      # Tests for modules/decommission.py
-├── test_post_activation.py   # Tests for modules/post_activation.py
-├── test_finalization.py      # Tests for modules/finalization.py
-├── test_activation.py        # Tests for modules/activation.py
-├── test_validation.py        # Tests for lib/validation.py
-├── test_rbac_validator.py    # Tests for lib/rbac_validator.py
-├── test_waiter.py            # Tests for lib/waiter.py
-├── test_main.py              # Tests for acm_switchover.py (args)
-├── test_scripts.py           # Unit tests for bash scripts
-└── test_scripts_integration.py # Integration tests for bash scripts
-```
+| Location | Maintained test surface |
+| --- | --- |
+| `tests/test_*.py` | CLI, workflow/state, Kubernetes helpers, shell/tool regressions, parity, documentation, and CI guardrails |
+| `tests/properties/` | Seven Hypothesis suites plus shared strategies and profile configuration; included in the root selection |
+| `tests/release/` | Release-framework and lab-controller helpers; profile-driven certification uses the separate live entrypoint |
+| `tests/e2e/` | On-demand `e2e`-marked tests and unmarked helpers selected by the root lane |
+| `ansible_collections/tomazb/acm_switchover/tests/unit/` | Plugin/module logic and static or in-process role contracts |
+| `ansible_collections/tomazb/acm_switchover/tests/integration/` | Real Ansible execution with local fixtures and fake APIs |
+| `ansible_collections/tomazb/acm_switchover/tests/scenario/` | Local multi-phase report, checkpoint/resume, and composition scenarios |
 
 ## Running Tests
 
@@ -315,6 +315,21 @@ View HTML coverage report:
 open htmlcov/index.html  # macOS
 xdg-open htmlcov/index.html  # Linux
 ```
+
+### Property-Based Tests
+
+The default root selection includes `tests/properties/`. It can also run separately:
+
+```bash
+python -m pytest tests/properties/ -q
+```
+
+The [PBT guide](../testing/property-based-testing.md#running-the-existing-suites) lists the
+suite files and profile commands. `tests/properties/conftest.py` selects `dev` unless
+`HYPOTHESIS_PROFILE` overrides it. The workflows and `run_tests.sh` do not set that variable,
+so ordinary hosted root CI currently selects the development example budget, not the named
+`ci` profile. Profile enforcement is pending work under R3-09b in the
+[Thermos tracker](../../thermos-resolution-plan.md).
 
 ### E2E Tests (On Demand)
 
@@ -433,9 +448,20 @@ Observed on 2026-01-28:
 - **Critical paths**: 100% coverage for data protection logic
 - **Current status**: See coverage report for details
 
-Mutation testing is documented as a deferred concept, not an active local or CI
-gate. See [Mutation Testing Notes](mutation-testing-plan.md) for the future
-Superpowers design/spec handoff.
+These are goals, not measured results or enforced coverage thresholds. The root CI and
+default runner collect line coverage without `--cov-branch` or `--cov-fail-under`; the
+repository declares no coverage failure threshold in `setup.cfg`. Collection foundation
+lanes do not collect a separate coverage report, and root coverage of imported Collection
+helpers does not measure all Ansible task execution. R3-09b in the
+[Thermos tracker](../../thermos-resolution-plan.md) owns the reviewed profile/coverage policy.
+
+### Mutation Testing (On Demand)
+
+`requirements-dev.txt` includes `mutmut`, and `setup.cfg` configures the current on-demand
+target and test selection. Mutation runs remain manual: neither `./run_tests.sh` nor the
+required CI workflows execute them. See [Mutation Testing Notes](mutation-testing-plan.md)
+for current usage, the original design handoff, and revision-bound historical baselines.
+Recorded survivor counts are not fresh evidence for the current branch.
 
 ## Code Quality Tools
 
@@ -800,10 +826,17 @@ open htmlcov/index.html
 
 ### Planned Improvements
 
-- [ ] Release artifact resume/rerun support with compatibility validation
-- [ ] Broader performance benchmarks for release and E2E paths
-- [ ] Additional failure-injection and chaos-style scenarios
-- [ ] Mutation testing
+- Test-selection, missing-file skips, and stale inventories: [#268](https://github.com/tomazb/rh-acm-switchover/issues/268).
+- Root no-Ansible dependency/import correction: [#371](https://github.com/tomazb/rh-acm-switchover/issues/371).
+- Hypothesis CI profile enforcement and coverage policy: R3-09b in the [Thermos tracker](../../thermos-resolution-plan.md).
+- Stateful, crash-consistency, differential parity, race, and later controller-owned live resilience/soak testing: the [TST program #225](https://github.com/tomazb/rh-acm-switchover/issues/225) and [foundation](../testing/tst-00-advanced-safety-testing-foundation.md).
+- Release certification sequencing and remaining framework work: [#121](https://github.com/tomazb/rh-acm-switchover/issues/121) and the [release framework authority](release-validation-framework.md).
+
+These are links to pending work, not active gates or authorization to implement the tracked
+slices. Issue trackers own current disposition. Installed-archive and execution-environment
+smoke testing are also not part of the current foundation workflow: it tests the checkout
+and builds an archive. The [compatibility authority](../../ansible_collections/tomazb/acm_switchover/docs/compatibility.md)
+states the execution environment's evidence tier.
 
 ### Test Environment Setup
 
@@ -818,8 +851,8 @@ For full integration testing:
 
 When contributing code:
 1. Write tests for new features
-2. Maintain 80%+ coverage
-3. Run full test suite before PR
+2. Exercise negative safety behavior and inspect coverage against the goals above
+3. Run the complete relevant gate set required by the [AGENTS.md verification matrix](../../AGENTS.md#verification-matrix-by-changed-surface)
 4. Update this guide if needed
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
@@ -833,4 +866,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
 
 ---
 
-**Last Updated**: 2026-09-24
+**Last Updated**: 2026-10-29
