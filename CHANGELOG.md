@@ -114,8 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including `not_started` with fresh prerequisite checks. Valid terminal cleanup with no
   Backup history can attempt ordinary new enablement and strict post-boundary proof,
   preserving existing pre-enable observability ordering. It does not establish historical
-  enablement or permit historical restore-only no-schedule success. No checkpoint schema,
-  reset or history rewrite is introduced. Refs #342; the separate #352 provenance hold remains.
+  enablement or permit historical restore-only no-schedule success. A Python retry that
+  re-enters enablement after its boundary was saved keeps that proved boundary instead of
+  replacing it. No checkpoint schema, reset or history rewrite is introduced. Refs #342; the separate #352 provenance hold remains.
 - Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
   Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
   the existing 600-second minimum, completion grace, fixed cadences, and fallback.

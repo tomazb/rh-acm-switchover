@@ -729,7 +729,8 @@ preserves its existing latest-fresh selection and checks the selected object's h
 A historical finalization or failed-finalization retry cannot be treated as fresh
 merely because every proof field is absent. A Collection checkpoint already in
 finalization with a missing boundary is held even if a runtime variable supplies one,
-except for the proven pre-enable cleanup retry described below.
+except for the proven pre-enable cleanup retry and the approved terminal-journal
+attempt described below.
 
 An executing Collection finalization entry re-reads the retained physical hub identities
 before checkpoint entry or recovery mutations, including a direct role invocation.
@@ -758,6 +759,10 @@ This does not establish what happened before the retry. Existing pre-enable oper
 including any owed old-hub observability cleanup, retain their reviewed order and
 migration/journal/locator gates. The retry must record a new watch boundary and prove
 a qualifying Backup created at or after it before later old-hub handling or success.
+A saved boundary is present history. If Python stops after saving it but before the
+enable step marker, the next retry proves a Backup against that boundary, re-runs
+idempotent enablement and keeps the saved boundary; the Collection likewise keeps a
+loaded boundary. Only a retry without a saved boundary records a new one.
 It cannot use the restore-only no-schedule exception. Any present Backup history,
 malformed journal or completed lifecycle retains the existing assessment/refusal;
 COMPLETED always remains read-only.

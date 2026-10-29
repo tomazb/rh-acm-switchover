@@ -118,4 +118,8 @@ The approved bounded active terminal-journal procedure adds generated failure/re
 enable-before-boundary interruption coverage in Python
 `tests/test_backup_continuity_terminal_retry.py` and Collection
 `tests/integration/test_backup_terminal_retry_runtime.py`. Their new Backup events use
-distinct names/UIDs and preserve the frozen objects. These remain non-live evidence.
+distinct names/UIDs and preserve the frozen objects. Python
+`tests/test_backup_continuity_lifecycle.py` also interrupts ordinary and terminal-journal
+entries after enablement, after each boundary save and after the enable marker; retries
+keep a saved boundary and create one only when none was saved. These remain non-live
+evidence.

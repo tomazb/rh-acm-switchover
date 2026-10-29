@@ -25,7 +25,11 @@ from lib.cli_outcomes import run_operation_mode, run_operation_outcome
 from lib.kube_client import KubeClient
 from lib.run_record import RunRecord
 from lib.utils import Phase, StateManager
-from tests.test_finalization_backup_strict import BackupTransport, Clock, page
+from lib.workflow import pre_enable_cleanup_retry
+from modules.backup_schedule import BackupScheduleManager
+from tests.test_finalization_backup_strict import BackupTransport, Clock
+from tests.test_finalization_backup_strict import backup as velero_backup
+from tests.test_finalization_backup_strict import page
 
 HISTORY = Path(__file__).parent / "fixtures/backup_continuity_history"
 MANIFEST = json.loads((HISTORY / "manifest.json").read_text())
@@ -870,3 +874,112 @@ def test_disk_interrupt_after_each_backup_save_requires_fresh_retry_proof(
         assert after["config"][key] == disk["config"][key]
     assert after["hub_identities"] == disk["hub_identities"]
     assert all(marker in after["completed_steps"] for marker in disk["completed_steps"])
+
+
+class LostAfterSave(BaseException):
+    """Process loss after an actual enable-step write, before the next write can run."""
+
+
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize("route", ["ordinary", "terminal-journal"])
+@pytest.mark.parametrize("window", ["after-enable", "boundary", "detected-marker", "enable-marker"])
+def test_enable_step_reentry_keeps_saved_boundary_and_creates_only_a_missing_one(
+    attempt, restore, route, window, monkeypatch
+):
+    args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label="none", good=True)
+    saved = json.loads(raw)
+    for key in ("backup_schedule_enabled_at", "post_switchover_backup_name", "new_backup_detected"):
+        saved["config"].pop(key, None)
+    saved["completed_steps"] = []
+    assert saved["config"]["migration_backups"]["cleanup"]["state"] == "completed"
+    if route == "ordinary":
+        saved["current_phase"] = Phase.POST_ACTIVATION.value
+
+        def completed_predecessor(args, state, primary, secondary, logger):
+            from lib.migration_post_activation import require_post_activation_completed
+
+            require_post_activation_completed(RunRecord(state).migration_backups())
+            return True
+
+        monkeypatch.setattr(cli, "_run_phase_post_activation", completed_predecessor)
+    else:
+        # The approved history-free terminal-journal attempt (Option B).
+        saved["current_phase"] = Phase.FINALIZATION.value
+    path.write_text(json.dumps(saved))
+    assert pre_enable_cleanup_retry(StateManager(str(path))) is (route == "terminal-journal")
+    st.schedules = [
+        {
+            "metadata": {"name": "fixture-schedule", "namespace": "open-cluster-management-backup"},
+            "spec": {"paused": False, "veleroSchedule": "*/5 * * * *"},
+        }
+    ]
+    clock = [proof_module.datetime.now(timezone.utc)]
+
+    class Observed(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz) if tz is not None else clock[0].replace(tzinfo=None)
+
+    for module in (state_module, proof_module, finalization_module):
+        monkeypatch.setattr(module, "datetime", Observed)
+    monkeypatch.setattr(cli, "parse_args", lambda: copy.copy(args))
+
+    armed, enables = [True], []
+    ensure, original_save = BackupScheduleManager.ensure_enabled, StateManager.save_state
+
+    def ensure_then_lose(manager, version):
+        result = ensure(manager, version)
+        enables.append(clock[0])
+        if armed[0] and window == "after-enable":
+            armed[0] = False
+            raise LostAfterSave()
+        return result
+
+    def save_then_lose(state, *a, **k):
+        result = original_save(state, *a, **k)
+        persisted = json.loads(path.read_bytes())
+        markers = {step["name"] for step in persisted["completed_steps"]}
+        reached = {
+            "boundary": "backup_schedule_enabled_at" in persisted["config"],
+            "detected-marker": "new_backup_detected" in persisted["config"],
+            "enable-marker": "enable_backup_schedule" in markers,
+        }.get(window, False)
+        if armed[0] and reached:
+            armed[0] = False
+            raise LostAfterSave()
+        return result
+
+    monkeypatch.setattr(BackupScheduleManager, "ensure_enabled", ensure_then_lose)
+    monkeypatch.setattr(StateManager, "save_state", save_then_lose)
+    with pytest.raises(LostAfterSave):
+        cli.main()
+    monkeypatch.setattr(StateManager, "save_state", original_save)
+    before = json.loads(path.read_bytes())
+    assert not armed[0] and len(enables) == 1
+    assert before["current_phase"] == "finalization"
+    assert "post_switchover_backup_name" not in before["config"]
+    assert ("backup_schedule_enabled_at" in before["config"]) is (window != "after-enable")
+    assert ("enable_backup_schedule" in {s["name"] for s in before["completed_steps"]}) is (window == "enable-marker")
+    # Only an interruption before any boundary save may take the new-attempt route again.
+    assert pre_enable_cleanup_retry(StateManager(str(path))) is (window == "after-enable")
+
+    first_attempt = clock[0]
+    clock[0] += timedelta(seconds=2)
+    # A distinct controller event between attempts: after the saved boundary, before the
+    # retry; a boundary created by the retry itself needs a Backup at or after it.
+    created = clock[0] if window == "after-enable" else first_attempt + timedelta(seconds=1)
+    new = velero_backup("acm-managed-clusters-between-attempts", created.isoformat())
+    st.effects, st.objects = [page([new])], [new]
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    after = json.loads(path.read_bytes())
+
+    expected_boundary = clock[0] if window == "after-enable" else first_attempt
+    assert after["config"]["backup_schedule_enabled_at"] == expected_boundary.isoformat()
+    assert stopped.value.code == 0 and after["current_phase"] == "completed"
+    assert after["config"]["post_switchover_backup_name"] == new["metadata"]["name"]
+    # Idempotent enablement re-runs whenever the enable step marker was not saved.
+    assert enables == ([first_attempt] if window == "enable-marker" else [first_attempt, clock[0]])
+    assert after["config"]["migration_backups"] == before["config"]["migration_backups"]
+    assert after["hub_identities"] == before["hub_identities"]
+    assert all(marker in after["completed_steps"] for marker in before["completed_steps"])

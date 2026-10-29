@@ -246,7 +246,11 @@ class Finalization:
 
         # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
-        self.run_record.record_backup_watch_started(datetime.now(timezone.utc).isoformat())
+        # A retry interrupted after the boundary save re-enters before the step marker. The
+        # workflow's historical entry guard has already proved that saved boundary, so keep
+        # it and its proof facts; only an absent boundary starts a new watch.
+        if not self.run_record.backup_continuity_inputs().get("enabled_at_present"):
+            self.run_record.record_backup_watch_started(datetime.now(timezone.utc).isoformat())
 
     # -- R4-04 durable Restore-cleanup transaction (July design section 4a) --
 
