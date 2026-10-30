@@ -290,6 +290,31 @@ def test_current_pending_completion_and_disappearance(strict_transport):
         prove(missing)
 
 
+def prove_sequence(api):
+    # One LIST plus one named GET per phase needs more than prove()'s fake-clock bound.
+    return owner.verify_backup_continuity(
+        api, enabled_at=datetime.fromisoformat("2024-01-01T00:00:00+00:00"), timeout=1.0, poll_interval=0.01
+    )
+
+
+def test_plugin_operations_wait_reaches_clean_completion_with_same_uid(strict_transport):
+    phases = ["New", "InProgress", "WaitingForPluginOperations", "Finalizing", "Completed"]
+    observed = [current_backup(status={"phase": phase}) for phase in phases]
+    api = strict_transport([complete_page([observed[0]]), *observed])
+    proof = prove_sequence(api)
+    assert proof["uid"] == "uid-current" and proof["phase"] == "Completed"
+    assert [p["name"] for p in api.get_params[1:]] == ["acm-managed-clusters-current"] * 5
+
+
+@pytest.mark.parametrize("failed", ["WaitingForPluginOperationsPartiallyFailed", "FinalizingPartiallyFailed"])
+def test_partially_failed_intermediate_phase_refuses_without_waiting(strict_transport, failed):
+    observed = [current_backup(status={"phase": phase}) for phase in ["New", "InProgress", failed]]
+    api = strict_transport([complete_page([observed[0]]), *observed])
+    with pytest.raises(owner.BackupContinuityError, match="backup_not_completed"):
+        prove_sequence(api)
+    assert api.get_calls == 4
+
+
 def test_retry_exhaustion_cannot_promote_prior_selection(strict_transport):
     api = strict_transport([complete_page([])] + [TimeoutError("unreadable")] * 12)
     with pytest.raises(owner.BackupContinuityError, match="verification timeout"):

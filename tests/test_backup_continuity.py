@@ -172,6 +172,34 @@ def test_pending_backup_must_reach_clean_completion_with_same_uid(make_finalizat
     assert sum(r[0] == "GET" for r in transport.requests) == 2
 
 
+def _phase_sequence(backup, phases):
+    observed = []
+    for phase in phases:
+        item = copy.deepcopy(backup)
+        item["status"]["phase"] = phase
+        observed.append(item)
+    return observed
+
+
+def test_plugin_operations_wait_reaches_clean_completion_with_same_uid(make_finalization):
+    new = make_finalization.new
+    observed = _phase_sequence(new, ["New", "InProgress", "WaitingForPluginOperations", "Finalizing", "Completed"])
+    fin, transport = make_finalization([page([observed[0]])], observed)
+    fin._verify_new_backups(timeout=20)
+    assert fin.run_record.new_backup() == new["metadata"]["name"]
+    assert [r[1] for r in transport.requests if r[0] == "GET"] == [new["metadata"]["name"]] * 5
+
+
+@pytest.mark.parametrize("failed", ["WaitingForPluginOperationsPartiallyFailed", "FinalizingPartiallyFailed"])
+def test_partially_failed_intermediate_phase_refuses_without_waiting(make_finalization, failed):
+    observed = _phase_sequence(make_finalization.new, ["New", "InProgress", failed, "PartiallyFailed"])
+    fin, transport = make_finalization([page([observed[0]])], observed)
+    with pytest.raises(Exception, match="backup_not_completed"):
+        fin._verify_new_backups(timeout=20)
+    assert fin.run_record.new_backup() is None
+    assert sum(r[0] == "GET" for r in transport.requests) == 3
+
+
 def test_terminal_disappearance_never_falls_back_to_cached_pending_object(make_finalization):
     from kubernetes.client.rest import ApiException
 

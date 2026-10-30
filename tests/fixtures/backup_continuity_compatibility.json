@@ -784,5 +784,86 @@
     "observed_at": "2026-10-17T10:03:00Z",
     "reason": null,
     "collection_reason": null
+  },
+  {
+    "id": "plugin-operations-pending",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "WaitingForPluginOperations",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": null,
+    "collection_reason": null
+  },
+  {
+    "id": "plugin-operations-partially-failed",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "WaitingForPluginOperationsPartiallyFailed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "backup_not_completed",
+    "collection_reason": "backup_not_completed"
+  },
+  {
+    "id": "finalizing-partially-failed",
+    "inputs": {
+      "enabled_at_present": true,
+      "enabled_at": "2026-10-17T10:00:00Z",
+      "legacy_enable_steps": []
+    },
+    "backup": {
+      "metadata": {
+        "name": "acm-managed-clusters-proof",
+        "uid": "proof-uid",
+        "creationTimestamp": "2026-10-17T10:01:00Z",
+        "labels": {
+          "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+        }
+      },
+      "status": {
+        "phase": "FinalizingPartiallyFailed",
+        "errors": 0,
+        "startTimestamp": "2026-10-17T10:01:00Z",
+        "completionTimestamp": "2026-10-17T10:02:00Z"
+      }
+    },
+    "observed_at": "2026-10-17T10:03:00Z",
+    "reason": "backup_not_completed",
+    "collection_reason": "backup_not_completed"
   }
 ]

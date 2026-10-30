@@ -204,9 +204,11 @@ The existing journal-rescue integration suite covers actual Argo CD Application 
 `tests/integration/test_backup_terminal_retry_runtime.py` cover production-generated
 completed/repaired cleanup, transient pre-boundary inventory failure, process loss after
 real enablement before boundary persistence, and a new distinct Backup after the retry's
-new boundary. No-schedule remains refused; generic missing history without a canonical
-journal and every present-history assessment retain their controls. The Collection
-interruption wrapper records durable state immediately after the actual enable write.
+new boundary. Historical and retry no-schedule paths remain refused, while fresh
+restore-only execution with no BackupSchedule keeps its existing exception; generic
+missing history without a canonical journal and every present-history assessment retain
+their controls. The Collection interruption wrapper records durable state immediately
+after the actual enable write.
 
 Shared creation/health decisions are covered by
 `tests/fixtures/backup_continuity_compatibility.json` in both independent proof owners.

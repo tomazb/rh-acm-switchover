@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enablement or permit historical restore-only no-schedule success. A Python retry that
   re-enters enablement after its boundary was saved keeps that proved boundary instead of
   replacing it. No checkpoint schema, reset or history rewrite is introduced. Refs #342; the separate #352 provenance hold remains.
+- Backup continuity proof in both form factors again waits while a selected Backup is in Velero's
+  `WaitingForPluginOperations` phase, as the pre-#342 polls did, instead of refusing it as not completed.
+  `WaitingForPluginOperationsPartiallyFailed` and `FinalizingPartiallyFailed` still refuse, and
+  `Completed` remains the only accepted terminal phase. Refs #342.
 - Reconcile testing documentation with the implemented PBT suites, manual mutation tooling,
   default test selections, and concrete scenario evidence. Distinguish coverage goals from
   enforced gates and retain the tracked root-import, profile, and live-certification gaps.

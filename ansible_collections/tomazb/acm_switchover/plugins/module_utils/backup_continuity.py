@@ -92,7 +92,8 @@ def validate_backup(backup, *, enabled_at, observed_at, expected_name=None, expe
     if not isinstance(status, dict):
         raise BackupContinuityError("invalid_backup_status")
     phase = status.get("phase")
-    if phase not in ("New", "InProgress", "Finalizing", "Completed"):
+    # Velero's success-path phases; *PartiallyFailed intermediates never reach Completed.
+    if phase not in ("New", "InProgress", "WaitingForPluginOperations", "Finalizing", "Completed"):
         raise BackupContinuityError("backup_not_completed")
     errors = status.get("errors")
     if errors is not None:

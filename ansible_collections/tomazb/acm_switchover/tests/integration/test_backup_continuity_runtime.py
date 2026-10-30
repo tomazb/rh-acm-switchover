@@ -488,6 +488,84 @@ def test_real_module_transport_and_creation_health_contract(tmp_path, case):
         assert any(r["path"] == BACKUPS for r in hub.requests), hub.requests
 
 
+class BackupPhaseSequenceHub(FakeMigrationHub):
+    """Serve successive named observations of one selected Backup over real HTTP."""
+
+    def __init__(self, backup, phases):
+        super().__init__(backups=[backup])
+        self.observations = []
+        for phase in phases:
+            item = copy.deepcopy(backup)
+            item["status"]["phase"] = phase
+            self.observations.append(item)
+        self.named = f"{BACKUPS}/{backup['metadata']['name']}"
+
+    def _list_payload(self, path):
+        if path == self.named:
+            observed = self.observations.pop(0) if len(self.observations) > 1 else self.observations[0]
+            return copy.deepcopy(observed)
+        return super()._list_payload(path)
+
+
+@pytest.mark.parametrize(
+    "phases,proved",
+    [
+        (["New", "InProgress", "WaitingForPluginOperations", "Finalizing", "Completed"], True),
+        (["New", "InProgress", "WaitingForPluginOperationsPartiallyFailed", "PartiallyFailed"], False),
+    ],
+    ids=["plugin-operations-pending", "plugin-operations-partially-failed"],
+)
+def test_real_module_waits_through_plugin_operations_only(tmp_path, phases, proved):
+    now = datetime.now(timezone.utc)
+    backup = {
+        "apiVersion": "velero.io/v1",
+        "kind": "Backup",
+        "metadata": {
+            "name": "acm-managed-clusters-proof",
+            "uid": "uid-proof",
+            "resourceVersion": "12",
+            "creationTimestamp": (now - timedelta(minutes=1)).isoformat(),
+        },
+        "status": {"phase": "New", "errors": 0},
+    }
+    hub = BackupPhaseSequenceHub(backup, phases)
+    kubeconfig = tmp_path / "module.kubeconfig"
+    write_kubeconfig(kubeconfig, context="destination", server=hub.url, token="fixture-token")
+    task = {
+        "inputs": {"enabled_at_present": True, "enabled_at": (now - timedelta(minutes=2)).isoformat()},
+        "kubeconfig": str(kubeconfig),
+        "context": "destination",
+        "timeout": 5,
+        "poll_interval": 0.01,
+    }
+    play = {
+        "hosts": "localhost",
+        "connection": "local",
+        "gather_facts": False,
+        "tasks": [{"tomazb.acm_switchover.acm_backup_continuity": task}],
+    }
+    playbook = tmp_path / "module.yml"
+    playbook.write_text(yaml.safe_dump([play]))
+    try:
+        result = subprocess.run(
+            ["ansible-playbook", str(playbook), "-i", "localhost,"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            env=_ansible_env(ROOT, tmp_path),
+            timeout=40,
+        )
+    finally:
+        hub.close()
+    output = result.stdout + result.stderr
+    assert (result.returncode == 0) == proved, output
+    if not proved:
+        assert "Backup continuity refused: backup_not_completed" in output, output
+    named = [r for r in hub.requests if r["method"] == "GET" and r["path"] == hub.named]
+    assert len(named) == (5 if proved else 3), hub.requests
+    assert not hub.writes
+
+
 @pytest.mark.parametrize("restore", [False, True])
 @pytest.mark.parametrize("seeded", [False, True])
 def test_active_history_proof_precedes_cleanup_and_preserves_original_facts(run_backup_entry, restore, seeded):
