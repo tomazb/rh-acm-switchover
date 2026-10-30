@@ -1,6 +1,11 @@
 ---
+- name: Clear active Backup verification decision for this invocation
+  ansible.builtin.set_fact:
+    acm_switchover_backup_verification_skipped: false
+
 - name: Skip backup continuity verification in dry-run mode
   ansible.builtin.set_fact:
+    acm_switchover_backup_verification_skipped: true
     acm_switchover_verify_backups_result:
       changed: false
       status: skipped
@@ -9,6 +14,7 @@
 
 - name: Skip backup continuity verification when restore_only has no BackupSchedule
   ansible.builtin.set_fact:
+    acm_switchover_backup_verification_skipped: true
     acm_switchover_verify_backups_result:
       changed: false
       status: skipped
@@ -19,6 +25,7 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_operation.restore_only | default(false)
+    - not ((acm_switchover_backup_lifecycle_inputs | default({})).pre_enable_cleanup_retry | default(false) | bool)
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
     - acm_enable_backup_schedule_operation.operation.action == 'none'
 
@@ -47,123 +54,20 @@
       {%- endif -%}
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
+    - not (acm_switchover_backup_verification_skipped | bool)
 
-- name: Wait for a fresh ACM-owned backup on the secondary hub
-  kubernetes.core.k8s_info:
-    api_version: velero.io/v1
-    kind: Backup
-    namespace: open-cluster-management-backup
+- name: Prove fresh ACM-owned Backup creation and clean completion
+  tomazb.acm_switchover.acm_backup_continuity:
+    inputs:
+      enabled_at_present: true
+      enabled_at: "{{ acm_switchover_backup_schedule_enabled_at }}"
+    timeout: "{{ _acm_secondary_backup_verify_timeout_seconds | int }}"
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_secondary_velero_backups_info
-  retries: "{{ [1, ((_acm_secondary_backup_verify_timeout_seconds | int + 29) // 30)] | max }}"
-  delay: 30
-  until: >-
-    {%- set fresh_backups = [] -%}
-    {%- for backup in (_acm_secondary_velero_backups_info.resources | default([])) -%}
-    {%- set metadata = backup.get('metadata', {}) -%}
-    {%- set labels = metadata.get('labels', {}) or {} -%}
-    {%- set backup_name = metadata.get('name', '') -%}
-    {%- set backup_type = labels.get('cluster.open-cluster-management.io/backup-schedule-type', '') -%}
-    {%- set created_at = metadata.get('creationTimestamp', '') -%}
-    {%- if
-      created_at >= acm_switchover_backup_schedule_enabled_at
-      and (
-        backup_type in ['managedClusters', 'credentials', 'resources']
-        or (backup_name | regex_search('^acm-(managed-clusters|credentials|resources)-'))
-      )
-    -%}
-    {%- set _ = fresh_backups.append(backup) -%}
-    {%- endif -%}
-    {%- endfor -%}
-    {{ fresh_backups | length > 0 }}
+  register: acm_switchover_active_backup_proof
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
-
-- name: Collect fresh ACM-owned backups
-  ansible.builtin.set_fact:
-    _acm_secondary_fresh_backups: >-
-      {%- set fresh_backups = [] -%}
-      {%- for backup in (_acm_secondary_velero_backups_info.resources | default([])) -%}
-      {%- set metadata = backup.get('metadata', {}) -%}
-      {%- set labels = metadata.get('labels', {}) or {} -%}
-      {%- set backup_name = metadata.get('name', '') -%}
-      {%- set backup_type = labels.get('cluster.open-cluster-management.io/backup-schedule-type', '') -%}
-      {%- set created_at = metadata.get('creationTimestamp', '') -%}
-      {%- if
-        created_at >= acm_switchover_backup_schedule_enabled_at
-        and (
-          backup_type in ['managedClusters', 'credentials', 'resources']
-          or (backup_name | regex_search('^acm-(managed-clusters|credentials|resources)-'))
-        )
-      -%}
-      {%- set _ = fresh_backups.append(backup) -%}
-      {%- endif -%}
-      {%- endfor -%}
-      {{ fresh_backups }}
-  when:
-    - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
-
-- name: Select fresh ACM-owned backup to validate
-  ansible.builtin.set_fact:
-    _acm_secondary_verified_backup_name: >-
-      {{
-        (
-          _acm_secondary_fresh_backups
-          | sort(attribute='metadata.creationTimestamp')
-          | last
-          | default({})
-        )
-        .get('metadata', {})
-        .get('name', '')
-      }}
-  when:
-    - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
-
-- name: Wait for fresh ACM-owned backup to reach a terminal phase
-  kubernetes.core.k8s_info:
-    api_version: velero.io/v1
-    kind: Backup
-    name: "{{ _acm_secondary_verified_backup_name }}"
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: _acm_secondary_verified_backup_info
-  retries: "{{ [1, ((_acm_secondary_backup_verify_timeout_seconds | int + 29) // 30)] | max }}"
-  delay: 30
-  until: >-
-    {{
-      (_acm_secondary_verified_backup_info.resources | default([]) | length) > 0
-      and (
-        ((_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
-        in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']
-      )
-    }}
-  when:
-    - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
-
-- name: Fail when fresh ACM-owned backup is unhealthy
-  ansible.builtin.assert:
-    that:
-      - >-
-        ((_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
-        == 'Completed'
-      - >-
-        (((_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('errors', 0)) | int)
-        == 0
-    fail_msg: >-
-      Backup {{ _acm_secondary_verified_backup_name }} reached phase
-      {{ (_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}
-      with errors
-      {{ ((_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('errors', 0)) | int }}.
-  when:
-    - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
+    - not (acm_switchover_backup_verification_skipped | bool)
 
 - name: Publish backup verification result
   ansible.builtin.set_fact:
@@ -171,9 +75,9 @@
       changed: false
       status: pass
       enabled_at: "{{ acm_switchover_backup_schedule_enabled_at }}"
-      backup_count: "{{ _acm_secondary_fresh_backups | default([]) | length }}"
-      backup_name: "{{ _acm_secondary_verified_backup_name }}"
-      backup_phase: "{{ (_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}"
+      backup_count: 1
+      backup_name: "{{ acm_switchover_active_backup_proof.proof.name }}"
+      backup_phase: "{{ acm_switchover_active_backup_proof.proof.phase }}"
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
-    - acm_switchover_verify_backups_result is not defined
+    - not (acm_switchover_backup_verification_skipped | bool)

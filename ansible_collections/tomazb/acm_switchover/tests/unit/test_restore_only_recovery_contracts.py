@@ -4,6 +4,7 @@ import pathlib
 
 import yaml
 from preflight_task_text import validate_backups_text
+from yaml_contract_helpers import _workflow_entry_sections
 
 COLLECTION_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PREFLIGHT_TASKS = COLLECTION_ROOT / "roles" / "preflight" / "tasks"
@@ -61,12 +62,10 @@ def test_switchover_identity_refusal_cannot_use_restore_recovery_shape():
     outer = next(task for task in tasks if task.get("name") == "Run switchover phases with reporting")
 
     assert "rescue" not in outer
-    assert outer["block"][0]["name"] == "Establish trusted identity and checkpoint barrier"
-    # The Argo CD re-pause recovery runs after the barrier and outside the phase rescue.
-    assert outer["block"][1]["name"] == "Re-pause Argo CD recorded by a failure rescue"
-    assert "rescue" not in outer["block"][1]
-    assert outer["block"][2]["name"] == "Run post-barrier switchover phases"
-    assert "rescue" in outer["block"][2]
+    _, identity, recovery, phases = _workflow_entry_sections(outer)
+    assert identity["ansible.builtin.include_role"]["tasks_from"] == "identity_barrier"
+    assert recovery["ansible.builtin.include_role"]["tasks_from"] == "repause_recovery"
+    assert "rescue" not in recovery and "rescue" in phases
 
 
 def test_verify_passive_sync_runs_only_before_the_migration_freeze():

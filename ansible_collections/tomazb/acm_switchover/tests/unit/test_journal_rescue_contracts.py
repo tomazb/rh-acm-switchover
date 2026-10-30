@@ -9,6 +9,7 @@ import pathlib
 
 import pytest
 import yaml
+from yaml_contract_helpers import _workflow_entry_sections
 
 COLLECTION = pathlib.Path(__file__).resolve().parents[2]
 PLAYBOOKS = COLLECTION / "playbooks"
@@ -137,27 +138,16 @@ def test_the_retry_repause_clears_the_marker_only_after_every_hub_paused():
 
 def test_both_playbooks_repause_after_the_identity_barrier_and_before_phase_work():
     outer, _ = _switchover_rescue()
-    names = [task.get("name") for task in outer["block"]]
-    assert names[:3] == [
-        "Establish trusted identity and checkpoint barrier",
-        "Re-pause Argo CD recorded by a failure rescue",
-        "Run post-barrier switchover phases",
-    ]
-    # Review finding 2: the identity barrier is outside the resume-enabled rescue, as in switchover.
+    _, _, sw_recovery, _ = _workflow_entry_sections(outer)
     restore_outer = _restore_only_outer()
-    assert "rescue" not in restore_outer
-    assert [task.get("name") for task in restore_outer["block"]] == [
-        "Establish trusted identity and checkpoint barrier",
-        "Re-pause Argo CD recorded by a failure rescue",
-        "Run post-barrier restore-only phases",
-    ]
-    block = restore_outer["block"]
-    assert block[0][INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.preflight", "tasks_from": "identity_barrier"}
-    assert _restore_only_block()["block"][0][INCLUDE_ROLE] == {
+    _, _, restore_recovery, restore_phases = _workflow_entry_sections(restore_outer)
+    assert next(t for t in restore_phases["block"] if t.get(INCLUDE_ROLE, {}).get("tasks_from") == "post_identity")[
+        INCLUDE_ROLE
+    ] == {
         "name": "tomazb.acm_switchover.preflight",
         "tasks_from": "post_identity",
     }
-    for task in (outer["block"][1], block[1]):
+    for task in (sw_recovery, restore_recovery):
         assert task[INCLUDE_ROLE] == {"name": "tomazb.acm_switchover.argocd_manage", "tasks_from": "repause_recovery"}
 
 
@@ -176,10 +166,21 @@ def test_each_phase_role_repauses_and_guards_its_entry_before_any_work(role):
     # The re-pause runs outside the phase rescue: a failed re-pause resumes nothing.
     assert enter < recovery < phase
     assert "rescue" not in tasks[recovery]
-    # The guard is the first work of the phase: its refusal is an ordinary phase failure.
-    guard = tasks[phase]["block"][0]
+    if role == "finalization":
+        # Finalization validates direct caller inputs read-only before physical
+        # identity discovery or phase entry; ordinary work remains after re-pause.
+        guard_index = names.index(f"Guard the {role} role entry")
+        identity = next(i for i, task in enumerate(tasks) if task.get(CHECKPOINT, {}).get("identity_barrier"))
+        assert guard_index < identity < enter
+        assert tasks[identity]["check_mode"] is True
+        guard = tasks[guard_index]
+        assert guard["vars"]["_checkpoint_enter"] == "{{ acm_switchover_backup_checkpoint }}"
+    else:
+        # Other phase guards remain the first ordinary work within phase rescue.
+        guard = tasks[phase]["block"][0]
+        assert guard["vars"] == {"_acm_role_entry_phase": role}
     assert guard["name"] == f"Guard the {role} role entry"
-    assert guard["vars"] == {"_acm_role_entry_phase": role}
+    assert guard["vars"]["_acm_role_entry_phase"] == role
     assert guard["ansible.builtin.include_tasks"] == "{{ role_path }}/../common/tasks/guard_role_entry.yml"
 
 

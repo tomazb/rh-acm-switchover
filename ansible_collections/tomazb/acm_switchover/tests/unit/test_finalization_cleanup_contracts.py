@@ -48,10 +48,17 @@ def test_the_transaction_runs_before_the_old_hub_and_every_restore_or_backup_ste
 
 
 def test_the_journal_facts_and_the_invalid_journal_refusal_precede_the_transaction():
-    run = next(task for task in _load("main.yml") if task.get("name") == "Run finalization phase")
-    names = [task.get("name") for task in run["block"]]
+    tasks = list(_walk(_load("main.yml")))
+    names = [task.get("name") for task in tasks]
     transaction = names.index("Reconcile the journaled Restore cleanup")
-    assert names.index("Guard the finalization role entry") < transaction
+    identity = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("identity_barrier") is True
+    )
+    assert names.index("Guard the finalization role entry") < identity
+    assert tasks[identity]["check_mode"] is True
+    assert identity < names.index("Enter checkpointed phase") < transaction
     assert names.index("Publish the finalization migration journal facts") < transaction
     assert names.index("Refuse an invalid recorded migration journal") < transaction
 

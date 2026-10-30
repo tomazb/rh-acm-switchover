@@ -434,8 +434,11 @@ def test_execute_check_mode_uses_fresh_uids_without_mutation(
     )
     output = _visible_output(run)
 
-    assert len(_identity_gets(run.primary_requests)) == 1
-    assert len(_identity_gets(run.secondary_requests)) == 1
+    # One preflight read per hub; a qualifying run also reaches the independent
+    # read-only finalization entry barrier. Equality refuses at preflight.
+    expected_reads = 1 if expect_refusal else 2
+    assert len(_identity_gets(run.primary_requests)) == expected_reads
+    assert len(_identity_gets(run.secondary_requests)) == expected_reads
     assert (EQUAL_UID_REFUSAL in output) is expect_refusal
     assert ("Run remaining preflight validation" in output) is not expect_refusal
     if expect_refusal:

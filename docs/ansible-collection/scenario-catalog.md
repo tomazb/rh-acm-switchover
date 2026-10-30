@@ -189,3 +189,32 @@ resume compatibility remain in
 [collection-schema]: ../../ansible_collections/tomazb/acm_switchover/tests/unit/test_release_source_schema.py
 [collection-identity]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_distinct_hub_identity_barrier.py
 [collection-checkpoint]: ../../ansible_collections/tomazb/acm_switchover/tests/scenario/test_checkpoint_resume.py
+
+## Backup continuity compatibility candidate
+
+The #342 candidate is exercised by the real Python CLI/runner lifecycle tests and
+Collection `tests/integration/test_backup_continuity_runtime.py` plus
+`tests/scenario/test_backup_continuity_compatibility.py`. Local fake HTTP supplies
+Kubernetes responses; real Ansible action/module loading and checkpoint files establish
+completed no-write refusal, identity/reset refusal, current-proof no-op, active retry,
+raw-boundary preservation and interruption. The scenario wrapper records loaded source
+hashes and checkpoint save attempts so byte equality cannot hide write-then-restore.
+The existing journal-rescue integration suite covers actual Argo CD Application PATCHes.
+`tests/test_backup_continuity_terminal_retry.py` and Collection
+`tests/integration/test_backup_terminal_retry_runtime.py` cover production-generated
+completed/repaired cleanup, transient pre-boundary inventory failure, process loss after
+real enablement before boundary persistence, and a new distinct Backup after the retry's
+new boundary. No-schedule remains refused; generic missing history without a canonical
+journal and every present-history assessment retain their controls. The Collection
+interruption wrapper records durable state immediately after the actual enable write.
+
+Shared creation/health decisions are covered by
+`tests/fixtures/backup_continuity_compatibility.json` in both independent proof owners.
+Serialized old-source history is retained under `tests/fixtures/backup_continuity_history`.
+These tests are non-live evidence. The separately reviewed
+[#367 correction](https://github.com/tomazb/rh-acm-switchover/issues/367) is integrated.
+`test_shipped_fresh_execute_enables_reads_proves_and_publishes_pass` exercises the healthy
+shipped role and both playbooks on each supported lane, proving actual schedule enablement,
+Backup reads and finalization pass publication. A module positive, completed no-op
+or test that expects the cadence failure cannot satisfy that gate. See the
+[operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints).

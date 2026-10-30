@@ -102,6 +102,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python finalization Backup continuity now requires a positively complete strict inventory
+  before recording or reusing a Backup name. Failed polls retain the existing baseline
+  and retry within the existing wait; the integrity fallback also uses strict inventory.
+  This prevents a baseline LIST 404 followed by a recovered old Backup from certifying
+  continuity (#342). Historical names and verification markers now require fresh, read-only
+  Backup creation and terminal-health proof against the persisted enable boundary in both
+  form factors. A refused COMPLETED assessment preserves checkpoint bytes and does not replay
+  phases. Missing or ambiguous proof remains held outside the approved active procedure.
+  Canonical history-free cleanup can resume or consume its existing audited repair,
+  including `not_started` with fresh prerequisite checks. Valid terminal cleanup with no
+  Backup history can attempt ordinary new enablement and strict post-boundary proof,
+  preserving existing pre-enable observability ordering. It does not establish historical
+  enablement or permit historical restore-only no-schedule success. A Python retry that
+  re-enters enablement after its boundary was saved keeps that proved boundary instead of
+  replacing it. No checkpoint schema, reset or history rewrite is introduced. Refs #342; the separate #352 provenance hold remains.
 - Reconcile testing documentation with the implemented PBT suites, manual mutation tooling,
   default test selections, and concrete scenario evidence. Distinguish coverage goals from
   enforced gates and retain the tracked root-import, profile, and live-certification gaps.

@@ -252,6 +252,9 @@ class Retry:
             fail_phase=cli._fail_phase,
             fail_unexpected_phase_state=cli._fail_unexpected_phase_state,
             on_phase_failure=lambda *_args: None,
+            # This fixture stops at finalization selection; Backup proof is covered
+            # through the real callback in test_backup_continuity_lifecycle.py.
+            backup_continuity_guard=lambda *_args, **_kwargs: True,
         )
         primary = SyntheticHub("primary-ctx")
         try:
