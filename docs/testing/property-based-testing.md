@@ -1,20 +1,55 @@
-# Property-Based Testing (PBT) Plan
+# Property-Based Testing (PBT)
 
-Status: PBT-01 (documentation only). Part of issue #136.
+Status: the seven suites and shared scaffolding are present under `tests/properties/`
+and are included in the default root test selection. This page originated as the PBT-01
+plan for issue #136; its rollout identifiers below are historical context, not a claim
+that testing is still documentation-only.
 
-This document is the high-level plan for introducing property-based testing
-(PBT) into the ACM switchover project. Two companion documents complete the
-PBT-01 deliverable:
+Companion documents retain the original suite and review contracts:
 
 - [`property-based-testing-spec.md`](property-based-testing-spec.md) — the
-  implementation specification for the seven planned PBT suites.
+  implementation specification for the seven PBT suites, with current file paths.
 - [`property-based-testing-pr-workflow.md`](property-based-testing-pr-workflow.md) —
   the process contract for the nine-PR rollout and the three-prompt
   (Builder / Validator / Resolver) PR workflow.
 
-PBT-01 adds **no code, no dependencies, no CI changes**. It defines what the
-follow-up PRs (PBT-02 through PBT-09) will build and how they will be
-reviewed and merged.
+## Running the existing suites
+
+Run from the repository root with its test dependencies installed:
+
+```bash
+python -m pytest tests/properties/ -q
+```
+
+| Domain | Suite |
+| --- | --- |
+| Validation parity | [`test_validation_properties.py`](../../tests/properties/test_validation_properties.py) |
+| Path safety | [`test_path_safety_properties.py`](../../tests/properties/test_path_safety_properties.py) |
+| Checkpoint/resume | [`test_checkpoint_properties.py`](../../tests/properties/test_checkpoint_properties.py) |
+| Report artifacts | [`test_report_artifact_properties.py`](../../tests/properties/test_report_artifact_properties.py) |
+| BackupSchedule behavior | [`test_backup_schedule_properties.py`](../../tests/properties/test_backup_schedule_properties.py) |
+| Argo CD safety | [`test_argocd_properties.py`](../../tests/properties/test_argocd_properties.py) |
+| RBAC permission sets | [`test_rbac_properties.py`](../../tests/properties/test_rbac_properties.py) |
+
+[`conftest.py`](../../tests/properties/conftest.py) selects the profile from
+`HYPOTHESIS_PROFILE`, defaulting to `dev`:
+
+| Profile | `max_examples` | Selection |
+| --- | --- | --- |
+| `dev` | 50 | Default when the variable is unset |
+| `ci` | 100 | Explicit opt-in; not selected by the current CI workflows or `run_tests.sh` |
+| `deep` | 1000 | Explicit opt-in for a larger local run |
+
+```bash
+HYPOTHESIS_PROFILE=ci python -m pytest tests/properties/ -q
+HYPOTHESIS_PROFILE=deep python -m pytest tests/properties/ -q
+```
+
+All three profiles disable deadlines. They do not explicitly set a random seed or
+`derandomize`; the original design's deterministic-CI goal is not established merely by
+registering a profile named `ci`. R3-09b in the [Thermos tracker](../../thermos-resolution-plan.md)
+owns the pending profile-enforcement and coverage-policy work. For complete root/Collection
+gates and evidence limits, use the [testing guide](../development/testing.md).
 
 ## Why property-based testing
 
@@ -33,8 +68,8 @@ verify parity and behavior at hand-picked points. Property-based tests
 strengthen this in three ways:
 
 - **Parity as a property.** Instead of asserting that both implementations
-  accept `my-cluster` and reject `-bad-name`, a PBT suite generates thousands
-  of valid-shaped and near-valid inputs and asserts that both form factors
+  accept `my-cluster` and reject `-bad-name`, a PBT suite generates
+  valid-shaped and near-valid inputs and asserts that both form factors
   make the *same* accept/reject decision on every one. Divergence anywhere in
   the input domain becomes a test failure, not a latent bug.
 - **Invariants over examples.** Safety-critical logic — path traversal
@@ -66,7 +101,7 @@ strengthen this in three ways:
   set derivation.
 - Keep the suites fast and deterministic enough to run in the default test
   gate alongside the existing unit tests.
-- Roll out incrementally in nine small, independently reviewable PRs
+- Original rollout: nine small, independently reviewable PRs
   (see the rollout sequence below).
 
 ## Non-goals
@@ -110,9 +145,10 @@ below — not an automatic guarantee:
   than by executing Ansible runtime plumbing.
 - **No mutation of real operator state.** Filesystem interaction is limited
   to pytest-managed temporary directories.
-- **Deterministic CI behavior.** Suites run with fixed derandomization
-  settings in CI so failures are reproducible; discovered counterexamples
-  are pinned as regression examples.
+- **Reproducibility contract.** The specification requires derandomized/seeded CI and
+  explicit regression examples for fixed counterexamples. The current profile selection
+  and its limits are described above; a registered profile alone does not prove that
+  requirement, and this documentation correction does not waive it.
 
 ## The semantic generator principle
 
@@ -144,14 +180,14 @@ know the domain's shape and then perturb it:
 The full generator domains per suite are defined in the
 [spec](property-based-testing-spec.md).
 
-## Rollout sequence
+## Original rollout sequence
 
-The rollout is nine PRs. Full details, prompt contracts, and gating rules
+The original rollout defined nine PRs. Full details, prompt contracts, and gating rules
 are in [`property-based-testing-pr-workflow.md`](property-based-testing-pr-workflow.md).
 
 | PR | Scope |
 | --- | --- |
-| PBT-01 | This documentation set (plan, spec, PR workflow). No code. |
+| PBT-01 | Original documentation set (plan, spec, PR workflow). No code in that slice. |
 | PBT-02 | Scaffolding: PBT dependency, test layout, shared generator/helper module, pytest marker and CI wiring. |
 | PBT-03 | Suite 1 — validation parity properties. |
 | PBT-04 | Suite 2 — path-safety properties. |

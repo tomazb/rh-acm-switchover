@@ -117,6 +117,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enablement or permit historical restore-only no-schedule success. A Python retry that
   re-enters enablement after its boundary was saved keeps that proved boundary instead of
   replacing it. No checkpoint schema, reset or history rewrite is introduced. Refs #342; the separate #352 provenance hold remains.
+- Reconcile testing documentation with the implemented PBT suites, manual mutation tooling,
+  default test selections, and concrete scenario evidence. Distinguish coverage goals from
+  enforced gates and retain the tracked root-import, profile, and live-certification gaps.
+  No test selection, dependency, workflow, runtime, or capability-parity behavior changes.
+
 - Collection finalization now renders BackupSchedule cadence timeouts in execute mode.
   Correct the unmatched Jinja parenthesis and interval-capture escaping while preserving
   the existing 600-second minimum, completion grace, fixed cadences, and fallback.
