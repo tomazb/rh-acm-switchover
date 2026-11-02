@@ -1,0 +1,204 @@
+{
+  "version": "1.0",
+  "tool_version": "1.7.10",
+  "created_at": "2026-10-17T11:56:42.135071+00:00",
+  "current_phase": "completed",
+  "completed_steps": [
+    {
+      "name": "enable_backup_schedule",
+      "timestamp": "2026-10-17T11:56:42.137291+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "verify_backup_schedule_enabled",
+      "timestamp": "2026-10-17T11:56:42.137546+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "fix_backup_collision",
+      "timestamp": "2026-10-17T11:56:42.137783+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "verify_mch_health",
+      "timestamp": "2026-10-17T11:56:42.138096+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "handle_old_hub",
+      "timestamp": "2026-10-17T11:56:42.138362+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "verify_new_backups",
+      "timestamp": "2026-10-17T11:56:42.139419+00:00",
+      "phase": "finalization"
+    },
+    {
+      "name": "verify_backup_integrity",
+      "timestamp": "2026-10-17T11:56:42.139895+00:00",
+      "phase": "finalization"
+    }
+  ],
+  "config": {
+    "backup_schedule_enabled_at": "2026-10-17T11:56:42.050518+00:00",
+    "new_backup_detected": true,
+    "primary_version": "2.12.0",
+    "primary_observability_detected": false,
+    "primary_has_observability": false,
+    "secondary_version": "2.12.0",
+    "secondary_observability_detected": false,
+    "secondary_has_observability": false,
+    "has_observability": false,
+    "migration_backups": {
+      "backups": {
+        "credentials": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-credentials-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-credentials-schedule-20240101120000",
+          "warnings": 0
+        },
+        "managed_clusters": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-managed-clusters-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-managed-clusters-schedule-20240101120000",
+          "warnings": 0
+        },
+        "resources": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-resources-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-resources-schedule-20240101120000",
+          "warnings": 0
+        },
+        "resources_generic": {
+          "completed_at": "2024-01-01T12:05:00Z",
+          "errors": 0,
+          "name": "acm-resources-generic-schedule-20240101120000",
+          "namespace": "open-cluster-management-backup",
+          "phase": "Completed",
+          "uid": "uid-acm-resources-generic-schedule-20240101120000",
+          "warnings": 0
+        }
+      },
+      "cleanup": {
+        "absence_verified_at": "2024-01-01T15:03:00Z",
+        "activation_method": "full",
+        "backup_fields": {
+          "veleroCredentialsBackupName": "acm-credentials-schedule-20240101120000",
+          "veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000",
+          "veleroResourcesBackupName": "acm-resources-schedule-20240101120000"
+        },
+        "cleanup_before_restore": "CleanupRestored",
+        "completed_at": "2024-01-01T15:03:00Z",
+        "delete_accepted_at": "2024-01-01T15:02:00Z",
+        "final_get_resource_version": "2002",
+        "generation": 4,
+        "intent_at": "2024-01-01T15:01:00Z",
+        "mutation_kind": "full_restore",
+        "name": "acm-restore",
+        "namespace": "open-cluster-management-backup",
+        "operation_id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+        "recovery": null,
+        "repair": null,
+        "spec_fingerprint": "e0082428344f8c48fa36a83d9be86597f283813fbd91ff42a5a8d6330e80586e",
+        "state": "completed",
+        "uid": "uid-acm-restore"
+      },
+      "post_activation": {
+        "completed_at": "2024-01-01T14:05:00Z",
+        "names_verified_at": "2024-01-01T14:00:00Z"
+      },
+      "resolved_at": "2024-01-01T12:30:00Z",
+      "restore": {
+        "acm_minor": "2.14",
+        "activation_method": "full",
+        "backup_fields": {
+          "veleroCredentialsBackupName": "acm-credentials-schedule-20240101120000",
+          "veleroManagedClustersBackupName": "acm-managed-clusters-schedule-20240101120000",
+          "veleroResourcesBackupName": "acm-resources-schedule-20240101120000"
+        },
+        "backup_names_verified_at": "2024-01-01T13:00:00Z",
+        "cleanup_before_restore": "CleanupRestored",
+        "completed_at": "2024-01-01T13:05:00Z",
+        "controller_contract": "legacy_2_12_2_16",
+        "generation": 4,
+        "mutation_kind": "full_restore",
+        "name": "acm-restore",
+        "names_verified_at": "2024-01-01T13:06:00Z",
+        "namespace": "open-cluster-management-backup",
+        "spec_fingerprint": "e0082428344f8c48fa36a83d9be86597f283813fbd91ff42a5a8d6330e80586e",
+        "teardown_revalidated_at": "2024-01-01T15:00:00Z",
+        "uid": "uid-acm-restore",
+        "velero_restores": {
+          "activation_credentials": [],
+          "activation_resources": [],
+          "activation_resources_generic": [],
+          "credentials": [
+            {
+              "backup_name": "acm-credentials-schedule-20240101120000",
+              "name": "acm-restore-acm-credentials-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-credentials-schedule-20240101120000"
+            }
+          ],
+          "managed_clusters": [
+            {
+              "backup_name": "acm-managed-clusters-schedule-20240101120000",
+              "name": "acm-restore-acm-managed-clusters-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-managed-clusters-schedule-20240101120000"
+            }
+          ],
+          "resources": [
+            {
+              "backup_name": "acm-resources-schedule-20240101120000",
+              "name": "acm-restore-acm-resources-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-resources-schedule-20240101120000"
+            }
+          ],
+          "resources_generic": [
+            {
+              "backup_name": "acm-resources-generic-schedule-20240101120000",
+              "name": "acm-restore-acm-resources-generic-schedule-20240101120000",
+              "namespace": "open-cluster-management-backup",
+              "phase": "Completed",
+              "uid": "uid-acm-restore-acm-resources-generic-schedule-20240101120000"
+            }
+          ]
+        }
+      },
+      "run_id": "5b7c9a1e-3f2d-4c8b-9e6a-0d1f2a3b4c5d",
+      "schema_version": 2,
+      "waiver": null
+    },
+    "post_switchover_backup_name": "acm-managed-clusters-old",
+    "resume_summary": {
+      "resume_start_phase": "finalization"
+    }
+  },
+  "errors": [],
+  "last_updated": "2026-10-17T11:56:42.142062+00:00",
+  "contexts": {
+    "primary": null,
+    "secondary": "iv-secondary"
+  },
+  "hub_identities": {
+    "secondary": {
+      "context": "iv-secondary",
+      "cluster_uid": "cluster-uid-secondary"
+    }
+  }
+}

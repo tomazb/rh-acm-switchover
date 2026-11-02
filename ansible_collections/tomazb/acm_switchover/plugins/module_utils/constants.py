@@ -3,8 +3,13 @@
 
 from __future__ import annotations
 
+import re
+
 ACM_NAMESPACE = "open-cluster-management"
 BACKUP_NAMESPACE = "open-cluster-management-backup"
+ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+ACM_BACKUP_SCHEDULE_TYPES = frozenset({"managedClusters", "credentials", "resources"})
+ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
 OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 MCE_NAMESPACE = "multicluster-engine"
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"

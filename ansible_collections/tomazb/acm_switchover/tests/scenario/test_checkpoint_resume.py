@@ -148,12 +148,13 @@ def test_checkpoint_operator_surface_exposes_reset_from_and_rescue_pruning():
 def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
     run_checkpoint_fixture,
 ):
+    # Ordinary active preview reset remains supported. Completed finalization is
+    # assessed read-only and cannot be used as the pruning fixture under #342.
     expected_phases = [
         "preflight",
         "primary_prep",
         "activation",
         "post_activation",
-        "finalization",
     ]
 
     completed, checkpoint = run_checkpoint_fixture(
@@ -162,7 +163,7 @@ def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert checkpoint == _expected_checkpoint("finalization", expected_phases)
+    assert checkpoint == _expected_checkpoint("post_activation", expected_phases)
     stdout = completed.stdout
 
     assert re.search(
@@ -188,6 +189,20 @@ def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
             _task_pattern(resumed_phase, "Mark checkpoint phase completion", "changed"),
             stdout,
         ), f"{resumed_phase} should not persist checkpoint completion during dry-run"
+
+
+def test_completed_checkpoint_refuses_preview_reset_without_replay(run_checkpoint_fixture):
+    expected_phases = ["preflight", "primary_prep", "activation", "post_activation", "finalization"]
+    completed, checkpoint = run_checkpoint_fixture(
+        "interrupted_after_activation.yml", pre_completed_phases=expected_phases
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert "completed assessment cannot reset or rewind" in output
+    assert checkpoint == _expected_checkpoint("finalization", expected_phases)
+    assert "rescued=0" in output
+    for role in ("preflight", "primary_prep", "activation", "post_activation", "finalization"):
+        assert not re.search(_task_pattern(role, "Mark checkpoint phase completion", "(?:ok|changed)"), output)
 
 
 def test_validate_mode_with_checkpoint_enabled_does_not_create_or_mutate_checkpoint_path(

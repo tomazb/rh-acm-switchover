@@ -37,13 +37,15 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 | Migrate checkpoint between runs | Use the collection checkpoint JSON as-is. |
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
-`checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
+`checkpoint_phase` action plugin normally skips phases listed in `completed_phases` on resume.
+The #342 candidate assesses completed finalization before that skip, including when all
+prior phases are complete, and refuses reset controls on that read-only assessment.
 Checkpoints written under pre-2.19 ansible-core (classic Jinja) may carry
 stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
 types); the facts layer coerces digit strings and Ansible's boolean vocabulary
 back to native types on read, so those checkpoints resume identically.
-A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
-pre-existing checkpoint file.
+Outside completed Backup assessment, a fresh run or an explicitly permitted
+`checkpoint.reset: true` starts from the beginning under the existing reset contract.
 
 Corrupt state is handled alike on both sides (R4-04 PR B). A Python state file or
 collection checkpoint that is not valid JSON, or whose top level is not a JSON
@@ -55,8 +57,9 @@ also fails without touching the original. Earlier collection releases moved the
 corrupt checkpoint aside instead, so the next run silently started fresh.
 Non-mutating collection runs report the corruption without making the copy. An
 unreadable file blocks on both sides without a copy. Python also treats a state
-file with an unknown `current_phase` as corrupt; the collection checks no
-checkpoint field beyond the top-level object.
+file with an unknown `current_phase` as corrupt. The Collection's generic loader
+checks the top-level object; Backup lifecycle assessment additionally refuses malformed
+`operational_data` or `completed_phases` before normal checkpoint entry.
 
 A recorded R4-04 migration journal is dropped only by the explicit full reset on
 both sides (`--reset-state` / `checkpoint.reset: true`). Python refuses the implicit
@@ -86,7 +89,11 @@ identity data must be reset or explicitly backfilled with `--force`.
 The collection records the same live cluster UIDs in checkpoint operation
 identity data. Preflight discovers these UIDs before checkpoint entry, and the
 checkpoint action plugin rejects resume when the stored context and current
-cluster UID do not match. Execute-mode collection preflight also refreshes
+cluster UID do not match.
+The finalization entry independently repeats the read-only live identity comparison
+before checkpoint entry, Argo CD recovery or cleanup, including direct role invocation.
+Reset directives cannot excuse a mismatch during that comparison.
+Execute-mode collection preflight also refreshes
 MultiClusterHub discovery even if discovery variables were pre-seeded, so stale
 cached MCH status cannot authorize a later live mutation.
 
@@ -153,6 +160,23 @@ Shared behavior:
   the current finalization pass it refuses before any request ("Refusing the old-hub action: no
   validated migration journal and Restore-cleanup result from this finalization pass is
   available").
+- **Backup continuity (#342 candidate).** Both independent proof owners require a complete
+  strict inventory, trustworthy enable boundary, current creation-time proof and terminal
+  name/UID/ownership/health checks. Old markers cannot skip historical-entry or completed
+  assessment. Completed refusal is read-only across bootstrap, phase and rescue paths;
+  valid proof permits a read-only no-op. Active retry re-pauses first and preserves raw
+  historical boundary presence/value during existing failure auditing. Python retains its
+  stored-name and absent-only legacy-step input model; Collection selects the latest fresh
+  candidate against its own persisted boundary, without a step fallback. Canonical
+  active cleanup with raw absence of all Backup history can resume or repair; terminal
+  cleanup can enter the approved ordinary new enable-and-proof attempt. Existing
+  pre-enable observability ordering remains. Neither route supplies historical proof
+  or a restore-only no-schedule exception. Other missing or ambiguous history remains
+  held. No store migration, cross-runtime resume or parity
+  status change is introduced. See the [operator contract](../../../../docs/operations/usage.md#backup-continuity-and-historical-checkpoints).
+  The separately reviewed [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+  is integrated. The healthy shipped role and playbook execute paths remain required
+  acceptance gates on both supported lanes, alongside compatibility validation and review.
 - **Cleanup recovery and repair.** The same states, transitions, reason codes
   (`absent_without_completion`, `replacement_uid`, `replacement_during_poll`), conflict retry
   bound (three retries), and 300-second elapsed poll bound. Each absence-poll read is bounded by

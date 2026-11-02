@@ -31,6 +31,7 @@ from lib.workflow import (
     PhaseFlowEntry,
     PhaseHandler,
     UnexpectedPhaseHandler,
+    completed_backup_assessment,
     handle_completed_state,
     handle_failed_state,
     log_operation_completion,
@@ -77,6 +78,7 @@ class SwitchoverRunnerHooks:
     fail_phase: FailPhaseHandler
     fail_unexpected_phase_state: UnexpectedPhaseHandler
     on_phase_failure: FailureHook
+    backup_continuity_guard: Callable[..., bool]
     # Runs before any phase of a retry: the Argo CD re-pause a rescue left behind.
     rescue_repause: Optional[PhaseHandler] = None
 
@@ -91,6 +93,7 @@ class RestoreOnlyRunnerHooks:
     fail_phase: FailPhaseHandler
     fail_unexpected_phase_state: UnexpectedPhaseHandler
     on_phase_failure: FailureHook
+    backup_continuity_guard: Callable[..., bool]
     # Runs before any phase of a retry: the Argo CD re-pause a rescue left behind.
     rescue_repause: Optional[PhaseHandler] = None
 
@@ -136,13 +139,19 @@ def run_switchover_impl(
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
 
-    if handle_completed_state(
-        args,
-        state,
-        logger,
-        CompletedStateConfig(operation_label=OPERATION_LABEL_SWITCHOVER, operation_noun=OPERATION_NOUN_SWITCHOVER),
-    ):
-        return True
+    if completed_backup_assessment(args, state):
+        return handle_completed_state(
+            args,
+            state,
+            logger,
+            CompletedStateConfig(
+                operation_label=OPERATION_LABEL_SWITCHOVER,
+                operation_noun=OPERATION_NOUN_SWITCHOVER,
+            ),
+            primary=primary,
+            secondary=secondary,
+            backup_continuity_guard=hooks.backup_continuity_guard,
+        )
     handle_failed_state(
         args,
         state,
@@ -196,6 +205,7 @@ def run_switchover_impl(
         hooks.fail_phase,
         hooks.fail_unexpected_phase_state,
         hooks.on_phase_failure,
+        backup_continuity_guard=hooks.backup_continuity_guard,
         before_phases=hooks.rescue_repause,
     ):
         return False
@@ -234,13 +244,19 @@ def run_restore_only_impl(
     if not getattr(args, "old_hub_action", None):
         args.old_hub_action = DEFAULT_OLD_HUB_ACTION
 
-    if handle_completed_state(
-        args,
-        state,
-        logger,
-        CompletedStateConfig(operation_label=OPERATION_LABEL_RESTORE, operation_noun=OPERATION_NOUN_RESTORE),
-    ):
-        return True
+    if completed_backup_assessment(args, state):
+        return handle_completed_state(
+            args,
+            state,
+            logger,
+            CompletedStateConfig(
+                operation_label=OPERATION_LABEL_RESTORE,
+                operation_noun=OPERATION_NOUN_RESTORE,
+            ),
+            primary=None,
+            secondary=secondary,
+            backup_continuity_guard=hooks.backup_continuity_guard,
+        )
     handle_failed_state(
         args,
         state,
@@ -257,7 +273,11 @@ def run_restore_only_impl(
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
         (hooks.preflight_handler, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
         (hooks.restore_only_pause_handler, (Phase.PREFLIGHT,), Phase.PREFLIGHT),
-        (hooks.activation_handler, (Phase.PREFLIGHT, Phase.ACTIVATION), Phase.ACTIVATION),
+        (
+            hooks.activation_handler,
+            (Phase.PREFLIGHT, Phase.ACTIVATION),
+            Phase.ACTIVATION,
+        ),
         (
             hooks.post_activation_handler,
             (Phase.ACTIVATION, Phase.POST_ACTIVATION),
@@ -281,6 +301,7 @@ def run_restore_only_impl(
         hooks.fail_phase,
         hooks.fail_unexpected_phase_state,
         hooks.on_phase_failure,
+        backup_continuity_guard=hooks.backup_continuity_guard,
         before_phases=hooks.rescue_repause,
     ):
         return False

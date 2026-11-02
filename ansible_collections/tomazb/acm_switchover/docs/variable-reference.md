@@ -46,13 +46,18 @@
 | `migration_cleanup_repair` | dict | all fields empty | Audited acknowledgement of a journaled Restore cleanup in `recovery_required`. Naming any field requests it, and then all are required: non-empty `actor` and `reason`, a non-empty `inspected_evidence` list, and the UUID `run_id` and `operation_id` the recovery error names. Accepted only in `recovery_required` after a fresh read proves the journaled Restore absent; clear it once the cleanup is repaired, since a repeated request is then refused |
 | `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
 
-A direct role invocation validates operator inputs before ordinary phase mutations. Any recorded Argo CD re-pause obligation runs first. A direct invocation of the `activation`, `post_activation`, or
+A direct role invocation validates operator inputs before ordinary phase mutations. Finalization prepares its inputs and identity read-only before phase entry; any recorded Argo CD re-pause obligation still precedes Backup proof and ordinary phase work. A direct invocation of the `activation`, `post_activation`, or
 `finalization` role validates these operator inputs at the role's own entry, restores the ManagedCluster
 expectation the checkpoint recorded, and refuses a waiver whose scope has no expected name. In
 execute mode `activation` and `post_activation` also refuse when no expectation is recorded and
 `min_managed_clusters` is unset; `finalization` does not. A `validate` entry stays non-mutating.
 The waiver and repair inputs are rejected in `validate` mode and for the standalone decommission
 playbook.
+
+Executing finalization also performs a read-only comparison of the checkpoint's hub
+contexts and fresh live `kube-system` Namespace UIDs before checkpoint entry or recovery
+mutations. This includes direct role invocation and native check mode. Reset directives
+cannot excuse an identity mismatch during this comparison.
 
 ### `acm_switchover_managed_clusters`
 

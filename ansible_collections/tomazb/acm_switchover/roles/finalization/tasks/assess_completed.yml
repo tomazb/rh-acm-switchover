@@ -1,0 +1,61 @@
+---
+# Always recompute from disk; cached invocation facts never authorize a phase skip.
+- name: Clear completed Backup assessment for this invocation
+  ansible.builtin.set_fact:
+    acm_switchover_backup_completed_assessed: false
+    acm_switchover_backup_lifecycle_inputs: {}
+    acm_switchover_backup_schedule_enabled_at: ""
+
+- name: Read actual checkpoint facts before any phase entry
+  tomazb.acm_switchover.checkpoint_phase:
+    read_facts: true
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+  register: acm_switchover_backup_checkpoint
+
+- name: Extract raw Backup lifecycle inputs
+  ansible.builtin.set_fact:
+    acm_switchover_backup_lifecycle_inputs: "{{ acm_switchover_backup_checkpoint.facts.backup_continuity }}"
+
+- name: Refuse malformed raw Backup lifecycle facts
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_backup_lifecycle_inputs.invalid_reason is not defined
+    fail_msg: Backup continuity refused; invalid_backup_evidence. Preserve the original checkpoint.
+
+- name: Assess completed Backup continuity without checkpoint mutation
+  when: acm_switchover_backup_lifecycle_inputs.finalization_completed | default(false) | bool
+  block:
+    - name: Refuse reset controls on a completed assessment
+      ansible.builtin.assert:
+        that:
+          - not (acm_switchover_execution.checkpoint.reset | default(false) | bool)
+          - (acm_switchover_execution.checkpoint.reset_from | default('') | length) == 0
+        fail_msg: Backup continuity refused; completed assessment cannot reset or rewind the checkpoint.
+
+    # Preview suppresses writes; execution mode forces fresh live Namespace reads.
+    # Reset directives were refused above, so preview must compare the retained identity.
+    - name: Prove retained physical identity without normalization
+      tomazb.acm_switchover.checkpoint_phase:
+        identity_barrier: true
+        phase: preflight
+        status: enter
+        checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+        hubs: "{{ acm_switchover_hubs | default({}) }}"
+        operation: "{{ acm_switchover_operation | default({}) }}"
+        execution: "{{ (acm_switchover_execution | default({})) | combine({'mode': 'execute'}) }}"
+        collection_version: "{{ acm_switchover_collection_version | default('') }}"
+      check_mode: true
+      register: acm_switchover_backup_identity
+
+    - name: Require the existing completed enable boundary and current Backup proof
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/verify_backup_proof.yml"
+
+    - name: Publish the read-only completed no-op
+      ansible.builtin.set_fact:
+        acm_switchover_backup_completed_assessed: true
+        acm_switchover_finalization_result:
+          phase: finalization
+          status: pass
+          changed: false
+          reason: completed_current_backup_proof
+          verify_backups: "{{ acm_switchover_backup_proof.proof }}"

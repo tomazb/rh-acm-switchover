@@ -725,6 +725,36 @@ class StateManager:
             logging.warning("Could not parse state timestamp: %s", e)
             return None
 
+    def validate_retained_contexts(self, primary_context, secondary_context) -> None:
+        """Compare existing contexts without normalizing, backfilling or resetting."""
+        if not secondary_context or self.state.get("contexts") != {
+            "primary": primary_context,
+            "secondary": secondary_context,
+        }:
+            raise StateIdentityMismatch(
+                "Completed assessment requires the exact retained contexts; preserving checkpoint."
+            )
+
+    def validate_retained_hub_identities(self, identities) -> None:
+        """Require complete matching physical identities without any state change."""
+        stored = self.state.get("hub_identities")
+        if not isinstance(stored, dict) or not stored or set(stored) != set(identities):
+            raise StateIdentityMismatch("Completed assessment requires complete retained physical hub identities.")
+        for role, current in identities.items():
+            previous = stored.get(role)
+            if not isinstance(previous, dict) or set(previous) != {
+                "context",
+                "cluster_uid",
+            }:
+                raise StateIdentityMismatch("Completed assessment has malformed retained physical identity.")
+            if any(
+                not isinstance(previous.get(key), str) or not previous[key].strip()
+                for key in ("context", "cluster_uid")
+            ):
+                raise StateIdentityMismatch("Completed assessment has incomplete retained physical identity.")
+            if previous != current:
+                raise StateIdentityMismatch("Completed assessment physical identity differs from the retained hub.")
+
     def ensure_contexts(self, primary_context: str, secondary_context: Optional[str]) -> None:
         """Ensure stored contexts match the ones provided on the CLI."""
         stored = self.state.get("contexts") or {}

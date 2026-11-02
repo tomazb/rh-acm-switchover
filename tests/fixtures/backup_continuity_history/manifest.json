@@ -1,0 +1,975 @@
+{
+  "generator_source": "c197ba29de7efd04c814aea535052bc1064ae6be:modules/finalization.py",
+  "generator_sha256": "4349895ec397095c6a07c7657ff73638228cf16a212041861183045b16cff9d2",
+  "consumer_source": "0595051a5422717b53906a603dcdf1169c34ba05",
+  "tier": "non-live transport-backed real persistence/context/physical UID/StepContext/finalization adapter/runner; unrelated prerequisites are fixture-owned validated terminal journal",
+  "files": {
+    "switchover-none.json": "aa9c3d3ed31c529206480245bafd80911b6aed562bdd837f0774905b09cdb115",
+    "switchover-continuity.json": "776076181c7ba3c4dd68c69b27ece4d7af5e13faadadd47466d82def84d74794",
+    "switchover-integrity.json": "aa7b4f4c083a963048250ce99e40d763794df39dca862e7e94cee8924de2f328",
+    "switchover-both.json": "7db9b9cec7a81d89fb7044ad25d61c32c8187a715fefe1e762c7c867fb156897",
+    "switchover-completed.json": "f7f39930884624c206d98c99013d137e31b8d3918ebb2272aa5fd2c0c6564a22",
+    "restore-none.json": "798472479e2a1de81201e7573adfc378275c93a7a817aff594bf1d6f63e75503",
+    "restore-continuity.json": "678fb2bbfc5f5c86a0f0bf28ce78c2e82b2e63a9c6a968802e55c7cd0ec41e8b",
+    "restore-integrity.json": "782b6ac4f4c57000290cb19a62a9954d880389e47924482389da72c05b7dd050",
+    "restore-both.json": "38e7fac686bf309bc68f1926edb76eaef26e22807ef17b3b56c9ac1b9a709cdc",
+    "restore-completed.json": "8a05c1bb9a34162ff2c0719e8474a22e10661777c745cb7de74dd616b7da4efe"
+  },
+  "traces": {
+    "switchover-none": {
+      "primary": [
+        {
+          "kind": "physical_uid",
+          "role": "primary"
+        }
+      ],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "switchover-continuity": {
+      "primary": [
+        {
+          "kind": "physical_uid",
+          "role": "primary"
+        }
+      ],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "switchover-integrity": {
+      "primary": [
+        {
+          "kind": "physical_uid",
+          "role": "primary"
+        }
+      ],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "switchover-both": {
+      "primary": [
+        {
+          "kind": "physical_uid",
+          "role": "primary"
+        }
+      ],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "switchover-completed": {
+      "primary": [
+        {
+          "kind": "physical_uid",
+          "role": "primary"
+        }
+      ],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "restore-none": {
+      "primary": [],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "restore-continuity": {
+      "primary": [],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "restore-integrity": {
+      "primary": [],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "restore-both": {
+      "primary": [],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    },
+    "restore-completed": {
+      "primary": [],
+      "secondary": [
+        {
+          "kind": "physical_uid",
+          "role": "secondary"
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "fault": 404
+        },
+        {
+          "kind": "LIST",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "label_selector": null,
+            "_continue": null,
+            "limit": null,
+            "_request_timeout": 1
+          },
+          "body": {
+            "items": [
+              {
+                "apiVersion": "velero.io/v1",
+                "kind": "Backup",
+                "metadata": {
+                  "name": "acm-managed-clusters-old",
+                  "namespace": "open-cluster-management-backup",
+                  "resourceVersion": "19",
+                  "uid": "acm-managed-clusters-old",
+                  "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+                  "labels": {
+                    "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+                  }
+                },
+                "status": {
+                  "phase": "Completed",
+                  "errors": 0,
+                  "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+                }
+              }
+            ],
+            "metadata": {
+              "resourceVersion": "101",
+              "continue": null
+            }
+          }
+        },
+        {
+          "kind": "GET",
+          "query": {
+            "group": "velero.io",
+            "version": "v1",
+            "namespace": "open-cluster-management-backup",
+            "plural": "backups",
+            "name": "acm-managed-clusters-old",
+            "_request_timeout": 1
+          },
+          "body": {
+            "apiVersion": "velero.io/v1",
+            "kind": "Backup",
+            "metadata": {
+              "name": "acm-managed-clusters-old",
+              "namespace": "open-cluster-management-backup",
+              "resourceVersion": "19",
+              "uid": "acm-managed-clusters-old",
+              "creationTimestamp": "2026-10-16T11:56:42.050518+00:00",
+              "labels": {
+                "cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"
+              }
+            },
+            "status": {
+              "phase": "Completed",
+              "errors": 0,
+              "completionTimestamp": "2026-10-16T11:56:42.050518+00:00"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

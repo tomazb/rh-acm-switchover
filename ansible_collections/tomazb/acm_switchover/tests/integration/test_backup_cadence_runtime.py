@@ -28,7 +28,12 @@ def backup_api(*, phase="Completed", errors=0, denied=False):
     backup = {
         "apiVersion": "velero.io/v1",
         "kind": "Backup",
-        "metadata": {"name": BACKUP_NAME, "creationTimestamp": "2026-10-17T12:01:00Z"},
+        "metadata": {
+            "name": BACKUP_NAME,
+            "uid": "cadence-fixture-uid",
+            "resourceVersion": "12",
+            "creationTimestamp": "2026-10-17T12:01:00Z",
+        },
         "status": {"phase": phase, "errors": errors},
     }
 
@@ -66,7 +71,12 @@ def backup_api(*, phase="Completed", errors=0, denied=False):
                         }
                     ],
                 },
-                BACKUP_PATH: {"apiVersion": "velero.io/v1", "kind": "BackupList", "items": [backup]},
+                BACKUP_PATH: {
+                    "apiVersion": "velero.io/v1",
+                    "kind": "BackupList",
+                    "metadata": {"resourceVersion": "12"},
+                    "items": [backup],
+                },
                 f"{BACKUP_PATH}/{BACKUP_NAME}": backup,
             }
             forbidden = denied and path.startswith(BACKUP_PATH)
@@ -90,21 +100,12 @@ def backup_api(*, phase="Completed", errors=0, denied=False):
         thread.join(timeout=5)
 
 
-def run_backup_verification(tmp_path, server, *, cron="*/5 * * * *", malformed_schedule=False, bounded_failure=False):
-    """Positive route directly includes TASK_FILE; only negative polling is shortened."""
+def run_backup_verification(tmp_path, server, *, cron="*/5 * * * *", malformed_schedule=False):
+    """Include the shipped cadence and proof tasks without timeout substitutions."""
     kubeconfig = tmp_path / "fixture.kubeconfig"
     _write_fixture_kubeconfig(kubeconfig, "cadence-fixture", server)
     result_path = tmp_path / "result.json"
     task_file = TASK_FILE
-    if bounded_failure:
-        # A transport failure otherwise waits the production minimum of ten minutes.
-        # Preserve every task/expression; shorten only retry scheduling for this control.
-        tasks = yaml.safe_load(TASK_FILE.read_text(encoding="utf-8"))
-        for task in tasks:
-            if "retries" in task:
-                task.update(retries=0, delay=0)
-        task_file = tmp_path / "bounded-negative-tasks.yml"
-        task_file.write_text(yaml.safe_dump(tasks), encoding="utf-8")
     variables = {
         "acm_switchover_execution": {"mode": "execute"},
         "acm_switchover_operation": {"restore_only": False},
@@ -145,7 +146,7 @@ def run_backup_verification(tmp_path, server, *, cron="*/5 * * * *", malformed_s
                 "shipped_sha256": hashlib.sha256(TASK_FILE.read_bytes()).hexdigest(),
                 "included_task": str(task_file),
                 "included_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
-                "bounded_polling_copy": bounded_failure,
+                "bounded_polling_copy": False,
             },
             indent=2,
         ),
@@ -199,16 +200,17 @@ def test_shipped_execute_tasks_refuse_unhealthy_backup(tmp_path, phase, errors):
     with backup_api(phase=phase, errors=errors) as (server, requests):
         completed, facts = run_backup_verification(tmp_path, server)
     assert completed.returncode != 0
-    assert "with errors" in completed.stdout
+    reason = "backup_errors" if phase == "Completed" else "backup_not_completed"
+    assert reason in completed.stdout
     assert facts["result"] == {}
     assert f"{BACKUP_PATH}/{BACKUP_NAME}" in requests
 
 
-def test_transport_denial_does_not_publish_pass_with_bounded_polling(tmp_path):
+def test_transport_denial_does_not_publish_pass_before_polling(tmp_path):
     with backup_api(denied=True) as (server, requests):
-        completed, facts = run_backup_verification(tmp_path, server, bounded_failure=True)
+        completed, facts = run_backup_verification(tmp_path, server)
     assert completed.returncode != 0
-    assert "Forbidden" in completed.stdout
+    assert "backup_inventory_unavailable" in completed.stdout
     assert facts["result"] == {}
     assert BACKUP_PATH in requests
 

@@ -23,6 +23,24 @@ Intentional parity changes require explicit operator approval before implementat
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 | RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 
+Backup continuity remains `dual-supported`. The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+adds independent creation-time and terminal Backup proof before historical finalization
+or a completed no-op. Existing names, markers, boundaries and journal formats remain
+unchanged. Python alone has its absent-only historical enable-step fallback and recorded
+name; Collection keeps its current latest-fresh selection. These existing input models
+do not authorize cross-runtime resume or an intentional parity change. The
+approved active terminal-journal route requires ordinary new enablement and strict
+post-boundary proof in both forms; it never certifies historical enablement or permits
+COMPLETED replay. Existing pre-enable observability ordering is retained. The
+[operator contract](../operations/usage.md#backup-continuity-and-historical-checkpoints)
+owns details and read-only assessment guidance. The separate
+[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+is integrated. Acceptance requires both supported lanes to pass the healthy shipped
+role and playbook execute paths, alongside the compatibility validation and review gates. Task fragments,
+module positives and completed no-ops do not substitute for that gate. The unrelated
+[#352 klusterlet marker residual](https://github.com/tomazb/rh-acm-switchover/issues/352)
+remains separately tracked.
+
 ## Milestone Gates
 
 1. Collection preview

@@ -20,6 +20,7 @@ from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
 from lib.run_record import MigrationJournalResetRefused, RunSummary
 from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
+from lib.workflow import completed_backup_assessment
 
 # Fallback for state entries recorded before completion-time phases existed.
 # Matched by prefix so e.g. verify_backup_schedule_enabled still resolves.
@@ -59,7 +60,10 @@ _PHASE_VALUE_TO_REPORT_NAME = {phase.value: name for phase, name in CANONICAL_PH
 
 def fallback_phase_for_step(step_name: str) -> Optional[str]:
     """Resolve a step name to its report phase via the static prefix map."""
-    return next((value for prefix, value in _PHASE_BY_STEP_PREFIX.items() if step_name.startswith(prefix)), None)
+    return next(
+        (value for prefix, value in _PHASE_BY_STEP_PREFIX.items() if step_name.startswith(prefix)),
+        None,
+    )
 
 
 def report_target(args: Any) -> tuple[str, str]:
@@ -238,6 +242,7 @@ def run_operation_outcome(
 ) -> OperationOutcome:
     """Run the prepared non-setup operation path and return its outcome."""
     exit_code = exit_failure
+    completed_assessment = completed_backup_assessment(args, state)
     journal_reset_refused = False
     refusal_report_message: Optional[str] = None
     try:
@@ -249,7 +254,8 @@ def run_operation_outcome(
             success = hooks.execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        _report_interrupted_state(args, state, logger)
+        if not completed_assessment:
+            _report_interrupted_state(args, state, logger)
         exit_code = exit_interrupt
     except MigrationJournalResetRefused as exc:
         # A --force reset would discard the migration journal. Nothing was changed, and
@@ -267,12 +273,12 @@ def run_operation_outcome(
         exit_code = exit_failure
     except SwitchoverError as exc:
         logger.error("\n✗ %s", exc)
-        if should_record_state_errors:
+        if should_record_state_errors and not completed_assessment:
             state.add_error(str(exc))
         exit_code = exit_failure
     except Exception as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=getattr(args, "verbose", False))
-        if should_record_state_errors:
+        if should_record_state_errors and not completed_assessment:
             state.add_error(str(exc))
         exit_code = exit_failure
     else:

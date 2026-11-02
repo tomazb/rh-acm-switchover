@@ -333,7 +333,8 @@ python acm_switchover.py --restore-only \
    - Delete the journaled Restore through the durable Restore-cleanup transaction (recoverable; see [usage](docs/operations/usage.md#migration-evidence))
    - Enable BackupSchedule on new hub, after a fresh read proves the journaled Restore gone
    - Fix BackupSchedule collision if detected
-   - Verify new backups are created
+   - Prove Backup creation after the retained enable boundary and clean completion from current strict reads
+   - Re-prove historical finalization and completed-state Backup evidence before accepting old markers; see [the candidate contract and acceptance hold](docs/operations/usage.md#backup-continuity-and-historical-checkpoints)
    - Verify backup integrity (status, age, and Velero logs)
    - Handle old hub based on `--old-hub-action`, only after the old-hub migration-evidence gate passes:
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
@@ -356,8 +357,13 @@ flowchart LR
     P -->|no| B[ACTIVATION]
     Q --> B
     B --> C[POST_ACTIVATION]
-    C --> D[FINALIZATION]
+    C --> H{Historical Backup evidence?}
+    H -->|yes| V[Fresh Backup proof]
+    V -->|proved| D[FINALIZATION]
+    V -->|unproved| R[Refuse; preserve proof history]
+    H -->|fresh entry| D
     D --> E[COMPLETED]
+    E --> I[Read-only identity and Backup assessment on rerun]
     style A fill:#e1f5fe
     style E fill:#c8e6c9
 ```
@@ -366,7 +372,7 @@ flowchart LR
 2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
 3. **Activation** — journals the concrete Backups it will restore, then creates a one-time full Restore naming them
 4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set (restore-only has no expected names)
-5. **Finalization** — enables BackupSchedule on the new hub
+5. **Finalization** — enables BackupSchedule on the new hub when available and proves Backup continuity; fresh restore-only with no schedule keeps its existing exception
 
 ### State Management
 

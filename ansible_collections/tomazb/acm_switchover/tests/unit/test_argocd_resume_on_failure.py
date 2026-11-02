@@ -3,6 +3,7 @@
 import pathlib
 
 import yaml
+from yaml_contract_helpers import _workflow_entry_sections
 
 PLAYBOOK_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
 DEFAULTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "defaults"
@@ -68,7 +69,7 @@ def test_switchover_recovery_is_nested_after_the_identity_barrier():
         "tasks_from": "identity_barrier",
     }
     assert "rescue" in nested
-    assert "when" not in nested
+    assert _workflow_entry_sections(outer)[3] is nested
     assert [task.get("name") for task in outer["always"]] == [
         "Build switchover report contract",
         "Write switchover report artifact",

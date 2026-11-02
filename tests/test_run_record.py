@@ -22,9 +22,21 @@ from lib import run_record as run_record_module
 from lib.cli_outcomes import CliOperationHooks, run_operation_mode
 from lib.migration_evidence import MigrationEvidenceError
 from lib.migration_journal import validate_journal_transition
-from lib.run_record import ErrorRecord, HubFacts, ManagedClusterExpectation, RunRecord, RunSummary, StepRecord
+from lib.run_record import (
+    ErrorRecord,
+    HubFacts,
+    ManagedClusterExpectation,
+    RunRecord,
+    RunSummary,
+    StepRecord,
+)
 from lib.utils import Phase, StateLoadError, StateManager
-from lib.workflow import CompletedStateConfig, FailedStateConfig, handle_completed_state, handle_failed_state
+from lib.workflow import (
+    CompletedStateConfig,
+    FailedStateConfig,
+    handle_completed_state,
+    handle_failed_state,
+)
 
 VECTORS = Path(__file__).resolve().parent / "fixtures" / "r4_04_migration_evidence_vectors.json"
 
@@ -109,7 +121,10 @@ class TestSavedBackupSchedule:
         assert record.saved_backup_schedule() is None
 
     def test_round_trip(self, record):
-        bs = {"metadata": {"name": "schedule-acm"}, "spec": {"veleroSchedule": "0 */4 * * *"}}
+        bs = {
+            "metadata": {"name": "schedule-acm"},
+            "spec": {"veleroSchedule": "0 */4 * * *"},
+        }
         record.record_saved_backup_schedule(bs)
         assert record.saved_backup_schedule() == bs
 
@@ -155,8 +170,16 @@ class TestRunSummary:
         snapshot = {
             "current_phase": "finalization",
             "completed_steps": [
-                {"name": "preflight_validation", "phase": "preflight", "timestamp": "t1"},
-                {"name": "activate_managed_clusters", "phase": "activation", "timestamp": "t2"},
+                {
+                    "name": "preflight_validation",
+                    "phase": "preflight",
+                    "timestamp": "t1",
+                },
+                {
+                    "name": "activate_managed_clusters",
+                    "phase": "activation",
+                    "timestamp": "t2",
+                },
             ],
             "errors": [{"error": "boom", "phase": "activation", "timestamp": "t3"}],
             "config": {"preflight_results": [{"check": "versions", "status": "pass"}]},
@@ -228,7 +251,13 @@ class TestInterfaceOnlyPersistence:
         legacy = {
             "version": "1.0",
             "current_phase": "finalization",
-            "completed_steps": [{"name": "activate_managed_clusters", "phase": "activation", "timestamp": "t"}],
+            "completed_steps": [
+                {
+                    "name": "activate_managed_clusters",
+                    "phase": "activation",
+                    "timestamp": "t",
+                }
+            ],
             "errors": [],
             "config": {
                 "primary_version": "2.13.2",
@@ -478,7 +507,13 @@ class TestMalformedConfigContainer:
 
     @pytest.mark.parametrize(
         "snapshot, present",
-        [({"config": {}}, False), ({"config": {"x": 1}}, False), ({"config": []}, False), ({}, False), ([], False)],
+        [
+            ({"config": {}}, False),
+            ({"config": {"x": 1}}, False),
+            ({"config": []}, False),
+            ({}, False),
+            ([], False),
+        ],
     )
     def test_presence_is_false_without_the_key(self, snapshot, present):
         assert run_record_module.migration_journal_present(snapshot) is present
@@ -529,7 +564,10 @@ class TestImplicitResetsKeepTheJournal:
 
     def test_missing_contexts_on_progress_refuse_instead_of_resetting(self, tmp_path, first_write):
         path = _journal_state(
-            tmp_path, first_write, contexts={"primary": None, "secondary": None}, current_phase="activation"
+            tmp_path,
+            first_write,
+            contexts={"primary": None, "secondary": None},
+            current_phase="activation",
         )
         state = StateManager(str(path))
         untouched = _Untouched(path, state)
@@ -566,7 +604,9 @@ class TestImplicitResetsKeepTheJournal:
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
             with pytest.raises(SystemExit):
                 _prepare_runtime(
-                    _cli_args(reset_state=False, secondary_context="hub-c"), logging.getLogger("test"), str(path)
+                    _cli_args(reset_state=False, secondary_context="hub-c"),
+                    logging.getLogger("test"),
+                    str(path),
                 )
         assert path.read_bytes() == before
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
@@ -583,17 +623,30 @@ class TestImplicitResetsKeepTheJournal:
 
     def test_force_on_a_stale_completed_state_refuses(self, tmp_path, first_write):
         path = _journal_state(
-            tmp_path, first_write, current_phase="completed", last_updated="2020-01-01T00:00:00+00:00"
+            tmp_path,
+            first_write,
+            current_phase="completed",
+            last_updated="2020-01-01T00:00:00+00:00",
         )
         state = StateManager(str(path))
         config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
         untouched = _Untouched(path, state)
-        with pytest.raises(run_record_module.MigrationJournalResetRefused, match="--reset-state"):
-            handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config)
+        assert (
+            handle_completed_state(
+                argparse.Namespace(force=True),
+                state,
+                logging.getLogger("test"),
+                config,
+                primary=None,
+                secondary=None,
+                backup_continuity_guard=lambda *a, **k: True,
+            )
+            is False
+        )
         untouched.assert_unchanged()
         assert RunRecord(StateManager(str(path))).migration_backups() == first_write
 
-    def test_journal_free_force_resets_are_unchanged(self, tmp_path):
+    def test_failed_force_reset_survives_but_completed_never_resets(self, tmp_path):
         failed = _write_raw_state(tmp_path, current_phase="failed", errors=[])
         state = StateManager(str(failed))
         config = FailedStateConfig(resumable_phases=(Phase.ACTIVATION,), operation_noun="switchover")
@@ -602,11 +655,26 @@ class TestImplicitResetsKeepTheJournal:
 
         completed_dir = tmp_path / "completed"
         completed_dir.mkdir()
-        completed = _write_raw_state(completed_dir, current_phase="completed", last_updated="2020-01-01T00:00:00+00:00")
+        completed = _write_raw_state(
+            completed_dir,
+            current_phase="completed",
+            last_updated="2020-01-01T00:00:00+00:00",
+        )
         state = StateManager(str(completed))
         config = CompletedStateConfig(operation_label="Switchover", operation_noun="switchover")
-        assert handle_completed_state(argparse.Namespace(force=True), state, logging.getLogger("test"), config) is False
-        assert state.get_current_phase() == Phase.INIT
+        assert (
+            handle_completed_state(
+                argparse.Namespace(force=True),
+                state,
+                logging.getLogger("test"),
+                config,
+                primary=None,
+                secondary=None,
+                backup_continuity_guard=lambda *a, **k: True,
+            )
+            is False
+        )
+        assert state.get_current_phase() == Phase.COMPLETED
 
 
 class TestResetRefusalWritesNothing:
@@ -649,7 +717,11 @@ class TestResetRefusalWritesNothing:
         path = _journal_state(tmp_path, first_write)
         before = path.read_bytes()
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
-            with patch.object(StateManager, "restore_state_snapshot", side_effect=AssertionError("nothing to restore")):
+            with patch.object(
+                StateManager,
+                "restore_state_snapshot",
+                side_effect=AssertionError("nothing to restore"),
+            ):
                 with pytest.raises(SystemExit) as exc_info:
                     _prepare_runtime(
                         _cli_args(reset_state=False, dry_run=True, secondary_context="hub-c"),
@@ -686,12 +758,23 @@ class TestDryRunForceRefusalWritesNothing:
         "argv, primary",
         [
             pytest.param(
-                ["--primary-context", "hub-a", "--secondary-context", "hub-b", "--method", "passive"]
+                [
+                    "--primary-context",
+                    "hub-a",
+                    "--secondary-context",
+                    "hub-b",
+                    "--method",
+                    "passive",
+                ]
                 + ["--old-hub-action", "secondary"],
                 "hub-a",
                 id="switchover",
             ),
-            pytest.param(["--restore-only", "--secondary-context", "hub-b"], None, id="restore-only"),
+            pytest.param(
+                ["--restore-only", "--secondary-context", "hub-b"],
+                None,
+                id="restore-only",
+            ),
         ],
     )
     def test_the_cli_refuses_without_a_rollback_write(self, tmp_path, first_write, fields, argv, primary):
@@ -701,7 +784,14 @@ class TestDryRunForceRefusalWritesNothing:
             raw["last_updated"] = "2020-01-01T00:00:00+00:00"
             path.write_text(json.dumps(raw, indent=2))
         before = path.read_bytes()
-        cli = ["acm_switchover.py", *argv, "--dry-run", "--force", "--state-file", str(path)]
+        cli = [
+            "acm_switchover.py",
+            *argv,
+            "--dry-run",
+            "--force",
+            "--state-file",
+            str(path),
+        ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", cli))
             stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
@@ -722,15 +812,34 @@ class TestDryRunForceRefusalWritesNothing:
         state.ensure_contexts("hub-a", "hub-b")
         state.state.update(current_phase="failed", errors=[])
         state.flush_state()
-        cli = ["acm_switchover.py", "--primary-context", "hub-a", "--secondary-context", "hub-b"]
-        cli += ["--method", "passive", "--old-hub-action", "secondary", "--dry-run", "--state-file", str(path)]
+        cli = [
+            "acm_switchover.py",
+            "--primary-context",
+            "hub-a",
+            "--secondary-context",
+            "hub-b",
+        ]
+        cli += [
+            "--method",
+            "passive",
+            "--old-hub-action",
+            "secondary",
+            "--dry-run",
+            "--state-file",
+            str(path),
+        ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", cli))
             stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
             stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
             stack.enter_context(patch("acm_switchover._write_python_report"))
             restore = stack.enter_context(
-                patch.object(StateManager, "restore_state_snapshot", autospec=True, side_effect=lambda *a: None)
+                patch.object(
+                    StateManager,
+                    "restore_state_snapshot",
+                    autospec=True,
+                    side_effect=lambda *a: None,
+                )
             )
             with pytest.raises(SystemExit) as exc_info:
                 acm_switchover.main()
@@ -747,12 +856,23 @@ class TestIdentityBindingPrecedesNoRefusal:
         "argv, primary",
         [
             pytest.param(
-                ["--primary-context", "hub-a", "--secondary-context", "hub-b", "--method", "passive"]
+                [
+                    "--primary-context",
+                    "hub-a",
+                    "--secondary-context",
+                    "hub-b",
+                    "--method",
+                    "passive",
+                ]
                 + ["--old-hub-action", "secondary"],
                 "hub-a",
                 id="switchover",
             ),
-            pytest.param(["--restore-only", "--secondary-context", "hub-b"], None, id="restore-only"),
+            pytest.param(
+                ["--restore-only", "--secondary-context", "hub-b"],
+                None,
+                id="restore-only",
+            ),
         ],
     )
     def test_the_refused_state_file_is_unchanged(self, tmp_path, first_write, fields, argv, primary):
@@ -766,13 +886,21 @@ class TestIdentityBindingPrecedesNoRefusal:
         clients = []
         for context, uid in (("hub-a", "uid-a"), ("hub-b", "uid-b")):
             client = Mock(context=context, dry_run=False)
-            client.get_cluster_identity.return_value = {"context": context, "cluster_uid": uid}
+            client.get_cluster_identity.return_value = {
+                "context": context,
+                "cluster_uid": uid,
+            }
             clients.append(client)
         live_primary = clients[0] if primary else None
         cli = ["acm_switchover.py", *argv, "--force", "--state-file", str(path)]
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", cli))
-            stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(live_primary, clients[1])))
+            stack.enter_context(
+                patch(
+                    "acm_switchover._initialize_clients",
+                    return_value=(live_primary, clients[1]),
+                )
+            )
             stack.enter_context(patch("acm_switchover._write_python_report"))
             with pytest.raises(SystemExit) as exc_info:
                 acm_switchover.main()
@@ -785,14 +913,23 @@ class TestIdentityBindingPrecedesNoRefusal:
             first_write,
             "hub-a",
             current_phase="failed",
-            errors=[{"error": "activation failed", "phase": "activation", "timestamp": "2024-01-01T00:00:00Z"}],
+            errors=[
+                {
+                    "error": "activation failed",
+                    "phase": "activation",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                }
+            ],
         )
         state = StateManager(str(path))
         state.state.pop("hub_identities", None)
         clients = []
         for context, uid in (("hub-a", "uid-a"), ("hub-b", "uid-b")):
             client = Mock(context=context, dry_run=False)
-            client.get_cluster_identity.return_value = {"context": context, "cluster_uid": uid}
+            client.get_cluster_identity.return_value = {
+                "context": context,
+                "cluster_uid": uid,
+            }
             clients.append(client)
         args = argparse.Namespace(force=True, restore_only=False, dry_run=False, validate_only=False)
         acm_switchover._bind_runtime_hub_identities(args, state, clients[0], clients[1])

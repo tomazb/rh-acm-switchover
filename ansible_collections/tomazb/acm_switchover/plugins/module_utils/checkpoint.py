@@ -196,6 +196,55 @@ def _coerce_count(value):
     return None
 
 
+def backup_continuity_facts(checkpoint) -> dict:
+    """Raw read-only Backup evidence; never coerce missing or malformed values."""
+    if not isinstance(checkpoint, dict):
+        return {"invalid_reason": "invalid_checkpoint"}
+    data, phases = checkpoint.get("operational_data", {}), checkpoint.get("completed_phases", [])
+    if not isinstance(data, dict) or not isinstance(phases, list) or any(not isinstance(p, str) for p in phases):
+        return {"invalid_reason": "invalid_checkpoint"}
+    return copy.deepcopy(
+        {
+            "enabled_at_present": KEY_BACKUP_SCHEDULE_ENABLED_AT in data,
+            "enabled_at": data.get(KEY_BACKUP_SCHEDULE_ENABLED_AT),
+            "finalization_completed": "finalization" in phases,
+            "phase": checkpoint.get("phase"),
+            "phase_status": checkpoint.get("phase_status"),
+            "operation_identity": checkpoint.get("operation_identity"),
+            "pre_enable_cleanup_retry": _pre_enable_cleanup_retry(checkpoint, data, phases),
+        }
+    )
+
+
+def _pre_enable_cleanup_retry(checkpoint: dict, data: dict, phases: list) -> bool:
+    """Recognize active history-free retries that require a new Backup proof.
+
+    not_started re-runs controller and teardown checks before creating intent.
+    Later states carry copied Restore identity and completed prerequisites.
+    Enablement requires terminal cleanup. A terminal journal is admitted only for
+    an explicitly authorized new enable-and-proof attempt, not as historical
+    proof. Read-only physical identity validation still precedes phase entry.
+    """
+    if (
+        checkpoint.get("phase") != "finalization"
+        # Enter preserves the previous phase's status; a mid-phase journal
+        # update can therefore retain 'pass' without completing finalization.
+        or checkpoint.get("phase_status") not in ("enter", "pass", "fail")
+        or "finalization" in phases
+        or KEY_BACKUP_SCHEDULE_ENABLED_AT in data
+    ):
+        return False
+    outcome, journal = classify_migration_backups(checkpoint)
+    return outcome == MIGRATION_JOURNAL_VALID and journal["cleanup"]["state"] in (
+        "not_started",
+        "intent_persisted",
+        "delete_accepted",
+        "recovery_required",
+        "completed",
+        "repaired",
+    )
+
+
 def checkpoint_facts(checkpoint) -> dict:
     """Flattened named view of a checkpoint's cross-phase facts.
 
@@ -219,6 +268,7 @@ def checkpoint_facts(checkpoint) -> dict:
         else {}
     )
     return {
+        "backup_continuity": backup_continuity_facts(checkpoint),
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
         KEY_ARGOCD_DISCOVERY_NAMESPACES: (namespaces if isinstance(namespaces, dict) else {}),
         # Ansible's own boolean vocabulary coerces; anything else — e.g. a

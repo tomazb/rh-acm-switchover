@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,9 @@ def run_finalization(tmp_path):
         published=None,
         tz=None,
         entry=None,
+        restore=False,
+        old_action="secondary",
+        interrupt_after_enable=False,
     ):
         operation = KIND_OPERATION[kind]
         path = tmp_path / "finalization-checkpoint.json"
@@ -105,7 +109,12 @@ def run_finalization(tmp_path):
                         "phase_status": "pass",
                         "completed_phases": ["preflight", "primary_prep", "activation", "post_activation"],
                         "operational_data": {} if journal is None else {"migration_backups": journal},
-                        "operation_identity": _identity(operation),
+                        "operation_identity": dict(
+                            _identity(operation),
+                            restore_only=restore,
+                            old_hub_action=old_action,
+                            **({"primary_context": "", "primary_cluster_uid": ""} if restore else {}),
+                        ),
                         "errors": [],
                         "report_refs": [],
                     }
@@ -121,19 +130,27 @@ def run_finalization(tmp_path):
         kubeconfig = tmp_path / "secondary.kubeconfig"
         write_kubeconfig(kubeconfig, context="secondary-hub", server=hub.url, token="fixture-token")
         primary_kubeconfig = ""
+        primary_hub = None
         if entry == "main":
             # The role entry guard validates the hub inputs as preflight would.
             primary_kubeconfig = str(tmp_path / "primary.kubeconfig")
-            write_kubeconfig(Path(primary_kubeconfig), context="primary-hub", server=hub.url, token="fixture-token")
+            if not restore:
+                primary_hub = FakeMigrationHub(cluster_uid="uid-primary")
+                write_kubeconfig(
+                    Path(primary_kubeconfig), context="primary-hub", server=primary_hub.url, token="fixture-token"
+                )
         variables = {
             "acm_switchover_hubs": {
-                "primary": {"context": "primary-hub", "kubeconfig": primary_kubeconfig},
+                "primary": {
+                    "context": "" if restore else "primary-hub",
+                    "kubeconfig": "" if restore else primary_kubeconfig,
+                },
                 "secondary": {"context": "secondary-hub", "kubeconfig": str(kubeconfig)},
             },
             "acm_switchover_operation": dict(
                 operation,
-                restore_only=False,
-                old_hub_action="secondary",
+                restore_only=restore,
+                old_hub_action=old_action,
                 **({"migration_cleanup_repair": repair} if entry == "main" and repair else {}),
             ),
             "acm_switchover_execution": {
@@ -144,7 +161,7 @@ def run_finalization(tmp_path):
             "_acm_cleanup_poll_delays": [0, 0, 0],
             "acm_finalization_mch_info": {"resources": [{"status": {"currentVersion": hub.version}}]},
             "acm_finalization_restores_info": {"resources": []},
-            "acm_switchover_saved_backup_schedule": {},
+            **({"acm_switchover_saved_backup_schedule": {}} if entry != "main" else {}),
             **(extra or {}),
         }
         # main.yml publishes these facts before the transaction; the role entry guard
@@ -234,15 +251,31 @@ def run_finalization(tmp_path):
         command = ["ansible-playbook", str(playbook), "-i", "localhost,", "-e", f"@{vars_file}"]
         if check:
             command.append("--check")
-        completed = subprocess.run(
-            command,
-            cwd=_repo_root(),
-            capture_output=True,
-            text=True,
-            check=False,
-            env=dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {})),
-            timeout=300,
-        )
+        env = dict(_ansible_env(_repo_root(), tmp_path), **({"TZ": tz} if tz else {}))
+        if interrupt_after_enable:
+            command = [
+                sys.executable,
+                str(
+                    _repo_root()
+                    / "ansible_collections/tomazb/acm_switchover/tests/support/terminal_recovery_trace_runner.py"
+                ),
+                *command[1:],
+            ]
+            env["ACM_TERMINAL_CHECKPOINT"] = str(path)
+            env["ACM_TERMINAL_TRACE"] = str(tmp_path / "enable-interruption.json")
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=_repo_root(),
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=300,
+            )
+        finally:
+            if primary_hub is not None:
+                primary_hub.close()
         return Run(completed, hub, path)
 
     return _run
@@ -250,7 +283,7 @@ def run_finalization(tmp_path):
 
 @pytest.fixture
 def hub():
-    fake = FakeMigrationHub(restores=[passive_restore()], controller=complete_on_mutation)
+    fake = FakeMigrationHub(cluster_uid="uid-secondary", restores=[passive_restore()], controller=complete_on_mutation)
     yield fake
     fake.close()
 

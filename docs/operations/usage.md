@@ -228,9 +228,12 @@ strictly, and never freezes newer Backups (see [Migration evidence](#migration-e
 A resume refuses when the live ACM minor version or the activation method no longer
 matches the journal.
 
-- `--force` never discards a journal. The implicit resets — a stale completed state, a
-  failed state with no resumable phase, a context mismatch, or missing contexts on an
-  in-progress state — refuse with a message pointing at `--reset-state`.
+- `--force` never discards a journal. For an active journaled state, a failed state
+  with no resumable phase, a context mismatch, or missing contexts refuses the implicit
+  reset with a message pointing at `--reset-state`.
+- A stale COMPLETED state refuses unchanged, with or without `--force`. The completed
+  assessment cannot authorize reset or replay. Preserve it for
+  [read-only assessment](#backup-continuity-and-historical-checkpoints).
 - `--reset-state` remains the explicit fresh-run boundary. It deletes the journal along
   with the rest of the state; a later run freezes a new migration.
 - A resume at finalization whose journal lacks `restore.completed_at` or
@@ -690,6 +693,114 @@ Finalization runs in this order on every pass:
    an unreadable inventory refuses to change BackupSchedules.
 4. Backup and MultiClusterHub verification, auto-import reset.
 5. **Old-hub disposition** (`--old-hub-action`), behind the old-hub evidence gate.
+
+### Backup continuity and historical checkpoints
+
+The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+requires fresh Backup proof on historical finalization entry and before a successful
+completed-state no-op. It preserves the original checkpoint. The separately reviewed
+[#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
+is integrated. Compatibility acceptance requires the healthy shipped Collection role and
+playbook execute paths on both supported Ansible lanes, plus the remaining compatibility
+validation and review gates. Local proof-module or completed-no-op results do not
+satisfy the shipped execute gate.
+
+Both implementations require a complete strict Velero Backup inventory. An unreadable,
+unserved, malformed or incomplete initial inventory refuses before Python can reuse a
+recorded name. A positively complete empty inventory is valid. Failed inventory polls
+may retry within the existing bound without replacing the validated baseline.
+
+A qualifying ACM-owned Backup has an aware `metadata.creationTimestamp` at or after
+the retained enable boundary and no later than the current observation. Start and
+completion timestamps cannot establish creation after enablement. Each attempt binds
+the selected name and UID and rechecks the terminal object for clean `Completed`
+status. Pending objects may complete within the existing wait; failure, errors,
+disappearance, replacement or unprovable creation refuses. This does not claim that an
+old checkpoint recorded the current object's UID.
+
+Python reads `config.backup_schedule_enabled_at` without converting falsey values to
+absence. Only an absent key may use exactly one valid historical
+`enable_backup_schedule` step timestamp. That fallback never backfills the key.
+`post_switchover_backup_name` and old verification markers remain unchanged; the markers
+cannot suppress entry proof. A missing recorded object is held rather than replaced
+with another Backup. The Collection reads its own
+`operational_data.backup_schedule_enabled_at` and has no legacy-step fallback. It
+preserves its existing latest-fresh selection and checks the selected object's health.
+A historical finalization or failed-finalization retry cannot be treated as fresh
+merely because every proof field is absent. A Collection checkpoint already in
+finalization with a missing boundary is held even if a runtime variable supplies one,
+except for the proven pre-enable cleanup retry and the approved terminal-journal
+attempt described below.
+
+An executing Collection finalization entry re-reads the retained physical hub identities
+before checkpoint entry or recovery mutations, including a direct role invocation.
+The read-only comparison ignores reset directives; they cannot excuse a mismatched hub.
+An active retry performs required Argo CD re-pause before Backup proof, then refuses
+unproved history before cleanup, schedule changes or old-hub action. Its existing
+failure audit may record the failure, but cannot overwrite the historical boundary or
+its absence. A genuinely fresh entry may establish a new boundary after enablement.
+Fresh restore-only execution with no BackupSchedule retains its existing exception;
+current flags cannot turn ambiguous historical state into that exception.
+
+A canonical journal with unfinished cleanup (`not_started`, `intent_persisted`,
+`delete_accepted` or `recovery_required`) can establish that a retry stopped before
+enablement, because enablement requires terminal cleanup. A `not_started` retry must
+re-run the controller and teardown checks before creating cleanup intent. Later
+states retain the copied Restore identity and completed prerequisites. This narrow
+case also requires raw absence of all recorded Backup boundary, name and enable or
+verification history. It permits the existing guarded cleanup or acknowledged repair
+after the normal identity and Argo CD gates. It does not prove Backup continuity.
+The retry must establish a genuinely new enable boundary and fresh Backup proof before
+success; restore-only cannot use the no-schedule exception on this historical path.
+Terminal journals cannot establish this pre-enable exception. A separately approved
+active FINALIZATION recovery may instead use a valid `completed` or `repaired` journal
+and raw absence of all Backup history to attempt ordinary enablement and new proof.
+This does not establish what happened before the retry. Existing pre-enable operations,
+including any owed old-hub observability cleanup, retain their reviewed order and
+migration/journal/locator gates. The retry must record a new watch boundary and prove
+a qualifying Backup created at or after it before later old-hub handling or success.
+A saved boundary is present history. If Python stops after saving it but before the
+enable step marker, the next retry proves a Backup against that boundary, re-runs
+idempotent enablement and keeps the saved boundary; the Collection likewise keeps a
+loaded boundary. Only a retry without a saved boundary records a new one.
+It cannot use the restore-only no-schedule exception. Any present Backup history,
+malformed journal or completed lifecycle retains the existing assessment/refusal;
+COMPLETED always remains read-only.
+
+This bounded new-attempt procedure was [explicitly approved under #342](https://github.com/tomazb/rh-acm-switchover/issues/342#issuecomment-6261269794).
+It covers a current failure or interruption after cleanup, including enablement before
+the boundary was persisted, without claiming to distinguish that history from an older
+history-free terminal journal. Existing journal facts remain intact.
+
+A completed attempt compares retained contexts and physical hub identities against
+fresh discovery, then proves Backup continuity before any phase or mutation-capable
+rescue. A valid recent Python completed state, or a valid completed Collection
+checkpoint, returns a read-only no-op. Unproved history returns non-success without
+checkpoint writes, reset, phase replay or error append. Existing Python stale-completed
+refusal still applies. Collection completed assessment also refuses active reset or
+`reset_from` controls. On a completed checkpoint, Python `--validate-only` and
+Collection `mode: validate` perform this read-only completed assessment instead of
+replaying preflight. Dry-run, validate and native Ansible check mode cannot promote
+checkpoint proof.
+
+Collection proof facts are internal, not operator inputs. Cached assessment facts do
+not replace the checkpoint read or current proof. Arbitrary extra-variable overrides
+of internal checkpoint/proof facts are outside this supported-input contract.
+
+For read-only assessment, retain the original checkpoint and checksum, exact executable
+commit, contexts and physical hub IDs, recorded name and markers, raw boundary presence
+and source, migration journal, and sanitized fresh Backup metadata/status. Legitimate
+runs may remain held when the object was pruned, a boundary is missing or ambiguous, or
+a crash left finalization without proof outside the bounded active procedure above.
+No general checkpoint migration or recovery mutation is provided. Do not delete markers,
+rewrite timestamps, substitute names, backfill identity,
+rewind phases, reset the store or use an older executable as a general repair. Any such
+recovery needs a separately approved procedure. A human acknowledgement is not Backup
+proof. This assessment does not retroactively prove earlier phases; the independent
+[klusterlet marker residual #352](https://github.com/tomazb/rh-acm-switchover/issues/352)
+remains separate.
+
+### Old-hub evidence gate
 
 The **old-hub evidence gate** runs immediately before every integrated old-hub action. It
 requires `post_activation.completed_at`, a `completed` or `repaired` cleanup, the activation
