@@ -73,7 +73,7 @@ restore-completion evidence by setting `current_phase` in its state file, the co
 uses `checkpoint.reset_from: post_activation` (or `activation`), which keeps the journal.
 This is a pre-existing difference in rewind tooling, not a behavior divergence.
 
-The #342 candidate adds no recovery flag or state translation. Python's saved
+The #342 change adds no recovery flag or state translation. Python's saved
 `post_switchover_backup_name` and historical `enable_backup_schedule` step are not
 Collection inputs. The Collection requires its own raw saved enable boundary; an
 active retry already in finalization cannot substitute a runtime boundary for historical

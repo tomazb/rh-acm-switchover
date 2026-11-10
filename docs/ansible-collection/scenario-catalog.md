@@ -190,9 +190,9 @@ resume compatibility remain in
 [collection-identity]: ../../ansible_collections/tomazb/acm_switchover/tests/integration/test_distinct_hub_identity_barrier.py
 [collection-checkpoint]: ../../ansible_collections/tomazb/acm_switchover/tests/scenario/test_checkpoint_resume.py
 
-## Backup continuity compatibility candidate
+## Backup continuity compatibility
 
-The #342 candidate is exercised by the real Python CLI/runner lifecycle tests and
+The #342 change is exercised by the real Python CLI/runner lifecycle tests and
 Collection `tests/integration/test_backup_continuity_runtime.py` plus
 `tests/scenario/test_backup_continuity_compatibility.py`. Local fake HTTP supplies
 Kubernetes responses; real Ansible action/module loading and checkpoint files establish

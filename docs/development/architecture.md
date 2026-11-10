@@ -522,7 +522,7 @@ The [operator contract](../operations/usage.md#backup-continuity-and-historical-
 records the Python absent-only legacy fallback, independent Collection selection,
 read-only recovery boundary, and the shipped-positive acceptance required on both
 supported lanes after the separately reviewed #367 cadence correction.
-The diagram describes the #342 candidate, not a completed merge or live certification.
+The diagram describes the #342 behavior merged with PR #369, not live certification.
 
 The Restore-cleanup decisions are pure functions in `lib/migration_cleanup.py`; `Finalization`
 owns the strict reads, the guarded DELETE and the journal writes. The order is:

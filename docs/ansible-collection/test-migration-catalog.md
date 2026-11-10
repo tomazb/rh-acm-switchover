@@ -107,7 +107,7 @@ Current boundary tests should verify:
   scenario coverage use the paths above. The endpoint lanes are
   `ansible-core` 2.16 on Python 3.11 and `ansible-core` 2.21 on Python 3.12.
 
-The #342 rows describe candidate regression coverage, not terminal merge or live
+The #342 rows describe regression coverage merged with PR #369, not live
 certification. The separately reviewed
 [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367) is integrated.
 Healthy shipped role and playbook execute-positive acceptance is covered on both supported

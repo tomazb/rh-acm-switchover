@@ -23,7 +23,7 @@ Intentional parity changes require explicit operator approval before implementat
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 | RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 
-Backup continuity remains `dual-supported`. The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+Backup continuity remains `dual-supported`. The [#342 change](https://github.com/tomazb/rh-acm-switchover/pull/369)
 adds independent creation-time and terminal Backup proof before historical finalization
 or a completed no-op. Existing names, markers, boundaries and journal formats remain
 unchanged. Python alone has its absent-only historical enable-step fallback and recorded
