@@ -39,6 +39,13 @@ Source: `lib/`, `modules/`, `scripts/`
 | `acm_switchover.py` resumed-phase input checks (`_resolve_managed_cluster_expectation`, `_require_waivable_recorded_expectation`) | `roles/common/tasks/guard_role_entry.yml`, included at the entry of `activation`, `post_activation` and `finalization` | 3 |
 | `modules/decommission_identity.py` (`capture_operator_identity`, `classify_pods`) | `plugins/modules/acm_pod_owner_classify.py` (`capture_identity` and `classify` operations), `plugins/module_utils/pod_owner_classify.py` | 6 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py`. A corrupt checkpoint (invalid JSON, including bytes that are not valid UTF-8, or a non-object top level) is preserved in place with a forensic copy and blocks later runs, as `StateManager` does for a corrupt state file (R4-04 PR B) | 4 |
+| `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
+| `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
+| `modules/preflight/reporter.py` and Python-only `lib/report_artifacts.py` | `plugins/modules/acm_preflight_report.py`, `plugins/modules/acm_report_artifact.py`, playbook report contracts | 2-6 |
+| `modules/preflight/backup_validators.py` restore analysis | `plugins/modules/acm_restore_info.py` (preflight passive-restore analysis only; activation plans through `acm_migration_evidence`), `roles/preflight/tasks/validate_backups.yml` | 2 |
+| `check_rbac.py` / `scripts/setup-rbac.sh` | `playbooks/rbac_bootstrap.yml`, `roles/rbac_bootstrap/`, `plugins/modules/acm_rbac_bootstrap.py` | 6 |
+| `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
+| `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
 
 Outside completed Backup assessment, in `validate` mode
 (`acm_switchover_execution.mode: validate`), ordinary checkpoint preflight runs the same load + verification path as `execute` mode — including
@@ -101,14 +108,6 @@ table, the UID-preconditioned delete, the bounded waits and the completion proof
 for Python, `roles/decommission/tasks/delete_multiclusterhub.yml` for the collection. The two
 implementations are independent and never import each other at runtime; parity is behavioral and is
 held by shared identity vectors in `tests/test_mch_identity_parity.py`.
-
-| `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
-| `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
-| `modules/preflight/reporter.py` and Python-only `lib/report_artifacts.py` | `plugins/modules/acm_preflight_report.py`, `plugins/modules/acm_report_artifact.py`, playbook report contracts | 2-6 |
-| `modules/preflight/backup_validators.py` restore analysis | `plugins/modules/acm_restore_info.py` (preflight passive-restore analysis only; activation plans through `acm_migration_evidence`), `roles/preflight/tasks/validate_backups.yml` | 2 |
-| `check_rbac.py` / `scripts/setup-rbac.sh` | `playbooks/rbac_bootstrap.yml`, `roles/rbac_bootstrap/`, `plugins/modules/acm_rbac_bootstrap.py` | 6 |
-| `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
-| `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
 
 ## Activation Wait Contract (collection)
 
