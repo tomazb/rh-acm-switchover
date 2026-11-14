@@ -98,7 +98,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   get, list (`operators.coreos.com`), `deployments` get and `replicasets` get (`apps`), and the
   decommission extension ClusterRole moves from `multiclusterhubs` delete to get, delete. Both
   validators require these on standalone and integrated decommission.
+- Added one shared strict Kubernetes read contract across both form factors (R4-03). The Python CLI
+  gains `lib/strict_read.py` (`StrictReadOutcome`, `StrictReadStatus`) plus six strict `KubeClient`
+  producers — `list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`,
+  `list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict` — and the Collection's
+  `acm_k8s_read_outcome` module is extended to the same algebra. A strict read distinguishes a
+  positively complete inventory from a positive absence proof from an unverifiable error: an error
+  is never absence, absence never carries an inventory, and neither ever synthesizes a
+  `resourceVersion`. Lists paginate completely under a fixed page size and page budget, every page
+  of one read must be served at page 1's snapshot revision, and an expired continuation restarts
+  the whole read exactly once before failing closed. Kind absence is proven only by a successful,
+  decoded, structurally valid `APIResourceList` that lacks the exact canonical resource name, which
+  callers supply explicitly and the code never synthesizes from `kind`.
+- Phase 9 lab readiness checklist separating Tier A physical-identity readiness from Tier B ACM/OADP/GitOps known-state preparation.
 
+- Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
+  identity proof, complete pagination, freshness/provenance binding, stable distinct fingerprints, and fail-closed
+  recursively audited non-certification artifacts. Logical-role and mutation authority remain deferred to Phase 9C.
+- Added live RBAC bootstrap certification scenario (`rbac-bootstrap-live`) for release validation that validates applied cluster permissions end-to-end using SubjectAccessReview against live or disposable clusters.
+- Added opt-in environment variable `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` to gate live RBAC certification; the scenario is skipped when not explicitly enabled, keeping normal release validation safe for production environments.
+- Added `tests/release/checks/rbac_certification.py` module that validates operator and validator role permissions, including MCO delete permission for old-hub finalization and full decommission delete permissions.
+- Added `docs/deployment/rbac-live-certification.md` guide explaining live certification setup, execution flow, artifacts, and comparison to static RBAC parity checks.
+- Added example release profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml` demonstrating live RBAC certification scenario configuration.
+- Added UID-preconditioned MultiClusterObservability deletion with a durable per-resource phase record and a
+  fresh completion proof on every path that deletes it: Python `KubeClient.delete_custom_resource_preconditioned`
+  plus the shared `Decommission._teardown_resource` phase machine, and the collection's
+  `acm_uid_guarded_delete` module.
+- Added the destination-observability gate that runs before that MultiClusterObservability delete on an
+  integrated switchover, with its override `--acknowledge-observability-not-migrated` (Python) /
+  `acm_switchover_decommission.acknowledge_observability_not_migrated` (collection), valid only for an
+  integrated switchover with `old_hub_action: decommission`.
+- Added cluster-scoped `get` on `multiclusterobservabilities` to the standalone decommission RBAC extension
+  (`deploy/rbac/extensions/decommission/clusterrole.yaml` and its collection-bundled and Helm-rendered copies)
+  and to the Python/collection standalone permission tables, because the standalone teardown reads the named
+  MultiClusterObservability before deleting it and again for the final absence proof, so the extension is
+  self-consistent with the calls that teardown makes.
+
+### Changed
+
+- **Python CLI `kubernetes` floor raised to 29.0.0 (#358).** The root `requirements.txt` now
+  declares `kubernetes>=29.0.0`. The previous `>=28.0.0` was unreachable there: 28.1.0, the lowest
+  final release it admitted, requires `urllib3<2`, while the root also requires
+  `urllib3>=2.6.3,<3`. The Ansible Collection keeps `kubernetes>=28.0.0` (lowest final release
+  28.1.0), so the two form factors now declare different client floors. This is a dependency
+  support boundary only; runtime behaviour and parity are unchanged. CI replaces
+  `kubernetes-min-client` with `kubernetes-min-client-cli`, which installs the complete root
+  requirements at 29.0.0, and `kubernetes-min-client-collection`, which installs only the
+  collection requirements at 28.1.0 and also runs the shared R4-06 parity harness there. New guardrails fail on any disagreement between the
+  declared floors, the CI pins and `docs/compatibility.md`.
+- **Explicit `--min-managed-clusters` / `min_managed_clusters` is now an additional floor (R4-04).**
+  It no longer replaces the expected names derived by preflight, and explicit `0` permits an empty
+  destination only when no name is expected. Use the audited waiver to lift the name check.
+- **ACM Restore completion is stricter (R4-04).** The activation completion proof accepts only
+  `Finished` (a patched passive sync Restore also `Enabled`, with the full child proof) and requires
+  every required Velero child Restore to be `Completed`; `Completed` and benign `FinishedWithErrors`
+  are no longer accepted for the activated Restore. The benign `FinishedWithErrors` rule remains for
+  the pre-activation passive sync readiness check only. On ACM 2.12–2.16, a `passive_patch` whose
+  passive sync Restore has an owner child bound to a dedicated hive or cluster credential Backup,
+  including a historical one, cannot complete.
+- Activation no longer recreates the passive sync Restore after a failed `restore-acm-activate`
+  create: the error says whether the passive Restore was deleted and the re-run re-proves the hub
+  from the journal. A Restore at the target name that the journal does not record is never adopted,
+  and a recorded mutation or wait step without its journal evidence refuses (with `--reset-state`
+  guidance where only a fresh run can recover).
+- A migration journal blocks the implicit resets (`--force` on a stale completed or unresumable
+  failed state, context mismatches); `--reset-state` / `checkpoint.reset: true` remain the explicit
+  fresh-run boundary. A resume at finalization whose journal lacks `restore.completed_at` or
+  `post_activation.completed_at` refuses on both sides.
+- **Collection execute mode requires the checkpoint (R4-04).** An executing `activation` refuses
+  without `acm_switchover_execution.checkpoint.enabled: true`, because the journal lives there.
+  Direct `activation`, `post_activation` and `finalization` role entries validate their operator
+  inputs, restore the recorded ManagedCluster expectation, and (activation and post-activation, in
+  execute mode, without an explicit minimum) refuse when none is recorded; a direct `validate` entry
+  mutates nothing.
+- Finalization order (both form factors): the journaled Restore cleanup runs first, then the
+  conditional old-hub observability teardown, then the generic cleanup of other-name switchover
+  Restores (only once the journaled cleanup is terminal) and a fresh locator-absence gate before
+  BackupSchedule enablement, then the old-hub disposition. BackupSchedule inventory reads are
+  strict: an unreadable inventory refuses to change BackupSchedules.
+- **Breaking (collection module interface):** `acm_restore_info` is now preflight passive-restore
+  analysis only. The `method`, `activation_method` and `backup_name` options and the `patch`,
+  `operation` and `wait_target` outputs are removed, and it always reports `changed: false`;
+  activation plans through `acm_migration_evidence`.
+
+- The root test lane (`run_tests.sh` and CI) and the collection unit and integration lanes
+  (`ansible-collection-foundation.yml`) now run under `pytest-xdist` with
+  `-n auto --dist worksteal` (#312). `pytest-xdist>=3.2.1,<4` is added to `requirements-dev.txt`
+  and to the collection workflow's dependency install. Release-framework, live certification,
+  E2E, and collection scenario lanes stay serial, and `setup.cfg` does not enable parallelism by
+  default. `tests/test_ci_guardrails.py` now fails if a serial lane gains `-n`/`--dist`, a
+  parallel lane loses them, or `setup.cfg` enables xdist globally.
+  - The `ordered_bounded_map` worker-timeout tests replace their 40 ms wall-clock bounds.
+    - Workers block on an event.
+    - The deadline passed to `wait` is recorded, which proves one shared batch deadline. The
+      previous bound let a per-future wait pass.
+    - The remaining wall-clock checks are generous ceilings.
+      - The single-worker call has 2 s.
+      - The batch has N × deadline, the hard lower bound of any per-future waiting, which leaves
+        (N − 1) × deadline of scheduling slack.
+  - The ManagedCluster rescue-contract tests in `test_decommission_role_contracts.py` inject
+    their deliberate fault into a private copy of the collection. They no longer rewrite the
+    shipped `teardown_one_managed_cluster.yml` in place, which under parallel workers leaked the
+    fault into concurrent tests and could leave the tracked role file corrupted. They now also
+    assert that the injected task is what failed. The redundant blanket-rescue variant is
+    folded into a parametrized test.
+  - `tests/e2e/conftest.py` fails every selected `e2e`-marked test inside a pytest-xdist
+    worker before any fixture runs. An inherited `-n`, for example from `PYTEST_ADDOPTS`, is
+    now accepted rather than rejected. Serial runs, `-n 0` and `--collect-only` are unaffected.
+  - The connection-failure runtime test keeps its unused port bound for the whole run, so a
+    concurrently started fake API server cannot be handed the same port.
+  - The decommission check-mode fixtures run their `ansible-playbook` harness once per pytest
+    run rather than once per worker.
+    - The shared result lives in pytest's temporary root, keyed by the xdist run ID.
+    - It is written atomically.
+    - A failed run is not repeated by the other workers.
+- Documentation now publishes the complete decommission substep outcome
+  vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
+  `failed`), distinguishes `precondition_noop` from `completed`, and clarifies
+  that R4-03 resource and resume-continuity identity is not wrong-target hub
+  identity. This records behavior already implemented; it adds no runtime
+  behavior (#309).
+- `AGENTS.md` now binds verification claims to the condition actually established on the
+  exercised test surface, distinguishing unapplied, surviving, detected, and
+  unrelated-failure mutation outcomes; requires a static guard to protect its semantic
+  contract once equivalent syntactic evasions show spelling enumeration is not converging;
+  and requires a current, concrete justification before a proposed design requirement
+  becomes mandatory, keeping justification separate from implementation authorization
+  (#292).
+- The Collection `acm_k8s_read_outcome` module now reclassifies a **positive** discovery miss from
+  `read_status: error` to the new `read_status: kind_not_served`, so a caller can tell "this cluster
+  does not serve that kind" from "this read could not be verified". Every unverifiable discovery
+  outcome — HTTP 404, 401/403, 5xx, timeout, TLS or transport failure, decode failure, or a
+  malformed discovery document — remains `error`. The module also always publishes a
+  `resource_version` result key, which is the real revision on `ok` and `null` on every other
+  outcome.
+- **Breaking (collection module interface):** `acm_k8s_read_outcome` now requires a
+  `resource_name` input — the exact canonical Kubernetes APIResource name (plural) for `kind`,
+  never synthesized from `kind`. Both in-repo call sites are updated in this change, but any
+  out-of-tree playbook invoking this module directly must add it; a missing or blank value is
+  rejected as `read_status: error` before any client work.
+- Normal two-hub switchovers now fail closed when the primary and secondary
+  contexts are identical or resolve to the same live `kube-system` Namespace
+  UID. The distinct physical-hub guard runs before a mutation-capable phase in
+  both supported form factors; restore-only and standalone decommission flows
+  are unchanged.
+- Recorded that Issue #188 satisfied the Phase 9B live-exit gate. Current-status docs no longer say that
+  gate remains blocked. Fake API tests and Phase 9B artifacts remain non-certification; Phase 9C stays
+  blocked.
+- Refreshed `AGENTS.md` into a policy-first durable repository authority (#245). It now states repository-wide invariants and delegates changing detail to named authority documents, adding a mandatory start gate, an ordered authority hierarchy for resolving conflicts, a governed finding-disposition model, and a verification matrix keyed to the changed surface. Removed stale content that the repository had outgrown: the "monolithic orchestrator" description of the Python CLI, the claim that each phase handler checks the current phase, the "Phase 9B remains blocked" status, a command mislabelled as the full suite, and duplicated parity and module inventories. Release governance now names all eight enforced version surfaces, including `ansible_collections/tomazb/acm_switchover/galaxy.yml`, and defers to the collection compatibility authority for supported versions. Claude-specific hook, SKILLS, and graphify mechanics moved to `CLAUDE.md`; documentation guardrails now assert durable policy semantics instead of historical issue-specific sentences.
+- **Ansible Collection supported-version contract (breaking for `ansible-core` 2.15 users).** The collection now requires `ansible-core >=2.16.0,<2.22` (was `>=2.15.0`, unbounded) and `kubernetes.core >=6.0.0,<7.0.0` (was `>=3.0.0`, unbounded). `ansible-core` 2.15 has been EOL since November 2024 and is rejected by every `kubernetes.core` release from 5.4.4 onward; the previous unbounded constraints resolved `kubernetes.core` 6.5.0 against a 2.15 lane, which warned `does not support Ansible version` while CI still reported success. Collection CI now runs a two-lane matrix (`ansible-core` 2.16 on Python 3.11, 2.21 on Python 3.12) on pull requests **and** on pushes to `ansible`, and fails instead of warning when a resolved collection does not support the lane. The collection `requirements.txt` floor moves to `kubernetes>=28.0.0`, matching the repository root. `ansible_collections/tomazb/acm_switchover/docs/compatibility.md` is the new single authority for supported versions, the AAP posture, and the local validation commands (#244).
+- Repaired the collection execution-environment definition, whose base image `quay.io/ansible/ansible-runner:stable-2.15-latest` did not exist — that image repository has been unmaintained since 2022. It now builds from `docker.io/redhat/ubi9:latest` with an explicit `ansible-core` pin, and is documented as a build input that is not repository-tested. No AAP or certification claim is made (#244).
+- Clarified that ordinary development accumulates under `[Unreleased]` without version bumps or tags, while explicit releases synchronize every version location and tag the exact release commit.
+- Deduplicated the Ansible preflight RBAC validation task file: primary/secondary hub blocks now run through one hub-parameterized shared task file (`validate_rbac_hub.yml`) driven by an explicit per-hub table, mirroring the Python H1 hub-role loop (Thermos `R2-H3`); registered facts, fail-closed CRD discovery behavior, and operator-facing messages are unchanged.
+- Python RBAC validator cluster table (`VALIDATOR_CLUSTER_PERMISSIONS`) is now derived from the operator table by stripping mutating verbs, with the managedclusters `patch` exception recorded as explicit, import-time-verified data; primary/secondary hub RBAC validation is deduplicated behind a hub-parameterized `_validate_hub()` loop. No behavior change: permission sets, fail-closed semantics, and operator-facing messages are unchanged (Thermos `H1`).
+- Python state and collection checkpoints now bind resume validation to live hub cluster identities, rejecting same-context retargeting to a different cluster before mutation.
+- Collection preflight now refreshes MultiClusterHub discovery during execute-mode runs even when tests or callers pre-seed discovery variables, preventing stale cached MCH data from satisfying live mutation validation.
+- Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
+- Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
+- Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or explicit `acm_switchover_operation.min_managed_clusters: 0` with no expected names (collection), which permits it through both activation and post-activation. The collection's `acm_switchover_operation.allow_zero_managed_clusters: true` is not sufficient on its own: it lowers only the post-activation floor, and only when the minimum is omitted; activation still requires one restored non-local ManagedCluster.
+- Python CLI ArgoCD resume-only now fails closed when the provided contexts do not match the state file's recorded contexts. Operators must use `--force` to override.
+- Collection checkpoint identity validation now requires `operation_identity` in schema 2.0 checkpoints that have completed phases. Clear the checkpoint file or re-run from scratch if upgrading from an older checkpoint format.
+- Collection standalone Argo CD resume now validates checkpoint operation identity against live hub `kube-system` namespace UIDs before resuming Applications, and accepts explicitly swapped two-hub contexts only when both context names and cluster UIDs match the checkpoint.
+- Collection mutation tasks now default missing `acm_switchover_execution.mode` to `dry_run`. Operators must explicitly set `mode: execute` for live runs.
+- Generated service-account kubeconfigs now default to 24-hour tokens across the Python CLI setup wrapper, Bash kubeconfig helpers, and collection RBAC bootstrap. Operators can still request longer-lived tokens explicitly with `--token-duration` or `acm_switchover_rbac_bootstrap.token_duration`.
+- Container bootstrap images are now digest-pinned, the bundled OpenShift client default is updated to `stable-4.21`, and downloaded `jq`, `oc`, and `kubectl` artifacts are verified with SHA-256 checksums before installation.
+- Helm RBAC chart rendering now rejects `rbac.customValidatorRules` entries with verbs outside `get`, `list`, and `watch`, preserving the validator ClusterRole's read-only contract.
+- Local `./run_tests.sh` now runs the non-live `tests/release/` helper suite explicitly after the root test lane, and CI runs the same suite in a dedicated `Release Framework Tests` job instead of implying release readiness via a metadata-only job label.
+- Realigned `CONTRIBUTING.md`, `docs/development/testing.md`, `docs/development/architecture.md`, and
+  `docs/development/lab-role-controller-spec.md` with current source, CI, and `AGENTS.md` policy, and locked
+  the corrected contracts with new `tests/test_documentation_guardrails.py` guardrail tests (#246).
+- Consolidated the MultiClusterObservability teardown into one shared phase machine
+  (`Decommission.teardown_observability` / `_teardown_resource`); `Finalization` delegates to it instead of
+  carrying a second copy, and the collection's `delete_observability.yml` routes through the same guarded
+  delete with checkpoint-backed teardown records.
+- Python's standalone `--decommission` and integrated `--old-hub-action secondary` dry-run/preview reads for
+  MultiClusterObservability are now strict: an unreadable API now fails the preview instead of predicting
+  "nothing to delete". Integrated `--old-hub-action decommission --dry-run` does not reach this preview at
+  all — see the `Known Constraints` note in `docs/development/architecture.md`.
+- A completed MultiClusterObservability teardown record now re-proves the resource's absence live on every
+  resume instead of trusting the stored `completed` phase; the immutable completion evidence itself is never
+  rewritten.
+- The collection's finalization adapter for `old_hub_action: secondary`
+  (`roles/finalization/tasks/disable_old_hub_observability.yml`) now requires
+  `acm_switchover_execution.checkpoint.enabled` in execute mode and refuses `mode: validate`; both refusals
+  fire before any read or delete.
+- The standalone `playbooks/decommission.yml` playbook now declares
+  `acm_switchover_standalone_decommission: true` and refuses a truthy
+  `acm_switchover_decommission.acknowledge_observability_not_migrated` in `pre_tasks`, before any read —
+  parity with the Python CLI rejecting `--acknowledge-observability-not-migrated` alongside `--decommission`.
+  A standalone decommission run never evaluates the destination-observability gate.
+- `--old-hub-action secondary`'s MultiClusterObservability teardown is gated on destination-observability
+  proof with no acknowledgement override available on that path.
+- **MultiClusterHub teardown now runs on the shared UID-guarded phase machine on both form
+  factors (#290).** Teardown resolves its target strictly (zero is a clean skip, exactly one is
+  torn down, more than one is refused), writes the durable target UID and the captured operator
+  identity before the UID-preconditioned delete, drains remaining ACM Pods by owner chain within
+  a bounded budget, and fails closed on timeout, on an unverifiable read, or on a recorded
+  identity that no longer holds. Completion evidence is written only from the final live pass,
+  and a completed record is re-proved live on resume instead of being trusted. Pod-name prefix
+  heuristics are no longer authoritative anywhere on this path, and dry run / check mode read
+  only. **Upgrade note (RBAC):** re-apply the shipped RBAC (manifests, Helm chart, ACM policy, or
+  the collection bootstrap role) before running decommission with this version — previous
+  manifests do not grant the new `open-cluster-management` reads, and the RBAC validators now
+  fail closed without them.
 
 ### Fixed
 
@@ -476,229 +678,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matrix now includes the `open-cluster-management` ClusterServiceVersion, Deployment and
   ReplicaSet reads when decommission scope is enabled, so the surface the certification checks
   matches the requests the teardown actually issues.
-
-### Removed
-
-- The collection operator variable `acm_switchover_operation.allow_conventional_passive_restore_fallback`
-  is no longer read anywhere: preflight and activation require a sync-enabled passive Restore, as
-  the Python CLI does. The `acm_restore_info` module option `allow_conventional_name_fallback` is
-  unchanged.
-
-- Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`
-  register (with `tests/test_argocd_manage_script.py`). Use `acm_switchover.py --argocd-resume-only`
-  or the `argocd_manage` collection role; each form factor keeps exactly one pause register
-  (ADR-0001, #207).
-- Removed the production-dead `build_pause_patch()` helper from the collection `module_utils/argocd.py`
-  and the unit tests certifying its unshipped patch shape; parity tests now guard the shipped
-  `pause.yml`/`resume.yml` task YAML directly.
-
-### Added
-- Added one shared strict Kubernetes read contract across both form factors (R4-03). The Python CLI
-  gains `lib/strict_read.py` (`StrictReadOutcome`, `StrictReadStatus`) plus six strict `KubeClient`
-  producers — `list_custom_resources_strict`, `get_custom_resource_strict`, `get_namespace_strict`,
-  `list_pods_strict`, `get_deployment_strict`, and `get_replicaset_strict` — and the Collection's
-  `acm_k8s_read_outcome` module is extended to the same algebra. A strict read distinguishes a
-  positively complete inventory from a positive absence proof from an unverifiable error: an error
-  is never absence, absence never carries an inventory, and neither ever synthesizes a
-  `resourceVersion`. Lists paginate completely under a fixed page size and page budget, every page
-  of one read must be served at page 1's snapshot revision, and an expired continuation restarts
-  the whole read exactly once before failing closed. Kind absence is proven only by a successful,
-  decoded, structurally valid `APIResourceList` that lacks the exact canonical resource name, which
-  callers supply explicitly and the code never synthesizes from `kind`.
-- Phase 9 lab readiness checklist separating Tier A physical-identity readiness from Tier B ACM/OADP/GitOps known-state preparation.
-
-- Added the disabled-by-default Phase 9B lab-controller live discovery client for bounded typed read-only physical hub
-  identity proof, complete pagination, freshness/provenance binding, stable distinct fingerprints, and fail-closed
-  recursively audited non-certification artifacts. Logical-role and mutation authority remain deferred to Phase 9C.
-- Added live RBAC bootstrap certification scenario (`rbac-bootstrap-live`) for release validation that validates applied cluster permissions end-to-end using SubjectAccessReview against live or disposable clusters.
-- Added opt-in environment variable `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` to gate live RBAC certification; the scenario is skipped when not explicitly enabled, keeping normal release validation safe for production environments.
-- Added `tests/release/checks/rbac_certification.py` module that validates operator and validator role permissions, including MCO delete permission for old-hub finalization and full decommission delete permissions.
-- Added `docs/deployment/rbac-live-certification.md` guide explaining live certification setup, execution flow, artifacts, and comparison to static RBAC parity checks.
-- Added example release profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml` demonstrating live RBAC certification scenario configuration.
-- Added UID-preconditioned MultiClusterObservability deletion with a durable per-resource phase record and a
-  fresh completion proof on every path that deletes it: Python `KubeClient.delete_custom_resource_preconditioned`
-  plus the shared `Decommission._teardown_resource` phase machine, and the collection's
-  `acm_uid_guarded_delete` module.
-- Added the destination-observability gate that runs before that MultiClusterObservability delete on an
-  integrated switchover, with its override `--acknowledge-observability-not-migrated` (Python) /
-  `acm_switchover_decommission.acknowledge_observability_not_migrated` (collection), valid only for an
-  integrated switchover with `old_hub_action: decommission`.
-- Added cluster-scoped `get` on `multiclusterobservabilities` to the standalone decommission RBAC extension
-  (`deploy/rbac/extensions/decommission/clusterrole.yaml` and its collection-bundled and Helm-rendered copies)
-  and to the Python/collection standalone permission tables, because the standalone teardown reads the named
-  MultiClusterObservability before deleting it and again for the final absence proof, so the extension is
-  self-consistent with the calls that teardown makes.
-
-### Changed
-
-- **Python CLI `kubernetes` floor raised to 29.0.0 (#358).** The root `requirements.txt` now
-  declares `kubernetes>=29.0.0`. The previous `>=28.0.0` was unreachable there: 28.1.0, the lowest
-  final release it admitted, requires `urllib3<2`, while the root also requires
-  `urllib3>=2.6.3,<3`. The Ansible Collection keeps `kubernetes>=28.0.0` (lowest final release
-  28.1.0), so the two form factors now declare different client floors. This is a dependency
-  support boundary only; runtime behaviour and parity are unchanged. CI replaces
-  `kubernetes-min-client` with `kubernetes-min-client-cli`, which installs the complete root
-  requirements at 29.0.0, and `kubernetes-min-client-collection`, which installs only the
-  collection requirements at 28.1.0 and also runs the shared R4-06 parity harness there. New guardrails fail on any disagreement between the
-  declared floors, the CI pins and `docs/compatibility.md`.
-- **Explicit `--min-managed-clusters` / `min_managed_clusters` is now an additional floor (R4-04).**
-  It no longer replaces the expected names derived by preflight, and explicit `0` permits an empty
-  destination only when no name is expected. Use the audited waiver to lift the name check.
-- **ACM Restore completion is stricter (R4-04).** The activation completion proof accepts only
-  `Finished` (a patched passive sync Restore also `Enabled`, with the full child proof) and requires
-  every required Velero child Restore to be `Completed`; `Completed` and benign `FinishedWithErrors`
-  are no longer accepted for the activated Restore. The benign `FinishedWithErrors` rule remains for
-  the pre-activation passive sync readiness check only. On ACM 2.12–2.16, a `passive_patch` whose
-  passive sync Restore has an owner child bound to a dedicated hive or cluster credential Backup,
-  including a historical one, cannot complete.
-- Activation no longer recreates the passive sync Restore after a failed `restore-acm-activate`
-  create: the error says whether the passive Restore was deleted and the re-run re-proves the hub
-  from the journal. A Restore at the target name that the journal does not record is never adopted,
-  and a recorded mutation or wait step without its journal evidence refuses (with `--reset-state`
-  guidance where only a fresh run can recover).
-- A migration journal blocks the implicit resets (`--force` on a stale completed or unresumable
-  failed state, context mismatches); `--reset-state` / `checkpoint.reset: true` remain the explicit
-  fresh-run boundary. A resume at finalization whose journal lacks `restore.completed_at` or
-  `post_activation.completed_at` refuses on both sides.
-- **Collection execute mode requires the checkpoint (R4-04).** An executing `activation` refuses
-  without `acm_switchover_execution.checkpoint.enabled: true`, because the journal lives there.
-  Direct `activation`, `post_activation` and `finalization` role entries validate their operator
-  inputs, restore the recorded ManagedCluster expectation, and (activation and post-activation, in
-  execute mode, without an explicit minimum) refuse when none is recorded; a direct `validate` entry
-  mutates nothing.
-- Finalization order (both form factors): the journaled Restore cleanup runs first, then the
-  conditional old-hub observability teardown, then the generic cleanup of other-name switchover
-  Restores (only once the journaled cleanup is terminal) and a fresh locator-absence gate before
-  BackupSchedule enablement, then the old-hub disposition. BackupSchedule inventory reads are
-  strict: an unreadable inventory refuses to change BackupSchedules.
-- **Breaking (collection module interface):** `acm_restore_info` is now preflight passive-restore
-  analysis only. The `method`, `activation_method` and `backup_name` options and the `patch`,
-  `operation` and `wait_target` outputs are removed, and it always reports `changed: false`;
-  activation plans through `acm_migration_evidence`.
-
-- The root test lane (`run_tests.sh` and CI) and the collection unit and integration lanes
-  (`ansible-collection-foundation.yml`) now run under `pytest-xdist` with
-  `-n auto --dist worksteal` (#312). `pytest-xdist>=3.2.1,<4` is added to `requirements-dev.txt`
-  and to the collection workflow's dependency install. Release-framework, live certification,
-  E2E, and collection scenario lanes stay serial, and `setup.cfg` does not enable parallelism by
-  default. `tests/test_ci_guardrails.py` now fails if a serial lane gains `-n`/`--dist`, a
-  parallel lane loses them, or `setup.cfg` enables xdist globally.
-  - The `ordered_bounded_map` worker-timeout tests replace their 40 ms wall-clock bounds.
-    - Workers block on an event.
-    - The deadline passed to `wait` is recorded, which proves one shared batch deadline. The
-      previous bound let a per-future wait pass.
-    - The remaining wall-clock checks are generous ceilings.
-      - The single-worker call has 2 s.
-      - The batch has N × deadline, the hard lower bound of any per-future waiting, which leaves
-        (N − 1) × deadline of scheduling slack.
-  - The ManagedCluster rescue-contract tests in `test_decommission_role_contracts.py` inject
-    their deliberate fault into a private copy of the collection. They no longer rewrite the
-    shipped `teardown_one_managed_cluster.yml` in place, which under parallel workers leaked the
-    fault into concurrent tests and could leave the tracked role file corrupted. They now also
-    assert that the injected task is what failed. The redundant blanket-rescue variant is
-    folded into a parametrized test.
-  - `tests/e2e/conftest.py` fails every selected `e2e`-marked test inside a pytest-xdist
-    worker before any fixture runs. An inherited `-n`, for example from `PYTEST_ADDOPTS`, is
-    now accepted rather than rejected. Serial runs, `-n 0` and `--collect-only` are unaffected.
-  - The connection-failure runtime test keeps its unused port bound for the whole run, so a
-    concurrently started fake API server cannot be handed the same port.
-  - The decommission check-mode fixtures run their `ansible-playbook` harness once per pytest
-    run rather than once per worker.
-    - The shared result lives in pytest's temporary root, keyed by the xdist run ID.
-    - It is written atomically.
-    - A failed run is not repeated by the other workers.
-- Documentation now publishes the complete decommission substep outcome
-  vocabulary (`not_requested`, `precondition_noop`, `completed`, `refused`,
-  `failed`), distinguishes `precondition_noop` from `completed`, and clarifies
-  that R4-03 resource and resume-continuity identity is not wrong-target hub
-  identity. This records behavior already implemented; it adds no runtime
-  behavior (#309).
-- `AGENTS.md` now binds verification claims to the condition actually established on the
-  exercised test surface, distinguishing unapplied, surviving, detected, and
-  unrelated-failure mutation outcomes; requires a static guard to protect its semantic
-  contract once equivalent syntactic evasions show spelling enumeration is not converging;
-  and requires a current, concrete justification before a proposed design requirement
-  becomes mandatory, keeping justification separate from implementation authorization
-  (#292).
-- The Collection `acm_k8s_read_outcome` module now reclassifies a **positive** discovery miss from
-  `read_status: error` to the new `read_status: kind_not_served`, so a caller can tell "this cluster
-  does not serve that kind" from "this read could not be verified". Every unverifiable discovery
-  outcome — HTTP 404, 401/403, 5xx, timeout, TLS or transport failure, decode failure, or a
-  malformed discovery document — remains `error`. The module also always publishes a
-  `resource_version` result key, which is the real revision on `ok` and `null` on every other
-  outcome.
-- **Breaking (collection module interface):** `acm_k8s_read_outcome` now requires a
-  `resource_name` input — the exact canonical Kubernetes APIResource name (plural) for `kind`,
-  never synthesized from `kind`. Both in-repo call sites are updated in this change, but any
-  out-of-tree playbook invoking this module directly must add it; a missing or blank value is
-  rejected as `read_status: error` before any client work.
-- Normal two-hub switchovers now fail closed when the primary and secondary
-  contexts are identical or resolve to the same live `kube-system` Namespace
-  UID. The distinct physical-hub guard runs before a mutation-capable phase in
-  both supported form factors; restore-only and standalone decommission flows
-  are unchanged.
-- Recorded that Issue #188 satisfied the Phase 9B live-exit gate. Current-status docs no longer say that
-  gate remains blocked. Fake API tests and Phase 9B artifacts remain non-certification; Phase 9C stays
-  blocked.
-- Refreshed `AGENTS.md` into a policy-first durable repository authority (#245). It now states repository-wide invariants and delegates changing detail to named authority documents, adding a mandatory start gate, an ordered authority hierarchy for resolving conflicts, a governed finding-disposition model, and a verification matrix keyed to the changed surface. Removed stale content that the repository had outgrown: the "monolithic orchestrator" description of the Python CLI, the claim that each phase handler checks the current phase, the "Phase 9B remains blocked" status, a command mislabelled as the full suite, and duplicated parity and module inventories. Release governance now names all eight enforced version surfaces, including `ansible_collections/tomazb/acm_switchover/galaxy.yml`, and defers to the collection compatibility authority for supported versions. Claude-specific hook, SKILLS, and graphify mechanics moved to `CLAUDE.md`; documentation guardrails now assert durable policy semantics instead of historical issue-specific sentences.
-- **Ansible Collection supported-version contract (breaking for `ansible-core` 2.15 users).** The collection now requires `ansible-core >=2.16.0,<2.22` (was `>=2.15.0`, unbounded) and `kubernetes.core >=6.0.0,<7.0.0` (was `>=3.0.0`, unbounded). `ansible-core` 2.15 has been EOL since November 2024 and is rejected by every `kubernetes.core` release from 5.4.4 onward; the previous unbounded constraints resolved `kubernetes.core` 6.5.0 against a 2.15 lane, which warned `does not support Ansible version` while CI still reported success. Collection CI now runs a two-lane matrix (`ansible-core` 2.16 on Python 3.11, 2.21 on Python 3.12) on pull requests **and** on pushes to `ansible`, and fails instead of warning when a resolved collection does not support the lane. The collection `requirements.txt` floor moves to `kubernetes>=28.0.0`, matching the repository root. `ansible_collections/tomazb/acm_switchover/docs/compatibility.md` is the new single authority for supported versions, the AAP posture, and the local validation commands (#244).
-- Repaired the collection execution-environment definition, whose base image `quay.io/ansible/ansible-runner:stable-2.15-latest` did not exist — that image repository has been unmaintained since 2022. It now builds from `docker.io/redhat/ubi9:latest` with an explicit `ansible-core` pin, and is documented as a build input that is not repository-tested. No AAP or certification claim is made (#244).
-- Clarified that ordinary development accumulates under `[Unreleased]` without version bumps or tags, while explicit releases synchronize every version location and tag the exact release commit.
-- Deduplicated the Ansible preflight RBAC validation task file: primary/secondary hub blocks now run through one hub-parameterized shared task file (`validate_rbac_hub.yml`) driven by an explicit per-hub table, mirroring the Python H1 hub-role loop (Thermos `R2-H3`); registered facts, fail-closed CRD discovery behavior, and operator-facing messages are unchanged.
-- Python RBAC validator cluster table (`VALIDATOR_CLUSTER_PERMISSIONS`) is now derived from the operator table by stripping mutating verbs, with the managedclusters `patch` exception recorded as explicit, import-time-verified data; primary/secondary hub RBAC validation is deduplicated behind a hub-parameterized `_validate_hub()` loop. No behavior change: permission sets, fail-closed semantics, and operator-facing messages are unchanged (Thermos `H1`).
-- Python state and collection checkpoints now bind resume validation to live hub cluster identities, rejecting same-context retargeting to a different cluster before mutation.
-- Collection preflight now refreshes MultiClusterHub discovery during execute-mode runs even when tests or callers pre-seed discovery variables, preventing stale cached MCH data from satisfying live mutation validation.
-- Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
-- Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
-- Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or explicit `acm_switchover_operation.min_managed_clusters: 0` with no expected names (collection), which permits it through both activation and post-activation. The collection's `acm_switchover_operation.allow_zero_managed_clusters: true` is not sufficient on its own: it lowers only the post-activation floor, and only when the minimum is omitted; activation still requires one restored non-local ManagedCluster.
-- Python CLI ArgoCD resume-only now fails closed when the provided contexts do not match the state file's recorded contexts. Operators must use `--force` to override.
-- Collection checkpoint identity validation now requires `operation_identity` in schema 2.0 checkpoints that have completed phases. Clear the checkpoint file or re-run from scratch if upgrading from an older checkpoint format.
-- Collection standalone Argo CD resume now validates checkpoint operation identity against live hub `kube-system` namespace UIDs before resuming Applications, and accepts explicitly swapped two-hub contexts only when both context names and cluster UIDs match the checkpoint.
-- Collection mutation tasks now default missing `acm_switchover_execution.mode` to `dry_run`. Operators must explicitly set `mode: execute` for live runs.
-- Generated service-account kubeconfigs now default to 24-hour tokens across the Python CLI setup wrapper, Bash kubeconfig helpers, and collection RBAC bootstrap. Operators can still request longer-lived tokens explicitly with `--token-duration` or `acm_switchover_rbac_bootstrap.token_duration`.
-- Container bootstrap images are now digest-pinned, the bundled OpenShift client default is updated to `stable-4.21`, and downloaded `jq`, `oc`, and `kubectl` artifacts are verified with SHA-256 checksums before installation.
-- Helm RBAC chart rendering now rejects `rbac.customValidatorRules` entries with verbs outside `get`, `list`, and `watch`, preserving the validator ClusterRole's read-only contract.
-- Local `./run_tests.sh` now runs the non-live `tests/release/` helper suite explicitly after the root test lane, and CI runs the same suite in a dedicated `Release Framework Tests` job instead of implying release readiness via a metadata-only job label.
-- Realigned `CONTRIBUTING.md`, `docs/development/testing.md`, `docs/development/architecture.md`, and
-  `docs/development/lab-role-controller-spec.md` with current source, CI, and `AGENTS.md` policy, and locked
-  the corrected contracts with new `tests/test_documentation_guardrails.py` guardrail tests (#246).
-- Consolidated the MultiClusterObservability teardown into one shared phase machine
-  (`Decommission.teardown_observability` / `_teardown_resource`); `Finalization` delegates to it instead of
-  carrying a second copy, and the collection's `delete_observability.yml` routes through the same guarded
-  delete with checkpoint-backed teardown records.
-- Python's standalone `--decommission` and integrated `--old-hub-action secondary` dry-run/preview reads for
-  MultiClusterObservability are now strict: an unreadable API now fails the preview instead of predicting
-  "nothing to delete". Integrated `--old-hub-action decommission --dry-run` does not reach this preview at
-  all — see the `Known Constraints` note in `docs/development/architecture.md`.
-- A completed MultiClusterObservability teardown record now re-proves the resource's absence live on every
-  resume instead of trusting the stored `completed` phase; the immutable completion evidence itself is never
-  rewritten.
-- The collection's finalization adapter for `old_hub_action: secondary`
-  (`roles/finalization/tasks/disable_old_hub_observability.yml`) now requires
-  `acm_switchover_execution.checkpoint.enabled` in execute mode and refuses `mode: validate`; both refusals
-  fire before any read or delete.
-- The standalone `playbooks/decommission.yml` playbook now declares
-  `acm_switchover_standalone_decommission: true` and refuses a truthy
-  `acm_switchover_decommission.acknowledge_observability_not_migrated` in `pre_tasks`, before any read —
-  parity with the Python CLI rejecting `--acknowledge-observability-not-migrated` alongside `--decommission`.
-  A standalone decommission run never evaluates the destination-observability gate.
-- `--old-hub-action secondary`'s MultiClusterObservability teardown is gated on destination-observability
-  proof with no acknowledgement override available on that path.
-- **MultiClusterHub teardown now runs on the shared UID-guarded phase machine on both form
-  factors (#290).** Teardown resolves its target strictly (zero is a clean skip, exactly one is
-  torn down, more than one is refused), writes the durable target UID and the captured operator
-  identity before the UID-preconditioned delete, drains remaining ACM Pods by owner chain within
-  a bounded budget, and fails closed on timeout, on an unverifiable read, or on a recorded
-  identity that no longer holds. Completion evidence is written only from the final live pass,
-  and a completed record is re-proved live on resume instead of being trusted. Pod-name prefix
-  heuristics are no longer authoritative anywhere on this path, and dry run / check mode read
-  only. **Upgrade note (RBAC):** re-apply the shipped RBAC (manifests, Helm chart, ACM policy, or
-  the collection bootstrap role) before running decommission with this version — previous
-  manifests do not grant the new `open-cluster-management` reads, and the RBAC validators now
-  fail closed without them.
-
-### Fixed
-
 - Hardened verification tooling from #257: the default `run_tests.sh` helper lane now neutralizes inherited
   `ACM_RELEASE_PROFILE` and `PYTEST_ADDOPTS`, GitHub Actions smoke-check the real flag-only CLI surface,
   documented `while` verification loops are guarded against swallowed failures, and undeclared dead Safety
@@ -751,6 +730,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The collection operator variable `acm_switchover_operation.allow_conventional_passive_restore_fallback`
+  is no longer read anywhere: preflight and activation require a sync-enabled passive Restore, as
+  the Python CLI does. The `acm_restore_info` module option `allow_conventional_name_fallback` is
+  unchanged.
+
+- Removed the deprecated `scripts/argocd-manage.sh` and its `.state/argocd-pause-state.json`
+  register (with `tests/test_argocd_manage_script.py`). Use `acm_switchover.py --argocd-resume-only`
+  or the `argocd_manage` collection role; each form factor keeps exactly one pause register
+  (ADR-0001, #207).
+- Removed the production-dead `build_pause_patch()` helper from the collection `module_utils/argocd.py`
+  and the unit tests certifying its unshipped patch shape; parity tests now guard the shipped
+  `pause.yml`/`resume.yml` task YAML directly.
 - Removed the deprecated `modules/preflight_validators.py` compatibility shim (past its announced 2026-06-30 removal date) and its backward-compatibility test. Downstream code importing `modules.preflight_validators` now raises `ModuleNotFoundError`; import validators directly from `modules.preflight` instead.
 
 ## [1.7.10] - 2026-05-12
