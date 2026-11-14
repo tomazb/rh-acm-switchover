@@ -38,7 +38,7 @@ The Python tool and the collection use separate checkpoint file formats.  They a
 
 When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path`, the
 `checkpoint_phase` action plugin normally skips phases listed in `completed_phases` on resume.
-The #342 candidate assesses completed finalization before that skip, including when all
+The #342 change assesses completed finalization before that skip, including when all
 prior phases are complete, and refuses reset controls on that read-only assessment.
 Checkpoints written under pre-2.19 ansible-core (classic Jinja) may carry
 stringified scalars (for example `"2"` or `"True"` where 2.19+ writes native
@@ -160,7 +160,7 @@ Shared behavior:
   the current finalization pass it refuses before any request ("Refusing the old-hub action: no
   validated migration journal and Restore-cleanup result from this finalization pass is
   available").
-- **Backup continuity (#342 candidate).** Both independent proof owners require a complete
+- **Backup continuity (#342).** Both independent proof owners require a complete
   strict inventory, trustworthy enable boundary, current creation-time proof and terminal
   name/UID/ownership/health checks. Old markers cannot skip historical-entry or completed
   assessment. Completed refusal is read-only across bootstrap, phase and rescue paths;

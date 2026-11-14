@@ -696,12 +696,12 @@ Finalization runs in this order on every pass:
 
 ### Backup continuity and historical checkpoints
 
-The [#342 candidate](https://github.com/tomazb/rh-acm-switchover/pull/369)
+The [#342 change](https://github.com/tomazb/rh-acm-switchover/pull/369)
 requires fresh Backup proof on historical finalization entry and before a successful
 completed-state no-op. It preserves the original checkpoint. The separately reviewed
 [#367 cadence correction](https://github.com/tomazb/rh-acm-switchover/issues/367)
 is integrated. Compatibility acceptance requires the healthy shipped Collection role and
-playbook execute paths on both supported Ansible lanes, plus the remaining compatibility
+playbook execute paths on both supported Ansible lanes, plus the compatibility
 validation and review gates. Local proof-module or completed-no-op results do not
 satisfy the shipped execute gate.
 

@@ -45,7 +45,7 @@ implementation work after GitHub PR #270. `R3-02` is no longer open
 implementation work after GitHub PR #273. Current open work is owned by the
 remaining SSA, R3, R4, TR2D, LER, GLM, H3, and deferred-issue boundaries below.
 
-**Last Updated:** 2026-10-30
+**Last Updated:** 2026-11-10
 
 ## R4-06 Closeout (2026-10-16)
 
@@ -102,7 +102,8 @@ no longer open work, apart from the narrowed #352 condition above. Those lists a
 unchanged as evidence of their dates.
 
 The list below is the 2026-10-16 record. Current follow-up status is the
-[Tracker reconciliation (2026-10-30)](#tracker-reconciliation-2026-10-30).
+[Tracker reconciliation (2026-10-30)](#tracker-reconciliation-2026-10-30), as amended for
+#342 by the [Tracker reconciliation (2026-11-10)](#tracker-reconciliation-2026-11-10).
 
 Still open and **not** closed by this reconciliation:
 - #350: Python preflight should run the fail-closed kubeconfig load before any mutation
@@ -126,6 +127,10 @@ current follow-up record. The 2026-10-16 "Still open" list stays as the record
 of that date. This section authorizes no runtime, test, workflow, RBAC,
 manifest, release, or protected-file change.
 
+The #342 entry in the "Still open" list below is the 2026-10-30 record. PR #369 has
+since merged and #342 is closed; see the
+[Tracker reconciliation (2026-11-10)](#tracker-reconciliation-2026-11-10).
+
 ### Delivered since 2026-10-16
 
 | Follow-up | Delivery | Issue state on 2026-10-30 |
@@ -144,6 +149,30 @@ manifest, release, or protected-file change.
 - #360: the `SSA-03` measured-concurrency scale proof. Unchanged. The `SSA-03` row stays `planned` for criterion 4 only.
 - #364: floor-job guardrail and changelog nits deferred from the #363 validation. Test and docs only. No PR row until a slice exists.
 - R4-04 follow-ups still open: #338, #341, #342, #343, #346, and #347. #345 is closed. #342 has open, unmerged [PR #369](https://github.com/tomazb/rh-acm-switchover/pull/369) on `fix/342-backup-strict`. This reconciliation does not mark that PR `in_progress`.
+
+## Tracker reconciliation (2026-11-10)
+
+This reconciliation is bound to `origin/ansible` at
+`0c548fcb5662900f36f2b2d67a450295c97c47b4`, the merge of PR #369. It amends the
+[2026-10-30 reconciliation](#tracker-reconciliation-2026-10-30) for #342 and the follow-ups
+its delivery leaves open (#374, #375, and #371 by reference); every other issue in that
+section's "Still open" list was still open on 2026-11-10.
+This section authorizes no runtime, test, workflow, RBAC, manifest, release, or
+protected-file change.
+
+### Delivered since 2026-10-30
+
+| Follow-up | Delivery | Issue state on 2026-11-10 |
+| --- | --- | --- |
+| #342 | [PR #369](https://github.com/tomazb/rh-acm-switchover/pull/369), merge [`0c548fcb`](https://github.com/tomazb/rh-acm-switchover/commit/0c548fcb5662900f36f2b2d67a450295c97c47b4), validated head `a2cc8f03`, merged 2026-11-02. Python finalization Backup continuity requires a positively complete strict inventory before recording or reusing a Backup name. Historical names and verification markers require fresh, read-only Backup creation and terminal-health proof against the persisted enable boundary in both form factors, and a refused COMPLETED assessment preserves checkpoint bytes. Independent Validator PASS WITH NON-BLOCKING COMMENTS ([6558635854](https://github.com/tomazb/rh-acm-switchover/pull/369#issuecomment-6558635854)); Resolver MERGE_READY_AWAITING_OPERATOR ([6560504791](https://github.com/tomazb/rh-acm-switchover/pull/369#issuecomment-6560504791)). | Closed 2026-11-02 ([closeout](https://github.com/tomazb/rh-acm-switchover/issues/342#issuecomment-6576182487)). The PR said `Refs #342`, and closing keywords do not fire on `ansible`, so the issue was closed manually. |
+
+### Still open
+
+- R4-04 follow-ups still open: #338, #341, #343, #346, and #347. #342 and #345 are closed.
+- #374: restore-only historical retry without a BackupSchedule records no Backup name, and dry-run re-serializes the state file. Filed 2026-10-30 from the round-4 review of PR #369 as non-blocking for #342. No PR row until a slice exists.
+- #375: the Python completed assessment applies the cadence-derived Backup age limit and the Collection does not; undocumented and untested. Filed 2026-10-30 from the PR #369 terminal validation at `99044bc6` (Independent Validator non-blocking comment 1, [6526154614](https://github.com/tomazb/rh-acm-switchover/pull/369#issuecomment-6526154614)). No PR row until a slice exists.
+- #371: root-test import safety against the Ansible dependency. Open and not delivered by PR #369, which recorded the full-root no-Ansible requirement as unsatisfied under its existing narrow deviation. [`docs/development/testing.md`](docs/development/testing.md) records that gap and names #371 as its owner; it is listed here only because the #342 closeout names it.
+- #350, #352, #344, #360, and #364: still open.
 
 ## Post-Merge Reconciliation (2026-08-27)
 
@@ -2699,6 +2728,7 @@ Dispositions:
 
 | PR | Status | Branch | Worktree | Findings | PR URL | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
+| SR-342 | merged | `fix/342-backup-strict` | worktree not retained in this clone | #342, finalization Backup continuity: Python strict inventory, and fresh creation-bound proof in both form factors | [PR #369](https://github.com/tomazb/rh-acm-switchover/pull/369); [#342 closed](https://github.com/tomazb/rh-acm-switchover/issues/342) | Validated head `a2cc8f032ce45fac59705a3a91b26acf1f705b21` merged 2026-11-02 as [`0c548fcb`](https://github.com/tomazb/rh-acm-switchover/commit/0c548fcb5662900f36f2b2d67a450295c97c47b4). [IV PASS WITH NON-BLOCKING COMMENTS](https://github.com/tomazb/rh-acm-switchover/pull/369#issuecomment-6558635854); [Resolver MERGE_READY_AWAITING_OPERATOR](https://github.com/tomazb/rh-acm-switchover/pull/369#issuecomment-6560504791); round-5 affected review on the same head, as recorded in the Resolver report: Opus 5.5 PASS WITH NON-BLOCKING COMMENTS and Astra (Codex `gpt-6-astra`, replacing Grok 4.7 by operator direction) PASS; exact-head hosted CI 18/18. Operator-approved Option B is recorded on #342 ([6261269794](https://github.com/tomazb/rh-acm-switchover/issues/342#issuecomment-6261269794)). Closed 2026-11-02 ([closeout](https://github.com/tomazb/rh-acm-switchover/issues/342#issuecomment-6576182487)). Non-blocking follow-ups are #374 and #375. #352 stays open and independent; #371 stays open, unsatisfied under PR #369's narrow deviation. |
 | SR-367 | merged | `fix/367-backup-cadence` | `.claude/worktrees/issue-367-backup-cadence` | #367, collection finalization cadence template only | [PR #372](https://github.com/tomazb/rh-acm-switchover/pull/372); [#367 closed](https://github.com/tomazb/rh-acm-switchover/issues/367) | PR head `253b37347419e57def56bb2f6c9ca098332e7309` merged 2026-10-18 as [`04a96f5e`](https://github.com/tomazb/rh-acm-switchover/commit/04a96f5e2b92ca78535d79e056f2acd55a9695e9). Four production lines in `ansible_collections/tomazb/acm_switchover/roles/finalization/tasks/verify_backups.yml`: the unmatched cadence parenthesis and three `regex_replace` escapes. Closed 2026-10-30 ([closeout](https://github.com/tomazb/rh-acm-switchover/issues/367#issuecomment-6527533660)). |
 | SR-352 | merged | `fix/352-versioned-klusterlet` | `.claude/worktrees/issue-352-versioned-klusterlet` | #352 post-activation marker only | [PR #370](https://github.com/tomazb/rh-acm-switchover/pull/370); [#352 still open](https://github.com/tomazb/rh-acm-switchover/issues/352) | PR head `4400da8db613eb040f47dfb659494aa8e62695f4` merged 2026-10-17 as [`63477ffe`](https://github.com/tomazb/rh-acm-switchover/commit/63477ffe15cd1196a8de31b234ae6c1280da9617). Normal post-activation entry uses `verify_klusterlet_connections_v2`. FINALIZATION, failed-finalization, and COMPLETED checkpoints stay with #352. |
 | SR-362 | merged | `fix/362-endpoint-freshness` | `.claude/worktrees/issue-362-endpoint-freshness` | #362, Python klusterlet inventory freshness | [PR #368](https://github.com/tomazb/rh-acm-switchover/pull/368); [#362 closed](https://github.com/tomazb/rh-acm-switchover/issues/362) | PR head `10ae779ad06a43a2eb52dc73226e6812f12b26f6` merged 2026-10-17 as [`2c3aa757`](https://github.com/tomazb/rh-acm-switchover/commit/2c3aa7575d7c3262d0c03d12d8cc279b8e5d5cec). Fresh strict inventory is compared before remediation workers start. Closed 2026-10-30 ([closeout](https://github.com/tomazb/rh-acm-switchover/issues/362#issuecomment-6527534287)). |
