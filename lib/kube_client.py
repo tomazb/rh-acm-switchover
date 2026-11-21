@@ -1583,10 +1583,8 @@ class KubeClient:
                     logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
             result = _json_object(result)
-            logger.debug(
-                "KUBE_CLIENT: Patch result keys: %s",
-                list(result.keys()) if result else "None",
-            )
+            # A count only: the keys are the response's own text (#283).
+            logger.debug("KUBE_CLIENT: Patch result has %d top-level keys", len(result))
             return result
         except ApiException as e:
             if is_retryable_error(e):

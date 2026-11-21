@@ -311,8 +311,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decode or deserialize (an unsupported Content-Type, an unparseable or mistyped field, invalid
   UTF-8) is reported with a fixed message instead of the response values, again with the same
   exception type. Python CLI only; the Ansible Collection is not changed. Visible changes: a
-  retryable `patch_custom_resource` failure no longer logs an ERROR line before it retries, and
-  its unexpected-exception log names only the exception type.
+  retryable `patch_custom_resource` failure no longer logs an ERROR line before it retries, its
+  unexpected-exception log names only the exception type, and its success debug log gives a key
+  count instead of the response's keys.
 - Python finalization Backup continuity now requires a positively complete strict inventory
   before recording or reusing a Backup name. Failed polls retain the existing baseline
   and retry within the existing wait; the integrity fallback also uses strict inventory.
