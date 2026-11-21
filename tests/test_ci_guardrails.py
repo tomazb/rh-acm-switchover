@@ -3,6 +3,7 @@
 import configparser
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -480,7 +481,16 @@ def _assert_every_selected_test_refused(result: subprocess.CompletedProcess, mes
         pytest.param(_RELEASE_REAL_RUN, False, id="serial-release"),
         pytest.param((*_RELEASE_REAL_RUN, "-n", "0"), True, id="n0-release"),
         pytest.param(
-            ("tests/", "--ignore=tests/release", "-m", "not e2e", "--collect-only", "-n", "2"),
+            (
+                "tests/",
+                "--ignore=tests/release",
+                "--ignore=tests/ansible_engine",
+                "-m",
+                "not e2e",
+                "--collect-only",
+                "-n",
+                "2",
+            ),
             True,
             id="root-lane-collect-only",
         ),
@@ -501,11 +511,19 @@ def test_serial_lane_guards_leave_serial_and_unguarded_runs_alone(args, needs_xd
     "args, addopts",
     [
         pytest.param(("tests/e2e", "-m", "e2e", "-n", "2"), "", id="e2e-dir-n2"),
-        pytest.param(("-m", "e2e", "-n", "2", "--ignore=tests/release"), "", id="testpaths-n2"),
-        pytest.param(("tests/", "--ignore=tests/release", "-m", "e2e", "-n", "2"), "", id="tests-dir-n2"),
+        pytest.param(
+            ("-m", "e2e", "-n", "2", "--ignore=tests/release", "--ignore=tests/ansible_engine"), "", id="testpaths-n2"
+        ),
+        pytest.param(
+            ("tests/", "--ignore=tests/release", "--ignore=tests/ansible_engine", "-m", "e2e", "-n", "2"),
+            "",
+            id="tests-dir-n2",
+        ),
         pytest.param(("tests/e2e", "-m", "e2e", "--numprocesses=2"), "", id="numprocesses"),
         pytest.param(("tests/e2e", "-m", "e2e", "--dist", "load", "--tx", "2*popen"), "", id="dist-tx"),
-        pytest.param(("-m", "e2e", "--ignore=tests/release"), "-n 2", id="pytest-addopts"),
+        pytest.param(
+            ("-m", "e2e", "--ignore=tests/release", "--ignore=tests/ansible_engine"), "-n 2", id="pytest-addopts"
+        ),
     ],
 )
 def test_e2e_guard_refuses_every_e2e_test_under_xdist(args, addopts):
@@ -531,9 +549,17 @@ def test_e2e_guard_refuses_every_e2e_test_under_xdist(args, addopts):
         pytest.param((*_RELEASE_REAL_RUN, "--dist", "each", "--tx", "2*popen"), "", id="dist-each"),
         pytest.param(_RELEASE_REAL_RUN, "-n 2", id="pytest-addopts"),
         pytest.param(("tests/release", "-n", "2"), "", id="release-dir-n2"),
-        pytest.param(("tests/", "-k", "test_resolve_release_mode_defaults", "-n", "2"), "", id="tests-dir-helpers"),
-        pytest.param(("-k", "test_resolve_release_mode_defaults", "-n", "2"), "", id="testpaths-helpers"),
-        pytest.param(("-m", "release", "-n", "2"), "", id="testpaths-certification"),
+        pytest.param(
+            ("tests/", "--ignore=tests/ansible_engine", "-k", "test_resolve_release_mode_defaults", "-n", "2"),
+            "",
+            id="tests-dir-helpers",
+        ),
+        pytest.param(
+            ("--ignore=tests/ansible_engine", "-k", "test_resolve_release_mode_defaults", "-n", "2"),
+            "",
+            id="testpaths-helpers",
+        ),
+        pytest.param(("--ignore=tests/ansible_engine", "-m", "release", "-n", "2"), "", id="testpaths-certification"),
     ],
 )
 def test_release_guard_refuses_every_release_test_under_xdist(args, addopts):
@@ -766,3 +792,148 @@ def test_operator_docs_cite_the_root_floor():
 
 def test_collection_requirements_do_not_claim_a_unified_floor():
     assert "unified with the repository-root" not in COLLECTION_REQUIREMENTS.read_text().lower()
+
+
+# #371: root test jobs run without the Ansible engine. The two parity files that need the real
+# engine live in tests/ansible_engine/, whose conftest refuses to run without Ansible, and run in
+# their own job on exactly the foundation workflow's lanes. Root jobs prove the engine is absent
+# after their installs and before pytest, and exclude that directory explicitly.
+ENGINE_LANE = "tests/ansible_engine"
+ENGINE_JOB = "ansible-engine-parity"
+ROOT_LANE_PREFIX = "tests/ --ignore=tests/release"
+ANSIBLE_ABSENCE_PROBE = (
+    "python -c 'import importlib.util, sys; sys.exit(\"ansible is importable, but root test jobs must run "
+    'without it (#371)" if importlib.util.find_spec("ansible") else 0)\''
+)
+# Options that would silently narrow what the engine lane runs.
+_SELECTION_OPTIONS = ("-k", "-m", "--deselect", "--ignore", "--ignore-glob", "--lf", "--last-failed")
+
+
+def _step_lines(step: dict) -> list:
+    if not step.get("run"):
+        return []
+    return [" ".join(line.split()) for line in _executable_shell(step["run"]).splitlines() if line.strip()]
+
+
+def _root_lane_jobs() -> dict:
+    """ci-cd.yml jobs that run the root lane, identified by their executed pytest command."""
+    jobs = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]
+    return {
+        job_id: job
+        for job_id, job in jobs.items()
+        if any(ROOT_LANE_PREFIX in line for line in _executed_pytest_lines(_workflow_job_scripts(job)))
+    }
+
+
+def _workflow_job_scripts(job: dict) -> list:
+    return [_executable_shell(step["run"]) for step in job.get("steps", []) if step.get("run")]
+
+
+def _pytest_tokens(line: str) -> list:
+    """Arguments after `pytest`, with each `${{ ... }}` expression kept inside its argument."""
+    tokens = shlex.split(re.sub(r"\$\{\{.*?\}\}", "EXPR", line))
+    return tokens[tokens.index("pytest") + 1 :]
+
+
+def test_root_test_jobs_prove_ansible_is_absent_and_exclude_the_engine_lane():
+    root_jobs = _root_lane_jobs()
+    # Not a substitute for the structural check below: it stops the check passing vacuously if
+    # the root-lane prefix changes and no job is recognized any more.
+    assert {"test", "kubernetes-min-client-cli"} <= set(root_jobs), sorted(root_jobs)
+
+    for job_id, job in root_jobs.items():
+        step_lines = [_step_lines(step) for step in job["steps"]]
+        pytest_steps = [
+            index
+            for index, lines in enumerate(step_lines)
+            if any(ROOT_LANE_PREFIX in line for line in _executed_pytest_lines(lines))
+        ]
+        assert len(pytest_steps) == 1, f"{job_id}: {pytest_steps}"
+        pytest_step = pytest_steps[0]
+        install_steps = [
+            index for index, lines in enumerate(step_lines) if any("pip install" in line for line in lines)
+        ]
+        probe_steps = [index for index, lines in enumerate(step_lines) if ANSIBLE_ABSENCE_PROBE in lines]
+        assert install_steps, f"{job_id} installs nothing"
+        assert len(probe_steps) == 1, f"{job_id} must prove Ansible is absent exactly once: {probe_steps}"
+        # A probe before the last install would not see what that install brought in.
+        assert max(install_steps) < probe_steps[0] < pytest_step, (job_id, install_steps, probe_steps, pytest_step)
+
+        for lines in step_lines:
+            for line in lines:
+                if re.match(r"(?:python -m )?pip install\b", line):
+                    assert "ansible" not in line.replace("ansible_collections/", ""), f"{job_id}: {line}"
+
+        (suite,) = [line for line in _executed_pytest_lines(step_lines[pytest_step]) if ROOT_LANE_PREFIX in line]
+        assert f"--ignore={ENGINE_LANE}" in _pytest_tokens(suite), f"{job_id}: {suite}"
+
+
+def test_run_tests_proves_ansible_is_absent_and_excludes_the_engine_lane():
+    runner = [" ".join(line.split()) for line in _executable_shell(RUN_TESTS.read_text()).splitlines()]
+    root_args = [line for line in runner if line.startswith("pytest_args=(")]
+    assert len(root_args) == 1, root_args
+    assert f"--ignore={ENGINE_LANE}" in shlex.split(root_args[0].removeprefix("pytest_args=(").rstrip(")"))
+
+    install = runner.index("pip install -q -r requirements-dev.txt")
+    probe = [index for index, line in enumerate(runner) if line == ANSIBLE_ABSENCE_PROBE]
+    suite = runner.index('python -m pytest "${pytest_args[@]}"')
+    assert len(probe) == 1, probe
+    assert install < probe[0] < suite
+
+
+def test_ansible_engine_parity_job_runs_only_the_engine_lane_on_the_foundation_lanes():
+    job = _ci_job(ENGINE_JOB)
+    foundation = yaml.safe_load(COLLECTION_WORKFLOW.read_text())["jobs"]["foundation"]
+
+    assert job["strategy"]["matrix"] == {"include": foundation["strategy"]["matrix"]["include"]}
+    assert job["strategy"]["fail-fast"] is False
+    assert job["permissions"] == {"contents": "read"}
+    assert _job_python(ENGINE_JOB) == "${{ matrix.python }}"
+
+    lines = _job_lines(ENGINE_JOB)
+    installs = [line for line in lines if re.match(r"pip install\b", line)]
+    assert installs == ['pip install -r requirements.txt "ansible-core==${{ matrix.ansible_core }}" pytest'], installs
+    assert "pip check" in lines
+
+    suites = _executed_pytest_lines(lines)
+    assert len(suites) == 1, suites
+    tokens = _pytest_tokens(suites[0])
+    paths = [token for token in tokens if not token.startswith("-")]
+    assert paths == [ENGINE_LANE], suites[0]
+    assert not [token for token in tokens if token.split("=", 1)[0] in _SELECTION_OPTIONS], suites[0]
+    assert (REPO_ROOT / ENGINE_LANE / "conftest.py").is_file()
+
+    assert ENGINE_JOB in _ci_job("notify")["needs"]
+
+
+def test_engine_lane_refuses_to_run_without_ansible():
+    """The engine lane cannot pass vacuously: without Ansible it errors, it never skips.
+
+    Ansible is blocked with a meta-path finder, so this proves the refusal on lanes that do have
+    Ansible installed as well as on the no-Ansible root lane.
+    """
+    script = (
+        "import importlib.abc, sys\n"
+        "class BlockAnsible(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'ansible' or fullname.startswith('ansible.'):\n"
+        "            raise ModuleNotFoundError(f'blocked {fullname}', name=fullname)\n"
+        "sys.meta_path.insert(0, BlockAnsible())\n"
+        "import pytest\n"
+        f"sys.exit(pytest.main(['{ENGINE_LANE}', '-q', '-rs', '-p', 'no:cacheprovider', '--color=no']))\n"
+    )
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "E2E_", "ACM_RELEASE"))}
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode not in (0, pytest.ExitCode.NO_TESTS_COLLECTED), output
+    assert "tests/ansible_engine requires the Ansible engine" in output, output
+    assert "passed" not in output and "skipped" not in output, output

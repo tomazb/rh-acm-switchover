@@ -16,7 +16,7 @@ This document owns the commands.
 
 | # | Surface | Nature | What it does not prove |
 | --- | --- | --- | --- |
-| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the root parity contracts (`tests/test_*parity*.py`). Some compare declared values across the two runtimes — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Others call collection `module_utils` and module functions in-process over shared vectors or identical fake hubs — for example the R4-04 migration-evidence model and transactions (`tests/test_migration_evidence_parity.py`, `tests/test_activation_transaction_parity.py`, `tests/test_post_activation_transaction_parity.py`, `tests/test_restore_cleanup_transaction_parity.py`, `tests/test_restore_guarded_mutation_parity.py`) — or render one role task file's expressions with Ansible's templar (`tests/test_managed_cluster_expectation_parity.py`). No collection role or playbook is executed |
+| 1 | Root Python and Bash tests | Local, fake-backed | Nothing about live clusters. Of the collection it proves only the root parity contracts (`tests/test_*parity*.py`, plus the two engine-dependent files under `tests/ansible_engine/`, which run in their own [Ansible-engine parity lane](#root-lane-without-ansible-and-the-ansible-engine-parity-lane)). Some compare declared values across the two runtimes — shared constants (`tests/test_constants_parity.py`), Argo CD `ACM_KINDS`/`ACM_NAMESPACES` (`tests/test_argocd_constants_parity.py`), cross-phase state key names (`tests/test_checkpoint_state_parity.py`), and RBAC expansion (`tests/test_rbac_collection_parity.py`). Others call collection `module_utils` and module functions in-process over shared vectors or identical fake hubs — for example the R4-04 migration-evidence model and transactions (`tests/test_migration_evidence_parity.py`, `tests/test_activation_transaction_parity.py`, `tests/test_post_activation_transaction_parity.py`, `tests/test_restore_cleanup_transaction_parity.py`, `tests/ansible_engine/test_restore_guarded_mutation_parity.py`) — or render one role task file's expressions with Ansible's templar (`tests/ansible_engine/test_managed_cluster_expectation_parity.py`). No collection role or playbook is executed |
 | 2 | Release-framework helpers | Local and fake-backed **only when no release profile is supplied** | Not certification evidence. Non-live only while neither `--release-profile` (including one injected through `PYTEST_ADDOPTS`) nor `ACM_RELEASE_PROFILE` resolves a profile |
 | 3 | Collection unit tests | Local, static and fake-backed | Nothing about live cluster behaviour. Playbook and cross-role wiring is checked statically against the YAML, not by executing it |
 | 4 | Collection integration tests | Local, fake-backed | Nothing about real cluster responses |
@@ -64,8 +64,14 @@ but the documented form is CI's.
 # coverage and JUnit reporting added: --cov=. --cov-report=xml --cov-report=html
 # --cov-report=term --junitxml=pytest-results-<python-version>.xml. The selection of tests is
 # identical; only the reporting artifacts differ. Use the coverage form below when you need
-# the report.
-python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal
+# the report. The root lane runs without Ansible: CI first proves the engine is absent, and the
+# engine-dependent parity files are excluded here and run in their own lane below.
+python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -m "not e2e" -n auto --dist worksteal
+
+# Surface 1, continued: Ansible-engine parity lane (CI job `ansible-engine-parity`). Run it in a separate environment
+# with the root requirements.txt, pytest, and one foundation lane's ansible-core (the lanes are
+# defined by the compatibility authority). Without Ansible its conftest stops the run with an error.
+python -m pytest tests/ansible_engine -q -rs
 
 # 2. Release-framework helper tests
 # Non-live only when no profile is resolved. Inspect ACM_RELEASE_PROFILE and PYTEST_ADDOPTS first.
@@ -208,15 +214,27 @@ and are deliberately not restated here.
 For what a result proves about a claim, see
 [Verification evidence validity](../../AGENTS.md#verification-evidence-validity) in `AGENTS.md`.
 
-### Root dependency and import gap
+### Root lane without Ansible, and the Ansible-engine parity lane
 
-`AGENTS.md` requires root jobs to run without installing `ansible-core` and root tests to
-remain import-safe without it. The current root jobs install `requirements-dev.txt`, which
-includes Ansible, and `tests/test_managed_cluster_expectation_parity.py` imports its engine at
-module scope. [Issue #371](https://github.com/tomazb/rh-acm-switchover/issues/371) owns the
-dependency/test-ownership correction. Success with the declared development dependencies
-does not establish full-root no-Ansible import safety. This is an unsatisfied requirement,
-not an intentional parity change or permission to drop engine-dependent assertions.
+`AGENTS.md` requires root jobs to run without installing `ansible-core`. Neither
+`requirements.txt` nor `requirements-dev.txt` declares it
+(`tests/test_dependency_security_constraints.py` enforces that), and the root jobs in
+`.github/workflows/ci-cd.yml` and `./run_tests.sh` run a separate probe after installing and
+before pytest that fails if `ansible` is importable.
+
+Two root parity files compare the form factors through the real Ansible engine: Ansible's
+templar renders a role task file, and a real `AnsibleModule` runs the collection module. They
+live in `tests/ansible_engine/`, which the root lane excludes with
+`--ignore=tests/ansible_engine`. The `ansible-engine-parity` job in `ci-cd.yml` runs exactly that
+directory on the same `min` and `current` lanes as `ansible-collection-foundation.yml`, with the
+root `requirements.txt` plus that lane's `ansible-core`; `tests/test_ci_guardrails.py` pins the
+matrix, the command and the root jobs' probe. `tests/ansible_engine/conftest.py` raises an error
+when Ansible cannot be imported, so the directory cannot pass with nothing run. It never skips.
+
+Root test files that load collection modules importing `ansible` without the engine use
+in-test stubs. Each such loader must remove its stubs again after the import: a fake `ansible`
+left in `sys.modules` would let a later file's module-scope `import ansible` collect in the
+no-Ansible lane and hide a hard engine dependency.
 
 ## Test Structure
 
@@ -264,6 +282,7 @@ RUN_E2E=1 ./run_tests.sh
 
 - Prefer activating an existing virtual environment before running tooling.
 - The test runner (`run_tests.sh`) detects an active `$VIRTUAL_ENV`; otherwise it will try `.venv/` first, then `venv/`, and create `.venv/` if none exist.
+- That environment must not contain Ansible: the runner stops before the root lane if `ansible` is importable. Use a separate environment for collection lanes and for `tests/ansible_engine/`.
 - Recommended setup:
     - Create `.venv` once: `python3 -m venv .venv`
     - Activate: `source .venv/bin/activate`
@@ -288,7 +307,7 @@ pip install -r requirements-dev.txt
 #### Run Root Tests (matches the default local runner)
 
 ```bash
-python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal
+python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -m "not e2e" -n auto --dist worksteal
 ```
 
 #### Run Specific Test File
@@ -306,7 +325,7 @@ python -m pytest tests/test_utils.py::TestStateManager::test_initial_state -v
 #### Run with Coverage
 
 ```bash
-python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal \
+python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -m "not e2e" -n auto --dist worksteal \
   --cov=. --cov-report=html --cov-report=term
 ```
 
@@ -827,7 +846,6 @@ open htmlcov/index.html
 ### Planned Improvements
 
 - Test-selection, missing-file skips, and stale inventories: [#268](https://github.com/tomazb/rh-acm-switchover/issues/268).
-- Root no-Ansible dependency/import correction: [#371](https://github.com/tomazb/rh-acm-switchover/issues/371).
 - Hypothesis CI profile enforcement and coverage policy: R3-09b in the [Thermos tracker](../../thermos-resolution-plan.md).
 - Stateful, crash-consistency, differential parity, race, and later controller-owned live resilience/soak testing: the [TST program #225](https://github.com/tomazb/rh-acm-switchover/issues/225) and [foundation](../testing/tst-00-advanced-safety-testing-foundation.md).
 - Release certification sequencing and remaining framework work: [#121](https://github.com/tomazb/rh-acm-switchover/issues/121) and the [release framework authority](release-validation-framework.md).

@@ -56,10 +56,10 @@ It does not run the Collection unit, integration, scenario, syntax, or build gat
 ### Root Tests Only
 
 ```bash
-python -m pytest tests/ --ignore=tests/release -q -m "not e2e" -n auto --dist worksteal
+python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -q -m "not e2e" -n auto --dist worksteal
 ```
 
-This is the default root selection, including property tests and unmarked E2E-directory helpers. The [root dependency/import gap](../docs/development/testing.md#root-dependency-and-import-gap) remains tracked separately; passing with the declared development dependencies does not prove no-Ansible import safety.
+This is the default root selection, including property tests and unmarked E2E-directory helpers. It runs without Ansible installed. The two parity files that need the real Ansible engine live in `tests/ansible_engine/` and run in their own environment; see [the root lane without Ansible](../docs/development/testing.md#root-lane-without-ansible-and-the-ansible-engine-parity-lane).
 
 ### Release Framework Helpers (Non-Live)
 

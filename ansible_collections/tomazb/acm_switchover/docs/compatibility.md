@@ -265,8 +265,9 @@ done
    ansible-galaxy collection build --output-path /tmp/dist --force)
 ```
 
-**Reproducing a specific lane.** The repository's shared `.venv` tracks the
-`current` lane only. Reproducing the `min` lane needs its own environment:
+**Reproducing a specific lane.** The repository's root development environment
+(`requirements-dev.txt`) contains no Ansible, so each lane needs its own
+environment. For the `min` lane:
 
 ```bash
 python3.11 -m venv .venv-lane-min
@@ -279,11 +280,14 @@ ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/r
 export ANSIBLE_COLLECTIONS_PATH="$PWD:$HOME/.ansible/collections"
 ```
 
-Then run steps 2 – 6 above unchanged; that is the full `min` lane.
+Then run steps 2 – 6 above unchanged; that is the full `min` lane. The `current`
+lane is the same with Python 3.12 and `ansible-core==2.21.*`.
 
-`requirements-dev.txt` pins `ansible-core>=2.18.1` on Python 3.11 and newer. That
-sits inside the supported range but does not reach the `min` lane floor, which is
-why the separate environment above is required to reproduce it.
+The repository-root `requirements.txt` and `requirements-dev.txt` declare no
+`ansible-core`: root test jobs run without Ansible. The root parity tests that need
+the real engine (`tests/ansible_engine/`) run in the `ansible-engine-parity` job of
+`ci-cd.yml`, on the same `min` and `current` lanes as the table above, with the root
+`requirements.txt` plus that lane's `ansible-core`.
 
 **Scope of this section.** The commands above reproduce the *collection* lanes in
 `ansible-collection-foundation.yml`. They are not the repository's whole test

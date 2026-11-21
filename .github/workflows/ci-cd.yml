@@ -40,10 +40,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
-        
+
+    - name: Assert the Ansible engine is absent
+      # Root tests run without Ansible (#371); tests/ansible_engine runs in ansible-engine-parity.
+      run: |
+        python -c 'import importlib.util, sys; sys.exit("ansible is importable, but root test jobs must run without it (#371)" if importlib.util.find_spec("ansible") else 0)'
+
     - name: Run root tests with coverage
       run: |
-        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" -n auto --dist worksteal --cov=. --cov-report=xml --cov-report=html --cov-report=term --junitxml=pytest-results-${{ matrix.python-version }}.xml
+        python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -m "not e2e" -n auto --dist worksteal --cov=. --cov-report=xml --cov-report=html --cov-report=term --junitxml=pytest-results-${{ matrix.python-version }}.xml
 
     - name: Archive pytest results
       if: always()
@@ -124,9 +129,13 @@ jobs:
       run: |
         python -c "import kubernetes, urllib3; from packaging.version import Version; assert kubernetes.__version__ == '29.0.0', kubernetes.__version__; assert Version('2.6.3') <= Version(urllib3.__version__) < Version('3'), urllib3.__version__; print('kubernetes', kubernetes.__version__, 'urllib3', urllib3.__version__)"
 
+    - name: Assert the Ansible engine is absent
+      run: |
+        python -c 'import importlib.util, sys; sys.exit("ansible is importable, but root test jobs must run without it (#371)" if importlib.util.find_spec("ansible") else 0)'
+
     - name: Run the root suite on the floor client
       run: |
-        python -m pytest tests/ --ignore=tests/release -q -m "not e2e" -n auto --dist worksteal \
+        python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -q -m "not e2e" -n auto --dist worksteal \
           --junitxml=pytest-results-kubernetes-min-client-cli-29.0.0.xml
 
     - name: Archive pytest results
@@ -218,6 +227,58 @@ jobs:
       with:
         name: pytest-results-kubernetes-min-client-collection-28.1.0
         path: pytest-results-kubernetes-min-client-collection-*28.1.0.xml
+        if-no-files-found: ignore
+        retention-days: 7
+
+  ansible-engine-parity:
+    # #371: root test jobs run without Ansible, so the two parity files that compare the Python
+    # CLI with the collection through the real Ansible engine (its templar and a real
+    # AnsibleModule) live in tests/ansible_engine/ and run here, on exactly the lanes of
+    # ansible-collection-foundation.yml. That directory's conftest errors without Ansible, so
+    # this job cannot pass with nothing run. tests/test_ci_guardrails.py pins the matrix to the
+    # foundation lanes and the pytest command to that one directory.
+    name: Ansible engine parity (${{ matrix.lane }} / ansible-core ${{ matrix.ansible_core }} / py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: min
+            ansible_core: "2.16.*"
+            python: "3.11"
+          - lane: current
+            ansible_core: "2.21.*"
+            python: "3.12"
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Install the root requirements and the lane's ansible-core
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt "ansible-core==${{ matrix.ansible_core }}" pytest
+        pip check
+
+    - name: Run the Ansible engine parity tests
+      run: |
+        python -m pytest tests/ansible_engine -q -rs --junitxml=pytest-results-ansible-engine-parity-${{ matrix.lane }}.xml
+
+    - name: Archive pytest results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-results-ansible-engine-parity-${{ matrix.lane }}
+        path: pytest-results-ansible-engine-parity-${{ matrix.lane }}.xml
         if-no-files-found: ignore
         retention-days: 7
 
@@ -520,7 +581,7 @@ jobs:
   notify:
     name: Notification
     runs-on: ubuntu-latest
-    needs: [test, kubernetes-min-client-cli, kubernetes-min-client-collection, lint, release-framework, security, syntax-check, documentation, integration-test]
+    needs: [test, kubernetes-min-client-cli, kubernetes-min-client-collection, ansible-engine-parity, lint, release-framework, security, syntax-check, documentation, integration-test]
     if: always()
     
     steps:
@@ -529,6 +590,7 @@ jobs:
         echo "Test: ${{ needs.test.result }}"
         echo "Kubernetes client minimum, Python CLI: ${{ needs.kubernetes-min-client-cli.result }}"
         echo "Kubernetes client minimum, Collection: ${{ needs.kubernetes-min-client-collection.result }}"
+        echo "Ansible engine parity: ${{ needs.ansible-engine-parity.result }}"
         echo "Lint: ${{ needs.lint.result }}"
         echo "Release framework: ${{ needs.release-framework.result }}"
         echo "Security: ${{ needs.security.result }}"

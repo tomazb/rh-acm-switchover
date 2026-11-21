@@ -24,7 +24,7 @@ from urllib3.response import HTTPResponse
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_restore_guarded_mutation as module
 
 # Unit expectations for this module (R4-04 Task 4). Equality with the Python
-# KubeClient helpers is enforced by tests/test_restore_guarded_mutation_parity.py at the
+# KubeClient helpers is enforced by tests/ansible_engine/test_restore_guarded_mutation_parity.py at the
 # repository root, which drives both form factors.
 GUARDED_RESTORE_PATCH_VECTOR: Dict[str, Any] = {
     "uid": "3f0c2a4e-uid",
