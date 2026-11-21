@@ -4324,7 +4324,7 @@ class TestApiErrorDetailNeverLeavesKubeClient:
 _KUBERNETES_MAJOR = int(kubernetes.__version__.split(".")[0])
 _ONLY_37 = pytest.mark.skipif(
     _KUBERNETES_MAJOR < 37,
-    reason=f"kubernetes {kubernetes.__version__} deserializes any Content-Type; only 37.x raises for an unsupported one",
+    reason=f"kubernetes {kubernetes.__version__} deserializes any Content-Type; only 37.x rejects an unsupported one",
 )
 _ONLY_BEFORE_37 = pytest.mark.skipif(
     _KUBERNETES_MAJOR >= 37,
@@ -4490,6 +4490,18 @@ class TestInstalledClientResponseTextNeverLeavesKubeClient:
         assert json.loads(state_text)["errors"], "the failure is recorded"
         assert "Traceback" in caplog.text, "the verbose traceback route is exercised"
         assert_no_canary(state_text, report_text, caplog.text)
+
+    def test_no_canary_in_the_debug_log_of_a_successful_patch(self, caplog):
+        """A successful response is returned whole, but none of it is logged."""
+        pool_manager = _RecordingPoolManager(payload={"metadata": {"name": "t1"}, API_BODY_CANARY: {"x": 1}})
+        client = _real_typed_kube_client(pool_manager)
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            result = client.patch_custom_resource("g.io", "v1", "things", "t1", {"spec": {}}, namespace="ns1")
+
+        assert API_BODY_CANARY in result, "the response itself is returned unchanged"
+        assert "returned successfully" in caplog.text, "the success-path debug log is exercised"
+        assert_no_canary(caplog.text)
 
 
 # ---------------------------------------------------------------------------
