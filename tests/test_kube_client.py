@@ -4,10 +4,14 @@ Modernized pytest tests with fixtures, markers, and parameterization.
 Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 """
 
+import ast
 import errno
+import http
 import inspect
 import json
+import traceback
 from itertools import chain, repeat
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -17,6 +21,7 @@ from tenacity import wait_none
 from urllib3.exceptions import ProtocolError, ReadTimeoutError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
+import lib.kube_client as kube_client_module
 from lib.constants import (
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
@@ -35,6 +40,13 @@ from lib.constants import (
 from lib.exceptions import MalformedResponseError
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
+from tests.api_error_canary import (
+    API_BODY_CANARY,
+    API_HEADER_CANARY,
+    API_REASON_CANARY,
+    assert_no_canary,
+    canary_api_exception,
+)
 
 
 @pytest.fixture
@@ -3939,3 +3951,551 @@ class TestApiResourceServed:
         client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
         absent = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
         assert absent.status is StrictReadStatus.CRD_ABSENT
+
+
+# ---------------------------------------------------------------------------
+# #283: Kubernetes API error bodies, headers, data and reasons never leave KubeClient
+# ---------------------------------------------------------------------------
+
+# Every public method that can raise an ApiException, with the generated-API call it makes
+# and how often a 503 is attempted. A 403 is attempted once everywhere.
+_RAISING_METHODS = [
+    pytest.param("get_namespace", "core_api", "read_namespace", {"name": "ns1"}, 5, id="get_namespace"),
+    pytest.param("namespace_exists", "core_api", "read_namespace", {"name": "ns1"}, 5, id="namespace_exists"),
+    pytest.param("get_cluster_identity", "core_api", "read_namespace", {}, 5, id="get_cluster_identity"),
+    pytest.param("list_namespaces", "core_api", "list_namespace", {}, 5, id="list_namespaces"),
+    pytest.param(
+        "get_secret", "core_api", "read_namespaced_secret", {"namespace": "ns1", "name": "s1"}, 5, id="get_secret"
+    ),
+    pytest.param(
+        "secret_exists",
+        "core_api",
+        "read_namespaced_secret",
+        {"namespace": "ns1", "name": "s1"},
+        5,
+        id="secret_exists",
+    ),
+    pytest.param(
+        "get_configmap",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="get_configmap",
+    ),
+    pytest.param(
+        "get_configmap_advisory",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="get_configmap_advisory",
+    ),
+    pytest.param(
+        "exists_configmap",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="exists_configmap",
+    ),
+    pytest.param(
+        "create_or_patch_configmap",
+        "core_api",
+        "create_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1", "data": {"k": "v"}},
+        5,
+        id="create_or_patch_configmap",
+    ),
+    pytest.param(
+        "delete_configmap",
+        "core_api",
+        "delete_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="delete_configmap",
+    ),
+    pytest.param(
+        "delete_pod", "core_api", "delete_namespaced_pod", {"namespace": "ns1", "name": "p1"}, 5, id="delete_pod"
+    ),
+    pytest.param(
+        "get_route_host",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"namespace": "ns1", "name": "r1"},
+        5,
+        id="get_route_host",
+    ),
+    pytest.param(
+        "get_custom_resource",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="get_custom_resource",
+    ),
+    pytest.param(
+        "get_custom_resource_advisory",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="get_custom_resource_advisory",
+    ),
+    pytest.param(
+        "list_custom_resources",
+        "custom_api",
+        "list_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "namespace": "ns1"},
+        5,
+        id="list_custom_resources",
+    ),
+    pytest.param(
+        "list_custom_resources_advisory",
+        "custom_api",
+        "list_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "namespace": "ns1"},
+        5,
+        id="list_custom_resources_advisory",
+    ),
+    pytest.param(
+        "list_managed_clusters", "custom_api", "list_cluster_custom_object", {}, 5, id="list_managed_clusters"
+    ),
+    pytest.param(
+        "patch_custom_resource",
+        "custom_api",
+        "patch_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "patch": {"spec": {}}, "namespace": "ns1"},
+        5,
+        id="patch_custom_resource",
+    ),
+    pytest.param(
+        "patch_managed_cluster",
+        "custom_api",
+        "patch_cluster_custom_object",
+        {"name": "mc1", "patch": {"metadata": {}}},
+        5,
+        id="patch_managed_cluster",
+    ),
+    pytest.param(
+        "create_custom_resource",
+        "custom_api",
+        "create_namespaced_custom_object",
+        {
+            "group": "g.io",
+            "version": "v1",
+            "plural": "things",
+            "body": {"metadata": {"name": "t1"}},
+            "namespace": "ns1",
+        },
+        5,
+        id="create_custom_resource-named",
+    ),
+    pytest.param(
+        "create_custom_resource",
+        "custom_api",
+        "create_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "body": {"metadata": {}}, "namespace": "ns1"},
+        1,
+        id="create_custom_resource-unnamed",
+    ),
+    pytest.param(
+        "delete_custom_resource_preconditioned",
+        "custom_api",
+        "delete_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "uid": "uid-1", "namespace": "ns1"},
+        1,
+        id="delete_custom_resource_preconditioned",
+    ),
+    pytest.param(
+        "delete_custom_resource",
+        "custom_api",
+        "delete_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="delete_custom_resource",
+    ),
+    pytest.param(
+        "get_deployment",
+        "apps_api",
+        "read_namespaced_deployment",
+        {"name": "d1", "namespace": "ns1"},
+        5,
+        id="get_deployment",
+    ),
+    pytest.param(
+        "get_statefulset",
+        "apps_api",
+        "read_namespaced_stateful_set",
+        {"name": "s1", "namespace": "ns1"},
+        5,
+        id="get_statefulset",
+    ),
+    pytest.param(
+        "scale_deployment",
+        "apps_api",
+        "patch_namespaced_deployment_scale",
+        {"name": "d1", "namespace": "ns1", "replicas": 0},
+        5,
+        id="scale_deployment",
+    ),
+    pytest.param(
+        "scale_statefulset",
+        "apps_api",
+        "patch_namespaced_stateful_set_scale",
+        {"name": "s1", "namespace": "ns1", "replicas": 0},
+        5,
+        id="scale_statefulset",
+    ),
+    pytest.param(
+        "rollout_restart_deployment",
+        "apps_api",
+        "patch_namespaced_deployment",
+        {"name": "d1", "namespace": "ns1"},
+        5,
+        id="rollout_restart_deployment",
+    ),
+    pytest.param("get_pods", "core_api", "list_namespaced_pod", {"namespace": "ns1"}, 5, id="get_pods"),
+    pytest.param("list_pods", "core_api", "list_namespaced_pod", {"namespace": "ns1"}, 5, id="list_pods"),
+    pytest.param(
+        "get_pod_logs", "core_api", "read_namespaced_pod_log", {"name": "p1", "namespace": "ns1"}, 5, id="get_pod_logs"
+    ),
+]
+
+
+def _exception_texts(exc: BaseException) -> list:
+    """Every rendering of an exception an operator, a log or a state file could see."""
+    return [str(exc), repr(exc), "".join(traceback.format_exception(exc))]
+
+
+@pytest.fixture
+def no_retry_wait(monkeypatch):
+    """Retry without sleeping. Each decorated method owns its Retrying object, and the named
+    create builds one per call, so the backoff sleep itself is patched."""
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _seconds: None)
+
+
+@pytest.mark.unit
+class TestApiErrorDetailNeverLeavesKubeClient:
+    """#283: status and type survive; body, headers, data and server reason do not."""
+
+    @pytest.mark.parametrize("status", [403, 503])
+    @pytest.mark.parametrize("method,api,api_method,kwargs,attempts_on_503", _RAISING_METHODS)
+    def test_no_canary_in_logs_or_exception_text(
+        self,
+        kube_client,
+        mock_k8s_apis,
+        caplog,
+        no_retry_wait,
+        method,
+        api,
+        api_method,
+        kwargs,
+        attempts_on_503,
+        status,
+    ):
+        failure = canary_api_exception(status)
+        api_call_mock = getattr(mock_k8s_apis[api], api_method)
+        api_call_mock.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                getattr(kube_client, method)(**kwargs)
+
+        raised = exc_info.value
+        assert raised is failure, "the caller's exception object and type are unchanged"
+        assert type(raised) is ApiException
+        assert raised.status == status
+        assert api_call_mock.call_count == (attempts_on_503 if status == 503 else 1)
+        assert_no_canary(caplog.text, *_exception_texts(raised))
+        assert raised.reason == http.HTTPStatus(status).phrase
+
+    @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_scrubs_retried_and_raised_errors(self, _sleep, kube_client, mock_k8s_apis, caplog):
+        transient = canary_api_exception(503)
+        refusal = canary_api_exception(403)
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = [transient, refusal]
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.wait_for_pods_ready("ns1", "app=x", timeout=60)
+
+        assert exc_info.value is refusal and exc_info.value.status == 403
+        assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count == 2
+        assert "503" in caplog.text, "the transient failure is still logged, by status"
+        # The handled 503 never leaves the method, so only the log and the raised 403 are visible.
+        assert_no_canary(caplog.text, *_exception_texts(refusal))
+
+    @pytest.mark.parametrize(
+        "status,expected_type",
+        [
+            (409, kube_client_module.PreconditionConflict),
+            (412, kube_client_module.PreconditionConflict),
+            (404, kube_client_module.TargetDisappeared),
+        ],
+    )
+    def test_preconditioned_delete_cause_is_scrubbed(self, kube_client, mock_k8s_apis, caplog, status, expected_type):
+        failure = canary_api_exception(status)
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(expected_type) as exc_info:
+                kube_client.delete_custom_resource_preconditioned(
+                    "g.io", "v1", "things", "t1", uid="uid-1", namespace="ns1"
+                )
+
+        assert exc_info.value.__cause__ is failure
+        assert failure.status == status
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+    def test_unreconciled_named_create_conflict_is_scrubbed(self, kube_client, mock_k8s_apis, caplog):
+        conflict = canary_api_exception(409)
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = conflict
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = {
+            "metadata": {"name": "t1"},
+            "spec": {"other": True},
+        }
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.create_custom_resource(
+                    "g.io", "v1", "things", {"metadata": {"name": "t1"}, "spec": {"x": 1}}, namespace="ns1"
+                )
+
+        assert exc_info.value is conflict and conflict.status == 409
+        assert mock_k8s_apis["custom_api"].create_namespaced_custom_object.call_count == 1
+        assert_no_canary(caplog.text, *_exception_texts(conflict))
+
+    def test_configmap_patch_failure_scrubs_the_create_conflict_it_chains(self, kube_client, mock_k8s_apis, caplog):
+        conflict = canary_api_exception(409)
+        refusal = canary_api_exception(403)
+        mock_k8s_apis["core_api"].create_namespaced_config_map.side_effect = conflict
+        mock_k8s_apis["core_api"].patch_namespaced_config_map.side_effect = refusal
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.create_or_patch_configmap("ns1", "cm1", {"k": "v"})
+
+        assert exc_info.value is refusal
+        assert refusal.__context__ is conflict and conflict.status == 409
+        assert_no_canary(caplog.text, *_exception_texts(refusal))
+
+    @pytest.mark.parametrize("status", [0, 999])
+    def test_a_status_without_a_standard_phrase_has_no_reason(self, kube_client, mock_k8s_apis, status):
+        failure = canary_api_exception(status)
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.get_namespace("ns1")
+
+        assert exc_info.value.status == status
+        assert_no_canary(*_exception_texts(exc_info.value))
+        assert exc_info.value.reason is None
+
+    def test_real_client_http_error_reaches_the_caller_without_detail(self, caplog):
+        """The installed client builds the ApiException from a real HTTP response."""
+
+        class _CanaryPoolManager(_RecordingPoolManager):
+            def request(self, method, url, **kwargs):
+                response = super().request(method, url, **kwargs)
+                response.reason = API_REASON_CANARY
+                response.headers["Audit-Id"] = API_HEADER_CANARY
+                return response
+
+        pool_manager = _CanaryPoolManager(status=403, payload={"kind": "Status", "message": API_BODY_CANARY})
+        client = _real_kube_client(pool_manager)
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                client.get_custom_resource("g.io", "v1", "things", "t1", namespace="ns1")
+
+        assert exc_info.value.status == 403
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# #283 guardrails
+# ---------------------------------------------------------------------------
+
+# Attributes of a caught exception that may be formatted, besides `type(X).__name__`.
+_FORMATTABLE_EXCEPTION_ATTRIBUTES = {"status"}
+# `_undecodable_body_is_malformed` reads `reason` only for a status-0 ApiException, which the
+# client raises itself for a content type it does not deserialize.
+_REASON_FORMAT_ALLOWED_IN = {"_undecodable_body_is_malformed"}
+_NEVER_READ_ATTRIBUTES = {"body", "headers", "data"}
+_BROAD_EXCEPTION_NAMES = {"Exception", "BaseException"}
+
+
+def _handler_type_names(handler: ast.ExceptHandler) -> set:
+    if handler.type is None:
+        return {"BaseException"}
+    nodes = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return {node.id if isinstance(node, ast.Name) else getattr(node, "attr", "") for node in nodes}
+
+
+def _api_reachable_handlers(tree: ast.AST):
+    """Yield (enclosing function, handler) for every named handler an ApiException can reach.
+
+    A broad handler (`Exception`, `BaseException`, bare) is unreachable for an ApiException
+    when an earlier handler of the same `try` already catches it.
+    """
+    enclosing = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(function):
+                enclosing[node] = function.name  # inner functions are walked later and win
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        api_caught = False
+        for handler in node.handlers:
+            names = _handler_type_names(handler)
+            reachable = "ApiException" in names or (bool(names & _BROAD_EXCEPTION_NAMES) and not api_caught)
+            api_caught = api_caught or "ApiException" in names or bool(names & _BROAD_EXCEPTION_NAMES)
+            if reachable and handler.name:
+                yield enclosing.get(handler, "<module>"), handler
+
+
+def _is_format_sink(node: ast.AST) -> bool:
+    if isinstance(node, ast.JoinedStr):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and isinstance(node.left, ast.Constant):
+        return isinstance(node.left.value, str)
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in {"str", "repr", "format", "print"}:
+        return True
+    if isinstance(func, ast.Attribute):
+        if func.attr == "format":
+            return True
+        if isinstance(func.value, ast.Name) and func.value.id in {"logger", "logging"}:
+            return True
+    return False
+
+
+def _exception_name_violations(source: str) -> list:
+    tree = ast.parse(source)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    violations = []
+    handlers = list(_api_reachable_handlers(tree))
+    for function, handler in handlers:
+        name = handler.name
+        sinks = []
+        for node in ast.walk(handler):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == name
+                and node.attr in _NEVER_READ_ATTRIBUTES
+            ):
+                violations.append(f"{function}:{node.lineno} reads {name}.{node.attr}")
+            if _is_format_sink(node):
+                sinks.append(node)
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                sinks.append(node.exc)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in {"logger", "logging"}
+                and (node.func.attr == "exception" or any(kw.arg == "exc_info" for kw in node.keywords))
+            ):
+                violations.append(f"{function}:{node.lineno} logs a traceback inside an API error handler")
+        seen = set()
+        for sink in sinks:
+            for node in ast.walk(sink):
+                if not (isinstance(node, ast.Name) and node.id == name) or node in seen:
+                    continue
+                seen.add(node)
+                parent = parents[node]
+                if isinstance(parent, ast.Attribute) and parent.attr in _FORMATTABLE_EXCEPTION_ATTRIBUTES:
+                    continue
+                if (
+                    isinstance(parent, ast.Attribute)
+                    and parent.attr == "reason"
+                    and function in _REASON_FORMAT_ALLOWED_IN
+                ):
+                    continue
+                if (
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Name)
+                    and parent.func.id == "type"
+                    and isinstance(parents[parent], ast.Attribute)
+                    and parents[parent].attr == "__name__"
+                ):
+                    continue
+                violations.append(f"{function}:{node.lineno} formats {name} beyond .status/type().__name__")
+    return violations, len(handlers)
+
+
+def _kube_client_source() -> str:
+    return Path(kube_client_module.__file__).read_text(encoding="utf-8")
+
+
+# Public KubeClient methods that carry no error boundary, and why that is safe. A delegate,
+# when named, must itself carry the boundary.
+_BOUNDARY_EXEMPT = {
+    "namespace_exists": ("delegates", "get_namespace"),
+    "get_cluster_identity": ("delegates; its own RuntimeError text is static", "_read_cluster_identity_namespace"),
+    "secret_exists": ("delegates", "get_secret"),
+    "exists_configmap": ("delegates", "get_configmap"),
+    "list_managed_clusters": ("delegates", "list_custom_resources"),
+    "patch_managed_cluster": ("delegates", "patch_custom_resource"),
+    "list_pods": ("delegates", "get_pods"),
+    "list_custom_resources_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "list_managed_clusters_strict": ("delegates to a strict read that never raises API errors", None),
+    "get_custom_resource_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "get_namespace_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "list_pods_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "get_deployment_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "get_replicaset_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "api_resource_served": ("returns a StrictReadOutcome reason code, never raises API errors", None),
+    "json_patch_custom_resource_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
+    "delete_restore_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
+    "create_restore_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
+    "delete_custom_resource_preconditioned": (
+        "deliberately undecorated (see test_the_primitive_is_undecorated_so_a_404_can_never_be_swallowed); "
+        "scrubs inside its own ApiException handler",
+        None,
+    ),
+}
+
+
+def _carries_boundary(function) -> bool:
+    return getattr(function, "_scrubs_api_errors", False) is True
+
+
+@pytest.mark.unit
+class TestApiErrorGuardrails:
+    """#283 guardrails over lib/kube_client.py."""
+
+    def test_caught_api_errors_are_formatted_only_by_status(self):
+        violations, handler_count = _exception_name_violations(_kube_client_source())
+        assert handler_count >= 10, "the scan must actually find the API error handlers"
+        assert violations == []
+
+    def test_the_scan_rejects_a_raw_exception_log(self):
+        """The guardrail bites: a raw `%s, e` log in an ApiException handler is a violation."""
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ApiException as e:\n"
+            "        logger.error('%s', e)\n"
+            "        raise Wrapped(f'{e.status}: {e}')\n"
+        )
+        violations, handler_count = _exception_name_violations(source)
+        assert handler_count == 1
+        assert len(violations) == 2
+
+    def test_every_public_method_carries_the_boundary_or_a_reasoned_exemption(self):
+        public = sorted(
+            name for name, value in vars(KubeClient).items() if not name.startswith("_") and callable(value)
+        )
+        missing = [name for name in public if not _carries_boundary(getattr(KubeClient, name))]
+        assert sorted(set(missing) - set(_BOUNDARY_EXEMPT)) == [], "unbounded public methods"
+        assert sorted(set(_BOUNDARY_EXEMPT) - set(missing)) == [], "stale exemptions"
+        for name, (_reason, delegate) in _BOUNDARY_EXEMPT.items():
+            if delegate is not None:
+                assert _carries_boundary(getattr(KubeClient, delegate)), f"{name} delegates to unbounded {delegate}"
