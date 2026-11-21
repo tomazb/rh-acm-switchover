@@ -1375,7 +1375,7 @@ class TestApiCallDecorator:
         mock_error.assert_called_once()
         log_message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
         assert "Failed to get some resource:" in log_message
-        assert "Forbidden" in log_message
+        assert "403" in log_message
 
     def test_uses_custom_resource_desc(self):
         """Decorator logs the provided resource_desc instead of the method name."""

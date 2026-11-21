@@ -8,6 +8,7 @@ names, namespaces, and other parameters to improve security and reliability.
 import contextlib
 import errno
 import functools
+import http
 import json
 import logging
 import socket
@@ -293,8 +294,48 @@ def _reject_json_constant(constant: str) -> Any:
     raise ValueError(f"Malformed Kubernetes API response: non-JSON constant {constant}")
 
 
-# Standard retry decorator for API calls
-retry_api_call = retry(
+def _scrub_api_error(exc: BaseException) -> None:
+    """Strip server-controlled text from every ApiException on `exc`'s chain, in place.
+
+    `str(ApiException)` renders the response headers, body and (37.x) data, and the reason is
+    the server's. Status and type are kept; the reason becomes the standard HTTP phrase, or
+    None for a status that has none (#283).
+    """
+    seen = set()
+    pending: List[Optional[BaseException]] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ApiException):
+            current.body = None
+            current.headers = None
+            if hasattr(current, "data"):
+                current.data = None
+            try:
+                current.reason = http.HTTPStatus(current.status).phrase
+            except (TypeError, ValueError):
+                current.reason = None
+        pending.extend((current.__cause__, current.__context__))
+
+
+def _api_error_boundary(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Scrub any exception leaving `func` before it reaches a caller, log or state file."""
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(*args, **kwargs)
+        except BaseException as exc:
+            _scrub_api_error(exc)
+            raise
+
+    setattr(wrapper, "_scrubs_api_errors", True)
+    return wrapper
+
+
+_retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(5),
@@ -304,12 +345,22 @@ retry_api_call = retry(
 
 # Advisory discovery retains retries but deliberately has no before-sleep
 # logger because exception strings may contain server-provided response data.
-retry_api_call_advisory = retry(
+_retry_api_call_advisory = retry(
     retry=retry_if_exception(_should_retry),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(5),
     reraise=True,
 )
+
+
+def retry_api_call(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Standard retry decorator for API calls; the error boundary sits inside the retry."""
+    return _retry_api_call(_api_error_boundary(func))
+
+
+def retry_api_call_advisory(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Retry decorator without before-sleep logging; the error boundary sits inside the retry."""
+    return _retry_api_call_advisory(_api_error_boundary(func))
 
 
 def api_call(
@@ -338,18 +389,19 @@ def api_call(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         desc = resource_desc or func.__name__.replace("_", " ")
+        bounded = _api_error_boundary(func)
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
-                return func(*args, **kwargs)
+                return bounded(*args, **kwargs)
             except ApiException as e:
                 if e.status == 404:
                     return not_found_value
                 if is_retryable_error(e):
                     raise
                 if log_on_error:
-                    logger.error("Failed to %s: %s", desc, e)
+                    logger.error("Failed to %s: HTTP %s", desc, e.status)
                 raise
 
         # Apply retry decorator
@@ -786,7 +838,7 @@ class KubeClient:
                 return result.to_dict()
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
+            logger.error("Failed to create/patch configmap %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @api_call(not_found_value=True, resource_desc="delete configmap")
@@ -1474,15 +1526,9 @@ class KubeClient:
             )
             return result
         except ApiException as e:
-            logger.error(
-                "KUBE_CLIENT: ApiException during patch: status=%s, reason=%s, body=%s",
-                e.status,
-                e.reason,
-                e.body[:500] if e.body else "None",
-            )
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to patch %s/%s: %s", plural, name, e)
+            logger.error("Failed to patch %s/%s: HTTP %s", plural, name, e.status)
             raise
         except Exception as e:
             logger.error(
@@ -1825,6 +1871,7 @@ class KubeClient:
         """
         return self._discovery_serves(group, version, resource_name)
 
+    @_api_error_boundary
     def create_custom_resource(
         self,
         group: str,
@@ -1935,7 +1982,7 @@ class KubeClient:
                 raise
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to create %s: %s", plural, e)
+            logger.error("Failed to create %s: HTTP %s", plural, e.status)
             raise
 
     def delete_custom_resource_preconditioned(
@@ -2012,6 +2059,8 @@ class KubeClient:
                     group=group, version=version, plural=plural, name=name, **kwargs
                 )
         except ApiException as exc:
+            # Scrubbed here, not by a decorator: this primitive stays undecorated (see above).
+            _scrub_api_error(exc)
             if exc.status in (409, 412):
                 raise PreconditionConflict(
                     f"Refusing to delete {plural}/{name}: it is no longer the object with uid {uid}. "
@@ -2192,7 +2241,7 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to scale deployment %s/%s: %s", namespace, name, e)
+            logger.error("Failed to scale deployment %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @retry_api_call
@@ -2233,7 +2282,7 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to scale statefulset %s/%s: %s", namespace, name, e)
+            logger.error("Failed to scale statefulset %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @retry_api_call
@@ -2269,7 +2318,7 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
+            logger.error("Failed to restart deployment %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     def _list_pods_once(
@@ -2372,6 +2421,7 @@ class KubeClient:
         kwargs.update(self._request_timeout_kwargs())
         return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
 
+    @_api_error_boundary
     def wait_for_pods_ready(
         self,
         namespace: str,
@@ -2415,7 +2465,7 @@ class KubeClient:
                 if exc.status == 404:
                     pods = []
                 elif is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug("Transient error while listing pods in %s: HTTP %s", namespace, exc.status)
                     sleep_remaining_budget()
                     continue
                 else:
