@@ -56,6 +56,11 @@ from lib.exceptions import (
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
+try:  # kubernetes 37.x builds its models with pydantic; earlier clients do not install it
+    from pydantic_core import ValidationError as _ModelValidationError
+except ImportError:  # kubernetes before 37.x: no pydantic models, so no pydantic errors
+    _ModelValidationError = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger("acm_switchover")
 
 
@@ -157,8 +162,10 @@ def _undecodable_body_is_malformed() -> Iterator[None]:
             f"Malformed Kubernetes API response: undecodable body ({type(exc).__name__})"
         ) from exc
     except ApiException as exc:
-        if exc.status == 0 and str(exc.reason).startswith(_UNSUPPORTED_CONTENT_TYPE_REASON):
-            raise MalformedResponseError(f"Malformed Kubernetes API response: {exc.reason}") from exc
+        # The reason is read to classify, never formatted: it ends with the response's
+        # Content-Type header value (#283).
+        if exc.status == 0 and isinstance(exc.reason, str) and exc.reason.startswith(_UNSUPPORTED_CONTENT_TYPE_REASON):
+            raise MalformedResponseError("Malformed Kubernetes API response: unsupported content type") from exc
         raise
 
 
@@ -294,12 +301,36 @@ def _reject_json_constant(constant: str) -> Any:
     raise ValueError(f"Malformed Kubernetes API response: non-JSON constant {constant}")
 
 
-def _scrub_api_error(exc: BaseException) -> None:
-    """Strip server-controlled text from every ApiException on `exc`'s chain, in place.
+_UNDESERIALIZABLE_RESPONSE = "Malformed Kubernetes API response: the installed client could not deserialize it"
+_DESERIALIZE_CODE = client.ApiClient.deserialize.__code__
 
-    `str(ApiException)` renders the response headers, body and (37.x) data, and the reason is
-    the server's. Status and type are kept; the reason becomes the standard HTTP phrase, or
-    None for a status that has none (#283).
+
+def _raised_by_deserializer(exc: BaseException) -> bool:
+    """Whether `exc` was raised inside the installed client's response deserializer."""
+    frame = exc.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code is _DESERIALIZE_CODE:
+            return True
+        frame = frame.tb_next
+    return False
+
+
+def _is_model_validation_error(exc: BaseException) -> bool:
+    return _ModelValidationError is not None and isinstance(exc, _ModelValidationError)
+
+
+def _scrub_api_error(exc: BaseException) -> None:
+    """Strip server-controlled text from every exception on `exc`'s chain, in place (#283).
+
+    - `ApiException`: `str()` renders the response headers, body and (37.x) data, and the
+      reason is the server's. Status and type are kept; the reason becomes the standard HTTP
+      phrase, or None for a status that has none. Only links to other ApiExceptions are kept:
+      the client raises a status-0 ApiException while handling its own parse error, which
+      quotes the body value (29.x dateutil `ParserError`, 37.x enum `ValueError`).
+    - `UnicodeDecodeError`: its `args` and `object` hold the undecoded body bytes.
+    - A `ValueError` raised by the client's deserializer (29.x `int()` of a body value, a
+      parser error) quotes the body value; its message becomes a static one, type kept. A
+      pydantic error cannot be rewritten in place: see `_static_model_validation_error`.
     """
     seen = set()
     pending: List[Optional[BaseException]] = [exc]
@@ -317,7 +348,35 @@ def _scrub_api_error(exc: BaseException) -> None:
                 current.reason = http.HTTPStatus(current.status).phrase
             except (TypeError, ValueError):
                 current.reason = None
+            if not isinstance(current.__cause__, ApiException):
+                current.__cause__ = None
+            if not isinstance(current.__context__, ApiException):
+                current.__context__ = None
+        elif isinstance(current, UnicodeDecodeError):
+            current.object = b""
+            current.args = (current.encoding, b"", current.start, current.end, current.reason)
+        elif (
+            isinstance(current, ValueError)
+            and not _is_model_validation_error(current)
+            and _raised_by_deserializer(current)
+        ):
+            current.args = (_UNDESERIALIZABLE_RESPONSE,)
         pending.extend((current.__cause__, current.__context__))
+
+
+def _static_model_validation_error(exc: BaseException) -> Optional[BaseException]:
+    """A same-type stand-in for a pydantic error the 37.x deserializer raised, else None.
+
+    Its message, `errors()` locations (which include response dict keys) and inputs all
+    quote the body, and none of them can be cleared in place.
+    """
+    if _ModelValidationError is None or not _is_model_validation_error(exc) or not _raised_by_deserializer(exc):
+        return None
+    return _ModelValidationError.from_exception_data(
+        "Kubernetes API response",
+        [{"type": "value_error", "loc": (), "input": None, "ctx": {"error": _UNDESERIALIZABLE_RESPONSE}}],
+        hide_input=True,
+    )
 
 
 def _api_error_boundary(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -329,7 +388,11 @@ def _api_error_boundary(func: Callable[..., Any]) -> Callable[..., Any]:
             return func(*args, **kwargs)
         except BaseException as exc:
             _scrub_api_error(exc)
-            raise
+            replacement = _static_model_validation_error(exc)
+            if replacement is None:
+                raise
+        # Raised outside the handler, so the original is not kept as its context.
+        raise replacement
 
     setattr(wrapper, "_scrubs_api_errors", True)
     return wrapper
@@ -1531,11 +1594,8 @@ class KubeClient:
             logger.error("Failed to patch %s/%s: HTTP %s", plural, name, e.status)
             raise
         except Exception as e:
-            logger.error(
-                "KUBE_CLIENT: Unexpected exception during patch: %s: %s",
-                type(e).__name__,
-                e,
-            )
+            # Type only: a response failure's message can quote the body or a header (#283).
+            logger.error("KUBE_CLIENT: Unexpected exception during patch: %s", type(e).__name__)
             raise
 
     def json_patch_custom_resource_guarded(
@@ -2072,6 +2132,10 @@ class KubeClient:
                     "Verify absence live rather than recording this as an accepted delete."
                 ) from exc
             raise
+        except Exception as exc:
+            # 29.x raises an undecodable error body as a UnicodeDecodeError holding its bytes.
+            _scrub_api_error(exc)
+            raise
 
     @api_call(not_found_value=True, resource_desc="delete custom resource")
     def delete_custom_resource(
@@ -2472,7 +2536,7 @@ class KubeClient:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug("Transient error while listing pods in %s: %s", namespace, type(exc).__name__)
                     sleep_remaining_budget()
                     continue
                 raise
