@@ -4320,7 +4320,8 @@ class TestApiErrorDetailNeverLeavesKubeClient:
 # Attributes of a caught exception that may be formatted, besides `type(X).__name__`.
 _FORMATTABLE_EXCEPTION_ATTRIBUTES = {"status"}
 # `_undecodable_body_is_malformed` reads `reason` only for a status-0 ApiException, which the
-# client raises itself for a content type it does not deserialize.
+# client raises itself for a content type it does not deserialize. That reason embeds the
+# response's Content-Type header value: allowlisted by the #283 design, a known residual.
 _REASON_FORMAT_ALLOWED_IN = {"_undecodable_body_is_malformed"}
 _NEVER_READ_ATTRIBUTES = {"body", "headers", "data"}
 _BROAD_EXCEPTION_NAMES = {"Exception", "BaseException"}
