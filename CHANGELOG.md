@@ -304,6 +304,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kubernetes API error text no longer reaches logs, the state file `errors[]` or the report JSON (#283).
+  `KubeClient` now strips the response body, headers and data from `ApiException` and replaces the
+  server-supplied reason with the standard HTTP phrase, so operators see the HTTP status and that
+  phrase only; status and exception type are unchanged. Python CLI only; the Ansible Collection is
+  not changed. One visible change: a retryable `patch_custom_resource` failure no longer logs an
+  ERROR line before it retries.
 - Python finalization Backup continuity now requires a positively complete strict inventory
   before recording or reusing a Backup name. Failed polls retain the existing baseline
   and retry within the existing wait; the integrity fallback also uses strict inventory.
