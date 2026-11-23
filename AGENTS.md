@@ -581,8 +581,11 @@ Rules:
 
 Additional standing CI constraints:
 
-- Root `tests/` jobs do not install `ansible-core`. Top-level tests may import collection
-  helpers, but must not hard-require `ansible.module_utils` at import time.
+- Root `tests/` jobs do not install `ansible-core` and must prove the engine is absent
+  before pytest. Top-level tests may import collection helpers, but must not import the
+  `ansible` package at import time. The one exception is `tests/ansible_engine/`, which
+  root jobs exclude and the `ansible-engine-parity` job runs on the compatibility
+  authority's lanes.
 - Scope formatting and lint commands to tracked source trees. Never run repo-wide
   formatting that can walk `.venv/` or other generated directories.
 - Reproduce CI's formatter configuration exactly; do not rely on an editor auto-format hook,
