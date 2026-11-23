@@ -30,6 +30,7 @@ from kubernetes.client import ApiClient, Configuration
 from kubernetes.client.rest import ApiException
 
 import lib.kube_client as kube_client_module
+from lib.constants import STRICT_READ_REASON_MALFORMED_RESPONSE
 from lib.exceptions import MalformedResponseError, PreconditionConflict, TargetDisappeared
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.strict_read import StrictReadStatus
@@ -897,7 +898,7 @@ _CLI_FAILURES = [
     pytest.param(lambda: _WirePool(_WIRES["bad-chunk"]), "connection", id="malformed-chunk-size"),
     pytest.param(
         lambda: _RecordingPoolManager(payload=_NAMESPACE, content_type="application/json; charset=" + CANARY),
-        "Kubernetes API request failed",
+        "Malformed Kubernetes API response: undecodable body (LookupError)",
         id="unknown-charset",
         marks=_ONLY_37,
     ),
@@ -954,6 +955,339 @@ class TestOperatorOutputs:
         assert len(errors) == 1 and diagnosis in errors[0] and "Reason: None" not in errors[0]
         assert ("Traceback" in caplog.text) is verbose
         _assert_no_canary(state_text, report_text, caplog.text)
+
+
+# ---------------------------------------------------------------------------
+# An operator can still tell failures apart (grok-r3)
+# ---------------------------------------------------------------------------
+
+_REQUEST_FAILED = "Kubernetes API request failed"
+
+
+def _undecodable(cause):
+    return f"Malformed Kubernetes API response: undecodable body ({cause})"
+
+
+def _off_model(cause):
+    return f"Malformed Kubernetes API response: body does not match the expected model ({cause})"
+
+
+# A 2xx response the typed (core/apps) client could not decode or deserialize into its model.
+# Each case names, per lane, the class the raw SDK raises for it: the precondition that the lane
+# really produces that failure.
+_MALFORMED_TYPED_READS = [
+    pytest.param(
+        b'{"not": ' + CANARY.encode(),
+        "application/json",
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        {37: "JSONDecodeError"},
+        ValueError,
+        _undecodable("JSONDecodeError"),
+        id="namespace-invalid-json",
+        marks=pytest.mark.skipif(
+            _MAJOR < 37,
+            reason=f"kubernetes {kubernetes.__version__} reads an undecodable namespace body as an empty model",
+        ),
+    ),
+    pytest.param(
+        b"\xff\xfe" + CANARY.encode(),
+        "application/json",
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        {29: "UnicodeDecodeError", 37: "UnicodeDecodeError"},
+        UnicodeError,
+        _undecodable("UnicodeDecodeError"),
+        id="namespace-invalid-utf8",
+    ),
+    pytest.param(
+        json.dumps(_NAMESPACE).encode(),
+        "application/json; charset=" + CANARY,
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        {37: "LookupError"},
+        LookupError,
+        _undecodable("LookupError"),
+        id="namespace-unknown-charset",
+        marks=_ONLY_37,
+    ),
+    pytest.param(
+        json.dumps({"kind": "PodList", "metadata": {"name": CANARY}}).encode(),
+        "application/json",
+        lambda c: c.core_v1.list_namespaced_pod("ns1"),
+        lambda c: c.get_pods("ns1"),
+        {29: "ValueError", 37: "ValidationError"},
+        ValueError,
+        {29: _off_model("ValueError"), 37: _off_model("ValidationError")},
+        id="pod-list-without-items",
+    ),
+    pytest.param(
+        json.dumps({"spec": {"selector": CANARY}}).encode(),
+        "application/json",
+        lambda c: c.apps_v1.read_namespaced_deployment("d1", "ns1"),
+        lambda c: c.get_deployment("d1", "ns1"),
+        {29: "ValueError", 37: "ValidationError"},
+        ValueError,
+        {29: _off_model("ValueError"), 37: _off_model("ValidationError")},
+        id="deployment-off-model",
+    ),
+]
+
+
+@pytest.mark.unit
+class TestMalformedTypedReadsAreNamed:
+    """grok-r3 finding 1: a 2xx the typed client could not decode or deserialize reads as a
+    malformed response, not as the generic request failure, and keeps its catch family."""
+
+    @pytest.mark.parametrize("body,content_type,raw_call,kube_call,raw_class,family,message", _MALFORMED_TYPED_READS)
+    def test_a_malformed_typed_read_names_a_malformed_response(
+        self, caplog, body, content_type, raw_call, kube_call, raw_class, family, message
+    ):
+        def make_pool():
+            return _RecordingPoolManager(body=body, content_type=content_type)
+
+        raw = _raise(raw_call, _real_typed_kube_client(make_pool()))
+        assert type(raw).__name__ == raw_class[_MAJOR], "precondition: this lane's SDK fails on this response"
+
+        pool = make_pool()
+        with caplog.at_level(logging.DEBUG):
+            raised = _raise(kube_call, _real_typed_kube_client(pool))
+
+        expected = message[_MAJOR] if isinstance(message, dict) else message
+        assert type(raised) is family, "the catch family callers see is unchanged"
+        assert str(raised) == expected
+        assert str(raised) != _REQUEST_FAILED
+        assert is_retryable_error(raised) is is_retryable_error(raw) is False
+        assert len(pool.calls) == 1
+        _assert_no_canary(caplog.text, *_rendered(raised))
+
+    def test_a_request_side_value_error_is_not_a_malformed_response(self):
+        """Argument validation fails before any response exists: it stays a request failure."""
+        client = _real_typed_kube_client(_RecordingPoolManager(payload=_NAMESPACE))
+        raw = _raise(lambda c: c.core_v1.read_namespace(None), client)
+        assert isinstance(raw, ValueError), "precondition: the SDK rejects the argument itself"
+
+        raised = _raise(lambda c: kube_client_module._call_sdk(lambda: c.core_v1.read_namespace(None)), client)
+
+        assert type(raised) is ValueError and str(raised) == _REQUEST_FAILED
+        assert client._api_client.rest_client.pool_manager.calls == []
+
+
+_DISCOVERY_DOCUMENT = {
+    "kind": "APIResourceList",
+    "groupVersion": "g.io/v1",
+    "resources": [{"name": "things", "kind": "Thing"}],
+}
+
+
+class _ServedDiscovery:
+    """Answers discovery for g.io/v1 itself and hands every other request to `inner`, so a
+    strict read reaches the request after discovery."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def request(self, method, url, **kwargs):
+        if url.split("?", 1)[0].endswith("/apis/g.io/v1"):
+            return _RecordingPoolManager(payload=_DISCOVERY_DOCUMENT).request(method, url)
+        return self._inner.request(method, url, **kwargs)
+
+
+def _wait_for_pods(client):
+    """One pod-list attempt inside `wait_for_pods_ready`, on a clock that then runs out."""
+    ticks = iter(range(100))
+    clock = SimpleNamespace(time=lambda: next(ticks) * 0.4, sleep=lambda _seconds: None)
+    with patch.object(kube_client_module, "time", clock):
+        return client.wait_for_pods_ready("ns1", "app=x", timeout=1)
+
+
+def _guarded_patch(client):
+    return client.json_patch_custom_resource_guarded(
+        "r1",
+        namespace="ns1",
+        uid="u1",
+        resource_version="7",
+        expected_managed_clusters_backup_name="b1",
+        replacement_managed_clusters_backup_name="latest",
+    )
+
+
+# Every KubeClient site that catches a boundary replacement and returns an outcome or keeps
+# polling instead of raising it. Strict custom reads get discovery answered so their own request runs.
+_SWALLOWING_SITES = [
+    pytest.param(lambda c: c.api_resource_served("g.io", "v1", "things"), False, id="discovery"),
+    pytest.param(lambda c: c.list_custom_resources_strict("g.io", "v1", "things", "ns1"), True, id="strict-list"),
+    pytest.param(lambda c: c.get_custom_resource_strict("g.io", "v1", "things", "t1", "ns1"), True, id="strict-get"),
+    pytest.param(lambda c: c.get_namespace_strict("ns1"), False, id="strict-namespace"),
+    pytest.param(lambda c: c.list_pods_strict("ns1"), False, id="strict-pods"),
+    pytest.param(lambda c: c.get_deployment_strict("d1", "ns1"), False, id="strict-deployment"),
+    pytest.param(lambda c: c.get_replicaset_strict("r1", "ns1"), False, id="strict-replicaset"),
+    pytest.param(_guarded_patch, False, id="guarded-patch"),
+    pytest.param(
+        lambda c: c.delete_restore_guarded("r1", namespace="ns1", uid="u1", resource_version="7"),
+        False,
+        id="guarded-delete",
+    ),
+    pytest.param(
+        lambda c: c.create_restore_guarded({"metadata": {"name": "r1"}}, namespace="ns1"), False, id="guarded-create"
+    ),
+    pytest.param(_wait_for_pods, False, id="pod-wait"),
+]
+
+_SOCKET_FAILURES = {
+    "connection-refused": lambda: ConnectionRefusedError(errno.ECONNREFUSED, "refused " + CANARY),
+    "dns-failure": lambda: socket.gaierror(socket.EAI_NONAME, "Name or service not known " + CANARY),
+    "connect-timeout": lambda: socket.timeout("timed out " + CANARY),
+}
+# What urllib3 itself makes of each failure: the raw reason class, checked as a precondition.
+_RAW_REASONS = {
+    "tls": urllib3.exceptions.SSLError,
+    "connection-refused": urllib3.exceptions.NewConnectionError,
+    "dns-failure": urllib3.exceptions.NameResolutionError,
+    "connect-timeout": urllib3.exceptions.ConnectTimeoutError,
+}
+_DIAGNOSES = {
+    "tls": "TLS error",
+    "connection-refused": "connection error",
+    "dns-failure": "connection error",
+    "connect-timeout": "timed out",
+}
+
+
+class _transport_failing:
+    """The SDK-built pool with its connect failing as `kind`: a TLS failure at `connect()`, the
+    others at the socket factory urllib3's own connection calls."""
+
+    def __init__(self, kind, served_discovery=False):
+        self._kind = kind
+        self._served_discovery = served_discovery
+        self._patch = None
+        self.connects = []
+
+    def __enter__(self):
+        if self._kind == "tls":
+            client, self.connects = _configured_client(lambda: ssl.SSLError("synthetic certificate failure " + CANARY))
+        else:
+
+            def create_connection(*_args, **_kwargs):
+                self.connects.append(1)
+                raise _SOCKET_FAILURES[self._kind]()
+
+            self._patch = patch("urllib3.util.connection.create_connection", side_effect=create_connection)
+            self._patch.start()
+            client = _configured_client()[0]
+        if self._served_discovery:
+            rest = client._api_client.rest_client
+            rest.pool_manager = _ServedDiscovery(rest.pool_manager)
+        return client
+
+    def __exit__(self, *exc_info):
+        if self._patch is not None:
+            self._patch.stop()
+
+
+def _project_log(caplog):
+    return [record.getMessage() for record in caplog.records if record.name == "acm_switchover"]
+
+
+@pytest.mark.unit
+class TestSwallowedFailuresKeepTheirDiagnosis:
+    """grok-r3 finding 2: a site that turns a failure into an outcome logs its fixed category, so
+    a TLS failure, a refused connection and a timeout read differently."""
+
+    @pytest.mark.parametrize("kind", sorted(_RAW_REASONS))
+    def test_the_raw_transport_fails_as_the_kind_says(self, kind):
+        with _transport_failing(kind) as client:
+            raw = _raise(lambda c: c.core_v1.read_namespace("ns1"), client)
+        assert isinstance(raw, urllib3.exceptions.MaxRetryError) and isinstance(raw.reason, _RAW_REASONS[kind])
+
+    @pytest.mark.parametrize("kind", sorted(_DIAGNOSES))
+    @pytest.mark.parametrize("route,served_discovery", _SWALLOWING_SITES)
+    def test_the_site_logs_the_fixed_category(self, caplog, route, served_discovery, kind):
+        failing = _transport_failing(kind, served_discovery)
+        with failing as client:
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                outcome = route(client)
+
+        assert failing.connects, "the site reached the failing transport"
+        if outcome is False:
+            pass  # pod-wait gave up when its budget ran out
+        elif hasattr(outcome, "status"):
+            assert outcome.status is StrictReadStatus.ERROR
+        else:
+            assert outcome["accepted"] is False and outcome["reason"] == "unverifiable"
+        lines = _project_log(caplog)
+        assert any(_DIAGNOSES[kind] in line for line in lines), f"no {_DIAGNOSES[kind]!r} in {lines}"
+        for other in set(_DIAGNOSES.values()) - {_DIAGNOSES[kind]}:
+            assert not any(other in line for line in lines), f"{other!r} logged for {kind}: {lines}"
+        _assert_no_canary(caplog.text)
+
+    @pytest.mark.parametrize("status", [401, 403])
+    @pytest.mark.parametrize("route,served_discovery", [p for p in _SWALLOWING_SITES if p.id != "pod-wait"])
+    def test_the_site_logs_the_http_status(self, caplog, route, served_discovery, status):
+        pool = _RecordingPoolManager(status=status, payload={"kind": "Status", "message": CANARY})
+        client = _real_typed_kube_client(_ServedDiscovery(pool) if served_discovery else pool)
+        with caplog.at_level(logging.DEBUG):
+            route(client)
+
+        lines = _project_log(caplog)
+        assert any(f"HTTP {status}" in line for line in lines), lines
+        assert not any(f"HTTP {401 + 403 - status}" in line for line in lines)
+        _assert_no_canary(caplog.text)
+
+    @pytest.mark.parametrize("route", [p for p in _OUTCOME_ROUTES if p.id.startswith("guarded")])
+    def test_a_status_0_tls_failure_logs_its_category_on_a_guarded_route(self, caplog, route):
+        """The SDK's own status-0 ApiException for a TLS failure is not logged as a bare `HTTP 0`."""
+        pool = _RaisingPool(lambda: urllib3.exceptions.SSLError("certificate verify failed: " + CANARY))
+        raw = _raise(lambda c: c.core_v1.read_namespace("ns1"), _real_typed_kube_client(pool))
+        assert isinstance(raw, ApiException) and raw.status == 0, "precondition: the SDK raises status 0"
+
+        with caplog.at_level(logging.DEBUG):
+            outcome = route(_real_typed_kube_client(pool))
+
+        assert outcome["reason"] == "unverifiable"
+        assert any("TLS error" in line for line in _project_log(caplog)), _project_log(caplog)
+        _assert_no_canary(caplog.text)
+
+
+# A 2xx a strict read could not decode or deserialize: still READ_FAILED or discovery-unverifiable
+# (the reason codes do not change), now logged as a malformed response.
+_MALFORMED_ON_STRICT_SITES = [
+    pytest.param(lambda c: c.api_resource_served("g.io", "v1", "things"), False, b"{not json", id="discovery"),
+    pytest.param(
+        lambda c: c.list_custom_resources_strict("g.io", "v1", "things", "ns1"), True, b"{not json", id="strict-list"
+    ),
+    pytest.param(
+        lambda c: c.get_custom_resource_strict("g.io", "v1", "things", "t1", "ns1"), True, b"{not json", id="strict-get"
+    ),
+    pytest.param(lambda c: c.list_pods_strict("ns1"), False, b"{}", id="strict-pods"),
+    pytest.param(
+        lambda c: c.get_deployment_strict("d1", "ns1"),
+        False,
+        json.dumps({"spec": {"selector": CANARY}}).encode(),
+        id="strict-deployment",
+    ),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("route,served_discovery,body", _MALFORMED_ON_STRICT_SITES)
+def test_a_strict_read_logs_a_malformed_response(caplog, route, served_discovery, body):
+    pool = _RecordingPoolManager(body=body)
+    client = _real_typed_kube_client(_ServedDiscovery(pool) if served_discovery else pool)
+    with caplog.at_level(logging.DEBUG):
+        outcome = route(client)
+
+    assert outcome.status is StrictReadStatus.ERROR
+    lines = _project_log(caplog)
+    if outcome.reason == STRICT_READ_REASON_MALFORMED_RESPONSE:
+        # kubernetes 29.x hands an undecodable custom-object body back as a string, so no
+        # failure is caught: the strict read's own reason code already names it.
+        assert _MAJOR < 37 and served_discovery and lines == []
+    else:
+        assert any("malformed response" in line for line in lines), lines
+    _assert_no_canary(caplog.text)
 
 
 # ---------------------------------------------------------------------------
