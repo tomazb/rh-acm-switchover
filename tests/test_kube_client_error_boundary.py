@@ -1251,6 +1251,53 @@ class TestSwallowedFailuresKeepTheirDiagnosis:
         _assert_no_canary(caplog.text)
 
 
+class _NoMessageError(Exception):
+    """A class outside the replacement modules: the boundary falls back to plain Exception."""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "operation,category",
+    [
+        (lambda: _raise_now(ApiException(status=403, reason=CANARY)), "HTTP error"),
+        (lambda: _raise_now(urllib3.exceptions.SSLError(CANARY)), "TLS error"),
+        (lambda: _raise_now(urllib3.exceptions.ReadTimeoutError(None, "/x", CANARY)), "timed out"),
+        (lambda: _raise_now(urllib3.exceptions.ProtocolError(CANARY)), "connection error"),
+        (lambda: _raise_now(json.JSONDecodeError(CANARY, CANARY, 0)), "malformed response"),
+        (lambda: _raise_now(KeyError(CANARY)), "request failed"),
+        (lambda: _raise_now(_NoMessageError(CANARY)), "request failed"),
+    ],
+    ids=["http", "tls", "timeout", "connection", "undecodable", "other", "fallback-class"],
+)
+def test_every_replacement_carries_one_category_of_the_closed_set(operation, category):
+    raised = _raise(kube_client_module._call_sdk, operation)
+    assert getattr(raised, kube_client_module._FAILURE_CATEGORY_ATTRIBUTE) == category
+    assert kube_client_module._failure_category_of(raised) == category
+    _assert_no_canary(*_rendered(raised))
+
+
+@pytest.mark.skipif(
+    _MAJOR < 37,
+    reason=f"kubernetes {kubernetes.__version__} returns an undecodable custom-object body as a string",
+)
+@pytest.mark.unit
+def test_a_custom_object_malformed_response_carries_the_malformed_category():
+    def make_client():
+        return _real_typed_kube_client(_RecordingPoolManager(body=b"{not json " + CANARY.encode()))
+
+    raw = _raise(
+        lambda c: c.custom_api.get_namespaced_custom_object("g.io", "v1", "ns1", "things", "t1"), make_client()
+    )
+    assert isinstance(raw, json.JSONDecodeError), "precondition: this lane's SDK fails to decode the body"
+    raised = _raise(lambda c: c.get_custom_resource("g.io", "v1", "things", "t1", namespace="ns1"), make_client())
+    assert isinstance(raised, MalformedResponseError)
+    assert kube_client_module._failure_category_of(raised) == "malformed response"
+
+
+def _raise_now(exc):
+    raise exc
+
+
 # A 2xx a strict read could not decode or deserialize: still READ_FAILED or discovery-unverifiable
 # (the reason codes do not change), now logged as a malformed response.
 _MALFORMED_ON_STRICT_SITES = [

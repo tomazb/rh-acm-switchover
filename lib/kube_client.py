@@ -55,6 +55,7 @@ from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
 _T = TypeVar("_T")
+_E = TypeVar("_E", bound=BaseException)
 
 
 class RequestTimeoutKwargs(TypedDict):
@@ -266,13 +267,47 @@ def _reject_json_constant(constant: str) -> Any:
 # and 404/409/410/412/422 handling see the same failure as before.
 # ---------------------------------------------------------------------------------------
 
+# The closed set of failure categories. The boundary tags every replacement with one of them
+# (`_tagged`), and a site that swallows a failure into an outcome reports it through
+# `_failure_category_of`, never through the exception's text.
+_CATEGORY_HTTP = "HTTP error"
+_CATEGORY_TLS = "TLS error"
+_CATEGORY_TIMEOUT = "timed out"
+_CATEGORY_CONNECTION = "connection error"
+_CATEGORY_MALFORMED = "malformed response"
+_CATEGORY_REQUEST = "request failed"
+_FAILURE_CATEGORIES = frozenset(
+    {
+        _CATEGORY_HTTP,
+        _CATEGORY_TLS,
+        _CATEGORY_TIMEOUT,
+        _CATEGORY_CONNECTION,
+        _CATEGORY_MALFORMED,
+        _CATEGORY_REQUEST,
+    }
+)
+_FAILURE_CATEGORY_ATTRIBUTE = "kube_failure_category"
+
 _TLS_FAILURE = "Kubernetes API request failed: TLS error"
 _TIMEOUT_FAILURE = "Kubernetes API request failed: timed out"
 _CONNECTION_FAILURE = "Kubernetes API request failed: connection error"
 _REQUEST_FAILURE = "Kubernetes API request failed"
 _UNSUPPORTED_CONTENT_TYPE = "Malformed Kubernetes API response: unsupported content type"
+_UNDECODABLE_BODY = "Malformed Kubernetes API response: undecodable body"
+_OFF_MODEL_BODY = "Malformed Kubernetes API response: body does not match the expected model"
 _NO_STANDARD_PHRASE = "HTTP status without a standard reason phrase"
 _FAILURE_DIAGNOSTICS = frozenset({_TLS_FAILURE, _TIMEOUT_FAILURE, _CONNECTION_FAILURE, _REQUEST_FAILURE})
+_TRANSPORT_MESSAGES = {
+    _CATEGORY_TLS: _TLS_FAILURE,
+    _CATEGORY_TIMEOUT: _TIMEOUT_FAILURE,
+    _CATEGORY_CONNECTION: _CONNECTION_FAILURE,
+    _CATEGORY_REQUEST: _REQUEST_FAILURE,
+}
+# The installed client's module that turns a received body into a model, and the marker in the
+# names of its functions that do so (`deserialize`, `response_deserialize`, `__deserialize_model`).
+_SDK_DESERIALIZER_MODULE = "kubernetes.client.api_client"
+_DESERIALIZE_MARKER = "deserialize"
+_MAX_TRACEBACK_FRAMES = 64
 
 # The fixed prefix of the SDK's own status-0 reason for a content type it does not deserialize
 # (37.x). Read to classify only; the rest of that reason is the response's Content-Type header.
@@ -320,8 +355,32 @@ for _logger_name in _SDK_LOGGER_NAMES:
     logging.getLogger(_logger_name).addFilter(_SDK_LOG_FILTER)
 
 
-def _failure_category(raw: BaseException) -> str:
-    """The fixed diagnostic for a request failure, decided by exception type only.
+def _tagged(replacement: _E, category: str) -> _E:
+    """Tag a replacement with its failure category. The only writer of the category attribute;
+    a value outside the closed set is recorded as `request failed`."""
+    setattr(
+        replacement,
+        _FAILURE_CATEGORY_ATTRIBUTE,
+        category if category in _FAILURE_CATEGORIES else _CATEGORY_REQUEST,
+    )
+    return replacement
+
+
+def _failure_category_of(exc: BaseException) -> str:
+    """The fixed category the boundary tagged `exc` with, else `request failed`.
+
+    The only reader of the category attribute, and the one way a site that swallows a failure
+    may describe it beyond its HTTP status and class name: the value is always one of the
+    closed set of constants, never text taken from the exception.
+    """
+    category = getattr(exc, _FAILURE_CATEGORY_ATTRIBUTE, None)
+    if isinstance(category, str) and category in _FAILURE_CATEGORIES:
+        return category
+    return _CATEGORY_REQUEST
+
+
+def _transport_category(raw: BaseException) -> str:
+    """The fixed category of a request failure, decided by exception type only.
 
     Follows the links that wrap a transport failure, and nothing else: a status-0 ApiException's
     cause and context (the SDK raises one while handling urllib3's SSLError), MaxRetryError's
@@ -344,19 +403,42 @@ def _failure_category(raw: BaseException) -> str:
         elif isinstance(current, ProxyError):
             pending.append(current.original_error)
     if any(isinstance(link, _TLS_ERRORS) for link in found):
-        return _TLS_FAILURE
+        return _CATEGORY_TLS
     # NewConnectionError subclasses urllib3's ConnectTimeoutError, so it is decided first.
     if any(isinstance(link, NewConnectionError) for link in found):
-        return _CONNECTION_FAILURE
+        return _CATEGORY_CONNECTION
     if any(isinstance(link, (Urllib3TimeoutError, TimeoutError)) for link in found):
-        return _TIMEOUT_FAILURE
+        return _CATEGORY_TIMEOUT
     if any(isinstance(link, (ProtocolError, ConnectionError)) for link in found):
-        return _CONNECTION_FAILURE
-    return _REQUEST_FAILURE
+        return _CATEGORY_CONNECTION
+    return _CATEGORY_REQUEST
 
 
 def _is_unsupported_content_type(exc: ApiException) -> bool:
     return exc.status == 0 and isinstance(exc.reason, str) and exc.reason.startswith(_UNSUPPORTED_CONTENT_TYPE_REASON)
+
+
+def _is_undecodable_body(raw: BaseException) -> bool:
+    """A received body the client could not decode, by exception type only."""
+    return isinstance(raw, (json.JSONDecodeError, UnicodeDecodeError)) or type(raw) is LookupError
+
+
+def _raised_while_deserializing(raw: BaseException) -> bool:
+    """Whether `raw` was raised while the installed client turned a received body into a model.
+
+    Reads only code identity from the traceback (each frame's module and function name), never
+    a value: deserialization runs only after a response arrived, so a failure there is a
+    malformed response, while the same class raised preparing the request is not.
+    """
+    tb = raw.__traceback__
+    for _ in range(_MAX_TRACEBACK_FRAMES):
+        if tb is None:
+            return False
+        frame = tb.tb_frame
+        if frame.f_globals.get("__name__") == _SDK_DESERIALIZER_MODULE and _DESERIALIZE_MARKER in frame.f_code.co_name:
+            return True
+        tb = tb.tb_next
+    return False
 
 
 def _safe_api_exception(raw: ApiException) -> ApiException:
@@ -368,14 +450,19 @@ def _safe_api_exception(raw: ApiException) -> ApiException:
     """
     status = raw.status if type(raw.status) is int else 0
     if status == 0:
-        reason = _UNSUPPORTED_CONTENT_TYPE if _is_unsupported_content_type(raw) else _failure_category(raw)
+        if _is_unsupported_content_type(raw):
+            category, reason = _CATEGORY_MALFORMED, _UNSUPPORTED_CONTENT_TYPE
+        else:
+            category = _transport_category(raw)
+            reason = _TRANSPORT_MESSAGES[category]
     else:
+        category = _CATEGORY_HTTP
         try:
             reason = http.HTTPStatus(status).phrase
         except ValueError:
             reason = _NO_STANDARD_PHRASE
     cls = type(raw) if type(raw) in _SDK_API_EXCEPTIONS else ApiException
-    return cls(status=status, reason=reason)
+    return _tagged(cls(status=status, reason=reason), category)
 
 
 def _safe_failure(raw: Exception) -> Exception:
@@ -385,8 +472,17 @@ def _safe_failure(raw: Exception) -> Exception:
     or parser ValueError becomes ValueError, a UnicodeDecodeError becomes UnicodeError,
     MaxRetryError becomes urllib3's HTTPError, and an OSError keeps its class and errno. The
     errno is assigned, not passed: `OSError(errno, ...)` would pick a different built-in subclass.
+
+    A body that arrived but could not be decoded, or deserialized into the client's model, is
+    named a malformed response: only the message and category say so, the class is the same.
     """
-    message = _failure_category(raw)
+    if _is_undecodable_body(raw):
+        category, message = _CATEGORY_MALFORMED, f"{_UNDECODABLE_BODY} ({type(raw).__name__})"
+    elif _raised_while_deserializing(raw):
+        category, message = _CATEGORY_MALFORMED, f"{_OFF_MODEL_BODY} ({type(raw).__name__})"
+    else:
+        category = _transport_category(raw)
+        message = _TRANSPORT_MESSAGES[category]
     for family in type(raw).__mro__:
         if family.__module__ not in _REPLACEMENT_MODULES or not issubclass(family, Exception):
             continue
@@ -396,8 +492,8 @@ def _safe_failure(raw: Exception) -> Exception:
             continue
         if isinstance(replacement, OSError):
             replacement.errno = getattr(raw, "errno", None)
-        return replacement
-    return Exception(message)
+        return _tagged(replacement, category)
+    return _tagged(Exception(message), category)
 
 
 def _malformed_body(raw: Exception, inherited: Optional[BaseException]) -> Optional[Exception]:
@@ -410,7 +506,7 @@ def _malformed_body(raw: Exception, inherited: Optional[BaseException]) -> Optio
     interrupted keeps its status, unless that error was already being handled when the request
     started (say, the 409 a create is reconciling): it is not this response's outcome.
     """
-    if isinstance(raw, (json.JSONDecodeError, UnicodeDecodeError)) or type(raw) is LookupError:
+    if _is_undecodable_body(raw):
         http_error = raw.__context__
         if (
             isinstance(http_error, ApiException)
@@ -420,9 +516,12 @@ def _malformed_body(raw: Exception, inherited: Optional[BaseException]) -> Optio
             and not 200 <= http_error.status <= 299
         ):
             return _safe_api_exception(http_error)
-        return MalformedResponseError(f"Malformed Kubernetes API response: undecodable body ({type(raw).__name__})")
+        return _tagged(
+            MalformedResponseError(f"{_UNDECODABLE_BODY} ({type(raw).__name__})"),
+            _CATEGORY_MALFORMED,
+        )
     if isinstance(raw, ApiException) and _is_unsupported_content_type(raw):
-        return MalformedResponseError(_UNSUPPORTED_CONTENT_TYPE)
+        return _tagged(MalformedResponseError(_UNSUPPORTED_CONTENT_TYPE), _CATEGORY_MALFORMED)
     return None
 
 
@@ -719,16 +818,28 @@ class KubeClient:
         discovery cache swallows some failures into an empty resource list.
         """
         path = f"/apis/{group}/{version}" if group else f"/api/{version}"
+        # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
+        # transport failure, and an undecodable body are all indistinguishable from an
+        # unserved kind, so none of them may be reported as absence. The log names which.
+        try:
+            data = self._request_bytes("GET", path, timeout=self.request_timeout)
+        except ApiException as exc:
+            logger.warning(
+                "Discovery of %s could not be verified: HTTP %s (%s)", path, exc.status, _failure_category_of(exc)
+            )
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        except Exception as exc:
+            logger.warning(
+                "Discovery of %s could not be verified (%s: %s)", path, type(exc).__name__, _failure_category_of(exc)
+            )
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         try:
             # The raw body is decoded here rather than by the client: client-side
             # deserialization differs across the supported dependency range, which would make
             # this prover version-dependent — the exact failure mode it exists to avoid.
-            data = self._request_bytes("GET", path, timeout=self.request_timeout)
             response = json.loads(data.decode("utf-8"))
         except Exception:
-            # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
-            # transport failure, and an undecodable body are all indistinguishable from an
-            # unserved kind, so none of them may be reported as absence.
+            logger.warning("Discovery of %s could not be verified (%s)", path, _CATEGORY_MALFORMED)
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
 
         if not isinstance(response, dict):
@@ -1409,8 +1520,12 @@ class KubeClient:
                 # restart the whole read rather than returning what was collected.
                 if exc.status == 410 and continue_token is not None:
                     return _RESTART_READ
+                logger.warning("Strict list of %s failed: HTTP %s (%s)", plural, exc.status, _failure_category_of(exc))
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Strict list of %s did not complete (%s: %s)", plural, type(exc).__name__, _failure_category_of(exc)
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
             if not isinstance(page, dict):
@@ -1491,8 +1606,18 @@ class KubeClient:
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            logger.warning(
+                "Strict read of %s/%s failed: HTTP %s (%s)", plural, name, exc.status, _failure_category_of(exc)
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of %s/%s did not complete (%s: %s)",
+                plural,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         if not isinstance(resource, dict):
@@ -1517,8 +1642,17 @@ class KubeClient:
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.namespace_absent(STRICT_READ_REASON_NAMESPACE_NOT_FOUND)
+            logger.warning(
+                "Strict read of namespaces/%s failed: HTTP %s (%s)", name, exc.status, _failure_category_of(exc)
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of namespaces/%s did not complete (%s: %s)",
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         metadata = getattr(namespace, "metadata", None)
@@ -1576,8 +1710,17 @@ class KubeClient:
                     if namespace_outcome.status is StrictReadStatus.NAMESPACE_ABSENT:
                         return namespace_outcome
                     return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+                logger.warning(
+                    "Strict list of pods in %s failed: HTTP %s (%s)", namespace, exc.status, _failure_category_of(exc)
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Strict list of pods in %s did not complete (%s: %s)",
+                    namespace,
+                    type(exc).__name__,
+                    _failure_category_of(exc),
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
             page_items = getattr(page, "items", None)
@@ -1635,8 +1778,24 @@ class KubeClient:
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            logger.warning(
+                "Strict read of %s %s/%s failed: HTTP %s (%s)",
+                reader,
+                namespace,
+                name,
+                exc.status,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of %s %s/%s did not complete (%s: %s)",
+                reader,
+                namespace,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         resource = self._model_to_mapping(model)
@@ -1838,14 +1997,21 @@ class KubeClient:
             elif exc.status == 404:
                 result["reason"] = "not_found"
             else:
-                logger.error("Guarded JSON Patch of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Guarded JSON Patch of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Guarded JSON Patch of %s/%s did not complete (%s); it is not accepted",
+                "Guarded JSON Patch of %s/%s did not complete (%s: %s); it is not accepted",
                 RESTORE_PLURAL,
                 name,
                 type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -1953,14 +2119,21 @@ class KubeClient:
             elif exc.status == 404:
                 result["reason"] = "not_found"
             else:
-                logger.error("Guarded delete of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Guarded delete of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Guarded delete of %s/%s did not complete (%s); it is not accepted",
+                "Guarded delete of %s/%s did not complete (%s: %s); it is not accepted",
                 RESTORE_PLURAL,
                 name,
                 type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -2042,11 +2215,21 @@ class KubeClient:
                 logger.warning("Create of %s/%s rejected: the name is already taken", RESTORE_PLURAL, name)
                 result.update(conflict=True, reason="already_exists")
             else:
-                logger.error("Create of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Create of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Create of %s/%s did not complete (%s); it is not accepted", RESTORE_PLURAL, name, type(exc).__name__
+                "Create of %s/%s did not complete (%s: %s); it is not accepted",
+                RESTORE_PLURAL,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -2696,7 +2879,12 @@ class KubeClient:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, type(exc).__name__)
+                    logger.debug(
+                        "Transient error while listing pods in %s: %s (%s)",
+                        namespace,
+                        type(exc).__name__,
+                        _failure_category_of(exc),
+                    )
                     sleep_remaining_budget()
                     continue
                 raise

@@ -4524,6 +4524,9 @@ class TestInstalledClientResponseTextNeverLeavesKubeClient:
 
 # Attributes of a caught exception that may be formatted, besides `type(X).__name__`.
 _FORMATTABLE_EXCEPTION_ATTRIBUTES = {"status"}
+# The one reader a caught exception may be passed to inside a log or message: it returns the
+# boundary's fixed failure category (a closed set of constants), never the exception's text.
+_FAILURE_CATEGORY_READER = "_failure_category_of"
 _NEVER_READ_ATTRIBUTES = {"body", "headers", "data"}
 _BROAD_EXCEPTION_NAMES = {"Exception", "BaseException"}
 
@@ -4614,6 +4617,14 @@ def _exception_name_violations(source: str) -> list:
                 if (
                     isinstance(parent, ast.Call)
                     and isinstance(parent.func, ast.Name)
+                    and parent.func.id == _FAILURE_CATEGORY_READER
+                    and parent.args == [node]
+                    and not parent.keywords
+                ):
+                    continue
+                if (
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Name)
                     and parent.func.id == "type"
                     and isinstance(parents[parent], ast.Attribute)
                     and parents[parent].attr == "__name__"
@@ -4665,6 +4676,75 @@ class TestApiErrorGuardrails:
         violations, handler_count = _exception_name_violations(source)
         assert handler_count == 2
         assert violations == ["f:7 formats e beyond .status/type().__name__"]
+
+    def test_the_scan_allows_only_the_category_reader_on_the_handler_name(self):
+        """The fixed failure category may be logged through its one reader; any other helper, an
+        attribute passed to the reader, or an extra argument is still formatting the exception."""
+        allowed = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception as e:\n"
+            "        logger.error('%s: %s', type(e).__name__, _failure_category_of(e))\n"
+        )
+        assert _exception_name_violations(allowed) == ([], 1)
+        rejected = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception as e:\n"
+            "        logger.error('%s', describe(e))\n"
+            "        logger.error('%s', _failure_category_of(e.args))\n"
+            "        logger.error('%s', _failure_category_of(e, e))\n"
+            "        logger.error('%s', e.kube_failure_category)\n"
+        )
+        violations, _ = _exception_name_violations(rejected)
+        assert violations == [
+            "f:5 formats e beyond .status/type().__name__",
+            "f:6 formats e beyond .status/type().__name__",
+            "f:7 formats e beyond .status/type().__name__",
+            "f:7 formats e beyond .status/type().__name__",
+            "f:8 formats e beyond .status/type().__name__",
+        ]
+
+    def test_the_category_attribute_has_one_writer_and_one_reader(self):
+        """Only `_tagged` writes the category and only `_failure_category_of` reads it, both by
+        the named constant: no other code can put text there or take it out."""
+        tree = ast.parse(_kube_client_source())
+        attribute = kube_client_module._FAILURE_CATEGORY_ATTRIBUTE
+        users = []
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef):
+                continue
+            for node in ast.walk(function):
+                if isinstance(node, ast.Name) and node.id == "_FAILURE_CATEGORY_ATTRIBUTE":
+                    users.append(function.name)
+                if isinstance(node, ast.Attribute) and node.attr == attribute:
+                    users.append(f"{function.name}:direct")
+                if isinstance(node, ast.Constant) and node.value == attribute:
+                    users.append(f"{function.name}:literal")
+        assert sorted(users) == ["_failure_category_of", "_tagged"]
+
+    def test_the_category_is_always_one_of_the_closed_set(self):
+        tag = kube_client_module._tagged
+        read = kube_client_module._failure_category_of
+        categories = kube_client_module._FAILURE_CATEGORIES
+        assert read(tag(ValueError("x"), "TLS error")) == "TLS error"
+        stored = tag(ValueError("x"), "server text " + API_BODY_CANARY)
+        assert getattr(stored, kube_client_module._FAILURE_CATEGORY_ATTRIBUTE) == "request failed"
+        assert read(stored) == "request failed"
+        assert read(ValueError(API_BODY_CANARY)) == "request failed", "an untagged exception reads as the fallback"
+        forged = ValueError("x")
+        setattr(forged, kube_client_module._FAILURE_CATEGORY_ATTRIBUTE, API_BODY_CANARY)
+        assert read(forged) == "request failed"
+        assert categories == {
+            "HTTP error",
+            "TLS error",
+            "timed out",
+            "connection error",
+            "malformed response",
+            "request failed",
+        }
 
     def test_the_scan_rejects_formatting_a_reason(self):
         """No reason is formatted anywhere: a status-0 reason embeds a response header or value."""
