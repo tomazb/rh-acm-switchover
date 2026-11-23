@@ -102,6 +102,12 @@ def _assert_no_canary(*texts):
         assert CANARY not in text, "server-controlled text left KubeClient"
 
 
+def _assert_only_filtered_loggers(records):
+    """Every record the raw SDK emitted came from a logger the boundary filters."""
+    emitters = {record.name for record in records if not record.name.startswith("acm_switchover")}
+    assert emitters <= set(_SDK_LOGGERS), f"unfiltered SDK loggers: {sorted(emitters - set(_SDK_LOGGERS))}"
+
+
 def _raise(call, *args):
     with pytest.raises(Exception) as exc_info:
         call(*args)
@@ -322,6 +328,7 @@ class TestServerTextNeverLeavesKubeClient:
         with caplog.at_level(logging.DEBUG):
             _real_typed_kube_client(_RecordingPoolManager(payload=secret)).core_v1.read_namespaced_secret("s1", "ns1")
         assert CANARY in caplog.text, "precondition: the SDK logs the body"
+        _assert_only_filtered_loggers(caplog.records)
 
         caplog.clear()
         with caplog.at_level(logging.DEBUG):
@@ -366,9 +373,11 @@ class TestSdkLogsAreDroppedDuringOwnedCalls:
     def test_outcome_routes_log_no_transport_text(self, caplog, route):
         failure = lambda: ssl.SSLError("synthetic certificate failure " + CANARY)  # noqa: E731
         client, _ = _configured_client(failure)
+        caplog.clear()
         with caplog.at_level(logging.DEBUG):
             _raise(lambda c: c.core_v1.read_namespace("ns1"), client)
         assert CANARY in caplog.text, "precondition: urllib3 logs the connect failure"
+        _assert_only_filtered_loggers(caplog.records)
 
         client, connects = _configured_client(failure)
         caplog.clear()
@@ -381,6 +390,51 @@ class TestSdkLogsAreDroppedDuringOwnedCalls:
         else:
             assert outcome["accepted"] is False and outcome["reason"] == "unverifiable"
         _assert_no_canary(caplog.text)
+
+    @pytest.mark.parametrize(
+        "raw_call",
+        [
+            pytest.param(
+                lambda: _configured_client(lambda: ssl.SSLError(CANARY))[0].core_v1.read_namespace("ns1"),
+                id="sdk-pool-tls",
+            ),
+            pytest.param(
+                lambda: _configured_client(lambda: TimeoutError(CANARY))[0].core_v1.read_namespace("ns1"),
+                id="sdk-pool-timeout",
+            ),
+            pytest.param(
+                lambda: _real_typed_kube_client(_WirePool(_WIRES["bad-status"])).core_v1.read_namespace("ns1"),
+                id="malformed-status-line",
+            ),
+            pytest.param(
+                lambda: _real_typed_kube_client(_WirePool(_WIRES["bad-chunk"])).core_v1.read_namespace("ns1"),
+                id="malformed-chunk-size",
+            ),
+            pytest.param(
+                lambda: _real_typed_kube_client(_RecordingPoolManager(payload=_NAMESPACE)).core_v1.read_namespace(
+                    "ns1"
+                ),
+                id="success",
+            ),
+            pytest.param(
+                lambda: _real_typed_kube_client(
+                    _RecordingPoolManager(status=403, payload={"m": CANARY})
+                ).core_v1.read_namespace("ns1"),
+                id="http-403",
+            ),
+        ],
+    )
+    def test_the_raw_sdk_logs_only_through_the_filtered_loggers(self, caplog, raw_call):
+        """The six filtered loggers are the SDK's emitting loggers on this lane: whatever the raw
+        client logs for these requests comes from one of them."""
+        for name in (*_SDK_LOGGERS, "urllib3", "kubernetes"):
+            caplog.set_level(logging.DEBUG, logger=name)
+        with caplog.at_level(logging.DEBUG):
+            try:
+                raw_call()
+            except Exception:  # noqa: BLE001 - only the log records are under test
+                pass
+        _assert_only_filtered_loggers(caplog.records)
 
     def test_each_sdk_logger_carries_one_filter(self):
         boundary_filters = [
@@ -405,6 +459,10 @@ class TestSdkLogsAreDroppedDuringOwnedCalls:
             logging.getLogger("urllib3.connectionpool").warning("unrelated-thread")
             seen_in_thread.append(True)
 
+        def concurrent_owned_call():
+            call_sdk(lambda: emit("concurrent-owned-" + CANARY))
+            logging.getLogger("urllib3.connectionpool").warning("concurrent-after-its-call")
+
         def inner():
             emit("nested-" + CANARY)
 
@@ -415,6 +473,11 @@ class TestSdkLogsAreDroppedDuringOwnedCalls:
             thread = threading.Thread(target=other_thread)
             thread.start()
             thread.join()
+            # Another thread enters and leaves its own owned call while this one is still inside.
+            thread = threading.Thread(target=concurrent_owned_call)
+            thread.start()
+            thread.join()
+            emit("after-concurrent-" + CANARY)
             logging.getLogger("acm_switchover").warning("project-logger")
             return "ok"
 
@@ -433,7 +496,7 @@ class TestSdkLogsAreDroppedDuringOwnedCalls:
 
         assert seen_in_thread == [True]
         messages = [record.getMessage() for record in caplog.records]
-        assert "unrelated-thread" in messages and "project-logger" in messages
+        assert {"unrelated-thread", "concurrent-after-its-call", "project-logger"} <= set(messages)
         assert sum(m.startswith("before ") for m in messages) == len(_SDK_LOGGERS) * 5
         assert sum(m.startswith("after ") for m in messages) == len(_SDK_LOGGERS) * 5
         _assert_no_canary(caplog.text)
@@ -608,8 +671,12 @@ class TestCallersSeeTheSameFailure:
             (lambda: OSError(errno.EAGAIN, CANARY), 5),
             (lambda: OSError(errno.EACCES, CANARY), 1),
             (lambda: OSError(CANARY), 1),
+            # Its errno would make `OSError(errno, ...)` a retryable BrokenPipeError or a
+            # FileNotFoundError: the replacement keeps the raw class family instead.
+            (lambda: ssl.SSLError(errno.EPIPE, CANARY), 1),
+            (lambda: ssl.SSLError(errno.ENOENT, CANARY), 1),
         ],
-        ids=["econnreset", "etimedout", "eagain", "eacces", "no-errno"],
+        ids=["econnreset", "etimedout", "eagain", "eacces", "no-errno", "ssl-epipe", "ssl-enoent"],
     )
     def test_network_and_other_os_errors_keep_their_retry_decision(self, kube_client, mock_k8s_apis, failure, attempts):
         def boom(*_args, **_kwargs):
@@ -620,6 +687,8 @@ class TestCallersSeeTheSameFailure:
         raised = _raise(kube_client.get_namespace, "ns1")
 
         assert isinstance(raised, OSError) and raised.errno == failure().errno
+        assert _catching_clauses(raised) == _catching_clauses(failure())
+        assert is_retryable_error(raised) == is_retryable_error(failure())
         assert mock_k8s_apis["core_api"].read_namespace.call_count == attempts
         _assert_no_canary(*_rendered(raised))
 
@@ -948,13 +1017,9 @@ _EXEMPT_METHODS = {"__init__"}
 _EXPECTED_INVENTORY_SIZE = 45
 
 
-def _is_sdk_root(node):
-    return (
-        isinstance(node, ast.Attribute)
-        and node.attr in _SDK_ROOTS
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "self"
-    )
+def _is_sdk_object(node):
+    """A reference to one of KubeClient's SDK objects, on `self` or on any other name."""
+    return isinstance(node, ast.Attribute) and node.attr in _SDK_ROOTS
 
 
 def _is_boundary_call(node):
@@ -990,20 +1055,30 @@ def _sdk_step(node):
     if isinstance(func, ast.Call) and ast.unparse(func.func) == "getattr" and func.args:
         func = func.args[0]
     root = func
-    while isinstance(root, ast.Attribute) and not _is_sdk_root(root):
+    while isinstance(root, ast.Attribute) and not _is_sdk_object(root):
         root = root.value
     callee = ast.unparse(node.func)
-    if _is_sdk_root(root) or callee in ("legacy_call_api", "raw.read"):
+    if _is_sdk_object(root) or callee in ("legacy_call_api", "raw.read"):
         return callee
     return None
 
 
 def _boundary_violations(source):
-    """(violations, inventory) for KubeClient: every use of an SDK object outside an operation
-    handed to `_call_sdk`, and the inventory of SDK steps outside the exempt methods."""
+    """(violations, inventory) for lib/kube_client.py.
+
+    Violations: an SDK object used outside KubeClient, or inside a KubeClient method (but
+    `__init__`) outside an operation handed to `_call_sdk`; and an SDK step that reaches no SDK
+    object itself (a raw body read, the legacy alias) outside such an operation. The inventory
+    lists every SDK step in KubeClient outside the exempt methods."""
     tree = ast.parse(source)
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KubeClient")
-    violations, inventory = [], []
+    in_class = set(ast.walk(klass))
+    violations = [
+        f"<module>:{node.lineno} uses .{node.attr} outside KubeClient"
+        for node in ast.walk(tree)
+        if _is_sdk_object(node) and node not in in_class
+    ]
+    inventory = []
     for method in klass.body:
         if not isinstance(method, ast.FunctionDef) or method.name in _EXEMPT_METHODS:
             continue
@@ -1021,8 +1096,10 @@ def _boundary_violations(source):
             step = _sdk_step(node)
             if step is not None:
                 inventory.append(f"{method.name}: {step}")
-            if _is_sdk_root(node) and not guarded(node):
-                violations.append(f"{method.name}:{node.lineno} uses self.{node.attr} outside _call_sdk")
+                if not any(_is_sdk_object(n) for n in ast.walk(node)) and not guarded(node):
+                    violations.append(f"{method.name}:{node.lineno} runs {step} outside _call_sdk")
+            if _is_sdk_object(node) and not guarded(node):
+                violations.append(f"{method.name}:{node.lineno} uses .{node.attr} outside _call_sdk")
     return violations, inventory
 
 
@@ -1052,11 +1129,20 @@ class TestBoundaryGuardrail:
             "            return self._api_client.call_api('a')\n"
             "        operation()\n"
             "        return _call_sdk(operation)\n"
+            "    def body_read_outside(self):\n"
+            "        raw = _call_sdk(lambda: self._api_client.call_api('a'))\n"
+            "        return raw.read()\n"
+            "def module_helper(kube):\n"
+            "    return kube.core_v1.read_namespace('a')\n"
         )
         violations, inventory = _boundary_violations(source)
-        assert violations == [
-            "get:3 uses self.core_v1 outside _call_sdk",
-            "aliased:5 uses self.core_v1 outside _call_sdk",
-            "nested:11 uses self._api_client outside _call_sdk",
-        ]
-        assert len(inventory) == 3
+        assert sorted(violations) == sorted(
+            [
+                "<module>:18 uses .core_v1 outside KubeClient",
+                "get:3 uses .core_v1 outside _call_sdk",
+                "aliased:5 uses .core_v1 outside _call_sdk",
+                "nested:11 uses ._api_client outside _call_sdk",
+                "body_read_outside:16 runs raw.read outside _call_sdk",
+            ]
+        )
+        assert len(inventory) == 5

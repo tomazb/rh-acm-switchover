@@ -383,18 +383,20 @@ def _safe_failure(raw: Exception) -> Exception:
 
     Walking `raw`'s own MRO keeps every except clause and `is_retryable_error` answer: a pydantic
     or parser ValueError becomes ValueError, a UnicodeDecodeError becomes UnicodeError,
-    MaxRetryError becomes urllib3's HTTPError, and an OSError keeps its class and errno.
+    MaxRetryError becomes urllib3's HTTPError, and an OSError keeps its class and errno. The
+    errno is assigned, not passed: `OSError(errno, ...)` would pick a different built-in subclass.
     """
     message = _failure_category(raw)
     for family in type(raw).__mro__:
         if family.__module__ not in _REPLACEMENT_MODULES or not issubclass(family, Exception):
             continue
         try:
-            if issubclass(family, OSError) and isinstance(getattr(raw, "errno", None), int):
-                return family(getattr(raw, "errno"), message)
-            return family(message)
+            replacement = family(message)
         except TypeError:  # its constructor needs more than a message: try the next class up
             continue
+        if isinstance(replacement, OSError):
+            replacement.errno = getattr(raw, "errno", None)
+        return replacement
     return Exception(message)
 
 
