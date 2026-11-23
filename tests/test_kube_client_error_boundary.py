@@ -2300,6 +2300,11 @@ _INV_SCRIPTED = [
     ("patch_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
     ("delete_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
     ("delete_custom_resource_preconditioned", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    # astra-r5 H1: the precondition-conflict handler, with any further request failing.
+    ("delete_custom_resource_preconditioned", "409-conflict", "http", {0: (409, _INV_STATUS)}.get, None, None, 1),
+    ("delete_custom_resource_preconditioned", "409-conflict-cluster", "http", {0: (409, _INV_STATUS)}.get, None, _CLUSTER, 1),
+    ("delete_custom_resource_preconditioned", "412-conflict", "http", {0: (412, _INV_STATUS)}.get, None, None, 1),
+    ("delete_custom_resource_preconditioned", "412-conflict-cluster", "http", {0: (412, _INV_STATUS)}.get, None, _CLUSTER, 1),
     ("wait_for_pods_ready", "polls-until-ready", "ok", {0: (200, _inv_page([]))}.get, None, {"expected_count": 1}, 2),
     ("wait_for_pods_ready", "fails-then-ready", "ok", {0: "transport", 1: "http"}.get, None, None, 3),
 ]
