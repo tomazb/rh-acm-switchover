@@ -11,6 +11,7 @@ canary in this lane, so it cannot pass vacuously.
 """
 
 import ast
+import contextlib
 import errno
 import inspect
 import io
@@ -18,10 +19,12 @@ import json
 import logging
 import socket
 import ssl
+import sys
 import threading
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, FrozenSet, NamedTuple, Tuple
 from unittest.mock import Mock, patch
 
 import kubernetes
@@ -2039,7 +2042,8 @@ class TestBoundaryGuardrail:
 # and each public method is driven through a success, an HTTP error and a transport error,
 # plus scripted paths whose second and later requests (pages, restarts, re-reads, polls,
 # retries) are the ones that answer or fail. Failure answers carry the canary, and what the
-# method raises, returns or logs must not. It sees only the paths it drives.
+# method raises, returns or logs must not. It sees only the paths it drives; the status-branch
+# tests below derive, from the source, the status handlers it must drive and check that it does.
 
 _INV_NS = "ns1"
 _INV_CUSTOM = ("g.io", "v1", "things")
@@ -2165,6 +2169,19 @@ class _BoundaryProbe:
         found = [f"{method} {path}" for method, path, active in self.requests if not active]
         return found + [f"body read #{i}" for i, active in enumerate(self.reads) if not active]
 
+    def fails_from(self, index, horizon=32):
+        """Whether request `index` and every later one would be answered by a failure carrying
+        the canary. The scripts are finite or periodic, so a bounded horizon decides it."""
+        if self._mode not in ("http", "transport"):
+            return False
+        for later in range(index, index + horizon):
+            answer = self._script(later)
+            if answer is None or answer in ("http", "transport"):
+                continue
+            if not (isinstance(answer, tuple) and answer[0] >= 400 and CANARY in json.dumps(answer[1])):
+                return False
+        return True
+
 
 def _probed_construction(probe, **kwargs):
     """`KubeClient(**kwargs)` through the real `__init__`, its kubeconfig client on `probe`."""
@@ -2189,6 +2206,24 @@ class _FakeClock:
     @staticmethod
     def strftime(fmt):
         return "20261123000000"
+
+
+def _drive(method, mode, script, args, kwargs, recorder=None):
+    """Run one case through a probed KubeClient: (probe, result, raised). With a `recorder`,
+    the status sites the method enters are recorded against the probe's request count."""
+    probe = _BoundaryProbe(mode, script)
+    result = raised = None
+    client = _probed_construction(probe, context="inv")
+    recording = contextlib.nullcontext()
+    if recorder is not None:
+        recorder.probe = probe
+        recording = _recording(recorder)
+    with recording:
+        try:
+            result = getattr(client, method)(*args, **kwargs)
+        except Exception as exc:  # failure modes raise; callers judge the invariant either way
+            raised = exc
+    return probe, result, raised
 
 
 # method: (args, kwargs, requests on success, on an HTTP 500, on a transport error). A retried
@@ -2300,14 +2335,177 @@ _INV_SCRIPTED = [
     ("patch_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
     ("delete_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
     ("delete_custom_resource_preconditioned", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
-    # astra-r5 H1: the precondition-conflict handler, with any further request failing.
-    ("delete_custom_resource_preconditioned", "409-conflict", "http", {0: (409, _INV_STATUS)}.get, None, None, 1),
-    ("delete_custom_resource_preconditioned", "409-conflict-cluster", "http", {0: (409, _INV_STATUS)}.get, None, _CLUSTER, 1),
-    ("delete_custom_resource_preconditioned", "412-conflict", "http", {0: (412, _INV_STATUS)}.get, None, None, 1),
-    ("delete_custom_resource_preconditioned", "412-conflict-cluster", "http", {0: (412, _INV_STATUS)}.get, None, _CLUSTER, 1),
     ("wait_for_pods_ready", "polls-until-ready", "ok", {0: (200, _inv_page([]))}.get, None, {"expected_count": 1}, 2),
     ("wait_for_pods_ready", "fails-then-ready", "ok", {0: "transport", 1: "http"}.get, None, None, 3),
 ]
+
+
+def _answer_then_fail(*answers):
+    """A script answering request i with `answers[i]`, and every later request by the mode."""
+    return dict(enumerate(answers)).get
+
+
+def _always(answer):
+    return lambda _index: answer
+
+
+def _status(code):
+    return (code, {**_INV_STATUS, "code": code})
+
+
+# Status branches (see "Status branches" below): each case answers one status where a branch of
+# the source applies and fails every further request with the canary (mode "http"), so a
+# request added inside that branch reaches the probe and is judged. (method, status label,
+# scenario, script, args, kwargs, requests). A label is a status, a status range, or a
+# `StrictReadStatus` member, exactly as `_status_sites` derives it.
+_INV_BRANCHES = [
+    # astra-r5 H1: the preconditioned DELETE's 409/412 handler, namespaced and cluster-scoped.
+    ("delete_custom_resource_preconditioned", "409", "409-conflict", _answer_then_fail(_status(409)), None, None, 1),
+    (
+        "delete_custom_resource_preconditioned",
+        "409",
+        "409-conflict-cluster",
+        _answer_then_fail(_status(409)),
+        None,
+        _CLUSTER,
+        1,
+    ),
+    ("delete_custom_resource_preconditioned", "412", "412-conflict", _answer_then_fail(_status(412)), None, None, 1),
+    (
+        "delete_custom_resource_preconditioned",
+        "412",
+        "412-conflict-cluster",
+        _answer_then_fail(_status(412)),
+        None,
+        _CLUSTER,
+        1,
+    ),
+    ("delete_custom_resource_preconditioned", "404", "already-absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("json_patch_custom_resource_guarded", "409", "conflict", _answer_then_fail(_status(409)), None, None, 1),
+    ("json_patch_custom_resource_guarded", "412", "precondition", _answer_then_fail(_status(412)), None, None, 1),
+    ("json_patch_custom_resource_guarded", "422", "test-op-failed", _answer_then_fail(_status(422)), None, None, 1),
+    ("json_patch_custom_resource_guarded", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("delete_restore_guarded", "409", "conflict", _answer_then_fail(_status(409)), None, None, 1),
+    ("delete_restore_guarded", "412", "precondition", _answer_then_fail(_status(412)), None, None, 1),
+    ("delete_restore_guarded", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("create_restore_guarded", "409", "name-taken", _answer_then_fail(_status(409)), None, None, 1),
+    ("create_custom_resource", "409", "409-then-reread", _answer_then_fail(_status(409)), None, None, 6),
+    (
+        "create_custom_resource",
+        "404",
+        "409-then-reread-absent",
+        _answer_then_fail(_status(409), _status(404)),
+        None,
+        None,
+        2,
+    ),
+    ("create_or_patch_configmap", "409", "409-then-patch", _answer_then_fail(_status(409)), None, None, 6),
+    ("get_namespace_strict", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("get_deployment_strict", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("get_replicaset_strict", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
+    ("get_custom_resource_strict", "404", "absent", _answer_then_fail("ok", _status(404)), None, None, 2),
+    ("list_pods_strict", "404", "pods-404", _answer_then_fail(_status(404)), None, None, 2),
+    (
+        "list_pods_strict",
+        "NAMESPACE_ABSENT",
+        "pods-404-namespace-404",
+        _answer_then_fail(_status(404), _status(404)),
+        None,
+        None,
+        2,
+    ),
+    ("list_pods_strict", "410", "expired-continuation", _answer_then_fail(_INV_CONTINUED, _status(410)), None, None, 3),
+    (
+        "list_custom_resources_strict",
+        "410",
+        "expired-continuation",
+        _answer_then_fail("ok", _INV_CONTINUED, _status(410)),
+        None,
+        None,
+        4,
+    ),
+    (
+        "list_managed_clusters_strict",
+        "410",
+        "expired-continuation",
+        _answer_then_fail("ok", _INV_CONTINUED, _status(410)),
+        None,
+        None,
+        4,
+    ),
+    ("wait_for_pods_ready", "404", "pods-404", _answer_then_fail(_status(404)), None, None, 3),
+]
+# Methods that answer a 404 with a not-found value (the `api_call` decorator's
+# `not_found_value`, or their own raw helper's), in one request.
+_INV_NOT_FOUND = (
+    "get_namespace",
+    "namespace_exists",
+    "list_namespaces",
+    "get_secret",
+    "secret_exists",
+    "get_configmap",
+    "exists_configmap",
+    "delete_configmap",
+    "delete_pod",
+    "get_route_host",
+    "get_custom_resource",
+    "get_custom_resource_advisory",
+    "list_custom_resources",
+    "list_custom_resources_advisory",
+    "list_managed_clusters",
+    "get_configmap_advisory",
+    "delete_custom_resource",
+    "get_deployment",
+    "get_statefulset",
+    "get_pods",
+    "list_pods",
+    "get_pod_logs",
+)
+# Methods that retry a 429 as they retry a 5xx: it is answered to every attempt.
+_INV_RATE_LIMITED = (
+    "get_namespace",
+    "namespace_exists",
+    "get_cluster_identity",
+    "list_namespaces",
+    "get_secret",
+    "secret_exists",
+    "get_configmap",
+    "get_configmap_advisory",
+    "exists_configmap",
+    "create_or_patch_configmap",
+    "delete_configmap",
+    "delete_pod",
+    "get_route_host",
+    "get_custom_resource",
+    "get_custom_resource_advisory",
+    "list_custom_resources",
+    "list_custom_resources_advisory",
+    "patch_custom_resource",
+    "create_custom_resource",
+    "delete_custom_resource",
+    "list_managed_clusters",
+    "patch_managed_cluster",
+    "get_deployment",
+    "get_statefulset",
+    "scale_deployment",
+    "scale_statefulset",
+    "rollout_restart_deployment",
+    "get_pods",
+    "list_pods",
+    "get_pod_logs",
+    "wait_for_pods_ready",
+)
+
+
+def _inv_branch_cases():
+    """`_INV_BRANCHES` plus the 404 and 429 cases, as (method, label, scenario, script, args,
+    kwargs, requests)."""
+    cases = list(_INV_BRANCHES)
+    cases += [(m, "404", "404-not-found", _answer_then_fail(_status(404)), None, None, 1) for m in _INV_NOT_FOUND]
+    cases += [
+        (m, "429", "429-rate-limited", _always(_status(429)), None, None, _INV_DRIVES[m][3]) for m in _INV_RATE_LIMITED
+    ]
+    return cases
 
 
 def _inv_cases():
@@ -2316,11 +2514,17 @@ def _inv_cases():
     for method, (args, kwargs, ok, http, transport) in _INV_DRIVES.items():
         for mode, requests in (("ok", ok), ("http", http), ("transport", transport)):
             cases.append((method, mode, mode, None, args, kwargs, requests))
-    for method, scenario, mode, script, args, kwargs, requests in _INV_SCRIPTED:
+    scripted = list(_INV_SCRIPTED)
+    scripted += [(m, f"branch-{scenario}", "http", *rest) for m, _label, scenario, *rest in _inv_branch_cases()]
+    for method, scenario, mode, script, args, kwargs, requests in scripted:
         base_args, base_kwargs = _INV_DRIVES[method][:2]
         merged = {**base_kwargs, **(kwargs or {})}
         cases.append((method, scenario, mode, script, base_args if args is None else args, merged, requests))
     return cases
+
+
+# (method, scenario) -> the status label that case is declared to drive.
+_INV_BRANCH_LABELS = {(m, f"branch-{scenario}"): label for m, label, scenario, *_rest in _inv_branch_cases()}
 
 
 _INV_CASES = _inv_cases()
@@ -2332,6 +2536,348 @@ _INV_CONSTRUCTIONS = {
     "request-timeout": {"request_timeout": 5},
     "quiet-config-errors": {"log_config_errors": False},
 }
+
+
+# ---------------------------------------------------------------------------
+# Status branches: every branch the source takes on a status is driven
+# ---------------------------------------------------------------------------
+#
+# The runtime invariant judges only the requests it drives: a request added inside a
+# status-specific handler that no case reaches passes it (astra-r5 H1). So the handlers are
+# derived from the source. A status site is an `if` whose test compares some `.status` with a
+# constant, a range or a membership set (an HTTP status, or a `StrictReadStatus` member) or
+# branches on `is_retryable_error(...)`, plus `is_retryable_error`'s own status classes. A public
+# method owns every site in the code it can reach: methods and module functions it names,
+# decorators included. For each derived (public method, site, label), some case must answer that
+# status where the branch applies and every further request with a canary failure, and the site
+# must be seen entered with that status. A request added in the branch then reaches the probe.
+
+_RETRY_DECISION = "is_retryable_error"
+_STATUS_SITE_TOOL = "kube-client-status-sites"
+# Status comparisons that are not a branch a public method takes outside the boundary, and why.
+# A change here is a reviewed change to what the status-branch property leaves out.
+_EXCLUDED_STATUS_COMPARISONS = {
+    "_transport_category: current.status == 0": "only _call_sdk reaches it",
+    "_is_unsupported_content_type: exc.status == 0": "only _call_sdk reaches it",
+    "_malformed_body: http_error.status > 0": "only _call_sdk reaches it",
+    "_malformed_body: 200 <= http_error.status <= 299": "only _call_sdk reaches it",
+    "_request_bytes: 200 <= raw.status <= 299": "inside a _call_sdk operation",
+    "wait_for_pods_ready: is_retryable_error(exc)": "an earlier handler takes every ApiException",
+}
+
+
+class _StatusSite(NamedTuple):
+    owner: str  # the module function or KubeClient method containing the site
+    key: str  # "owner: test", stable across line moves
+    labels: Tuple[str, ...]
+    lines: FrozenSet[int]  # executing any of these proves the branch was entered
+    operand: Any  # compiled: the status (or, for a retry decision, the exception) branched on
+    of_exception: bool  # the operand is an exception whose `.status` is read if it is an ApiException
+
+
+def _unclassified(owner, node):
+    raise AssertionError(
+        f"{owner}:{node.lineno} compares a status in a shape the deriver does not read: {ast.unparse(node)}"
+    )
+
+
+def _status_labels(owner, compare):
+    """The labels a `.status` comparison selects: '404', a range '500-599', or a member name."""
+    operands = [compare.left, *compare.comparators]
+    if len(compare.ops) == 2 and all(isinstance(op, (ast.Lt, ast.LtE)) for op in compare.ops):
+        low, _status_operand, high = operands
+        if not all(isinstance(bound, ast.Constant) and type(bound.value) is int for bound in (low, high)):
+            _unclassified(owner, compare)
+        low = low.value + isinstance(compare.ops[0], ast.Lt)
+        high = high.value - isinstance(compare.ops[1], ast.Lt)
+        return (f"{low}-{high}",)
+    if len(compare.ops) != 1:
+        _unclassified(owner, compare)
+    op, (left, right) = compare.ops[0], operands
+    if isinstance(op, ast.Eq) and isinstance(left, ast.Constant):
+        left, right = right, left
+    if isinstance(op, ast.Eq) and isinstance(right, ast.Constant) and type(right.value) is int:
+        return (str(right.value),)
+    if isinstance(op, ast.In):
+        if isinstance(right, (ast.Tuple, ast.Set, ast.List)) and all(isinstance(e, ast.Constant) for e in right.elts):
+            values = [element.value for element in right.elts]
+        elif isinstance(right, ast.Name):
+            values = list(getattr(kube_client_module, right.id))
+        else:
+            _unclassified(owner, compare)
+        if not all(type(value) is int for value in values):
+            _unclassified(owner, compare)
+        return tuple(str(value) for value in sorted(values))
+    if isinstance(op, (ast.Is, ast.IsNot)) and isinstance(right, ast.Attribute):
+        return (right.attr,) if isinstance(op, ast.Is) else (f"not {right.attr}",)
+    _unclassified(owner, compare)
+
+
+def _label_holds(label, observed):
+    if isinstance(observed, StrictReadStatus):
+        return label == observed.name or (label.startswith("not ") and label[4:] != observed.name)
+    if type(observed) is not int:
+        return False
+    if "-" in label:
+        low, high = map(int, label.split("-"))
+        return low <= observed <= high
+    return label == str(observed)
+
+
+def _branch_of(node, parents):
+    """The `if` whose test is `node`, alone or as one operand of an `and`, else None."""
+    while isinstance(parents.get(node), ast.BoolOp) and isinstance(parents[node].op, ast.And):
+        node = parents[node]
+    parent = parents.get(node)
+    return parent if isinstance(parent, ast.If) and parent.test is node else None
+
+
+def _receives_no_api_exception(node, parents):
+    """Whether `node` sits in an `except Exception` handler that an earlier `except ApiException`
+    handler of the same `try` already relieves of every ApiException."""
+    while node in parents and not isinstance(node, ast.ExceptHandler):
+        node = parents[node]
+    if not isinstance(node, ast.ExceptHandler) or node.type is None or ast.unparse(node.type) != "Exception":
+        return False
+    handlers = parents[node].handlers
+    earlier = handlers[: handlers.index(node)]
+    return any(h.type is not None and "ApiException" in ast.unparse(h.type) for h in earlier)
+
+
+def _is_returned(node, parents):
+    """Whether `node` is the returned value, alone or as one operand of an `or`."""
+    while isinstance(parents.get(node), ast.BoolOp) and isinstance(parents[node].op, ast.Or):
+        node = parents[node]
+    return isinstance(parents.get(node), ast.Return)
+
+
+def _owners(tree):
+    """Module functions, module-level names and KubeClient methods, by name."""
+    module, methods = {}, {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            module[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                if isinstance(target, ast.Name):
+                    module[target.id] = node
+        elif isinstance(node, ast.ClassDef) and node.name == "KubeClient":
+            methods = {m.name: m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert not set(module) & set(methods), "a method shares a module function's name"
+    return module, methods
+
+
+def _references(node, module, methods):
+    """The owners `node` names: module names it loads, and `self.<method>` it reaches."""
+    found = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id in module:
+            found.add(child.id)
+        elif (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "self"
+            and child.attr in methods
+        ):
+            found.add(child.attr)
+    return found
+
+
+def _status_sites(source):
+    """(sites, excluded, reachable) for lib/kube_client.py.
+
+    `excluded` maps each status comparison that is not a branch a public method's own code takes
+    outside the boundary to why: it runs inside a `_call_sdk` operation, or in a function only
+    `_call_sdk` reaches (its failure classification, while the boundary flag is still set), or it
+    is a retry decision that receives no ApiException. Any other status comparison in a shape the
+    deriver does not read fails. `reachable` maps each public method to the owners it reaches."""
+    tree = ast.parse(source)
+    module, methods = _owners(tree)
+    owners = {**module, **methods}
+    references = {name: _references(node, module, methods) for name, node in owners.items()}
+
+    def closure(start):
+        seen, pending = set(), [start]
+        while pending:
+            name = pending.pop()
+            if name not in seen:
+                seen.add(name)
+                pending.extend(references[name])
+        return seen
+
+    boundary = closure("_call_sdk") - {"_call_sdk"}
+    while True:
+        referenced_elsewhere = set().union(*(references[n] for n in owners if n not in boundary | {"_call_sdk"}))
+        if not boundary & referenced_elsewhere:
+            break
+        boundary -= referenced_elsewhere
+
+    sites, excluded = [], {}
+    for owner, node in owners.items():
+        parents = {child: parent for parent in ast.walk(node) for child in ast.iter_child_nodes(parent)}
+        operations = _operations(node)
+        for child in _status_nodes(node):
+            where = f"{owner}: {ast.unparse(child)}"
+            if _inside_boundary(child, parents, operations):
+                excluded[where] = "inside a _call_sdk operation"
+            elif owner in boundary:
+                excluded[where] = "only _call_sdk reaches it"
+            elif isinstance(child, ast.Call) and _receives_no_api_exception(child, parents):
+                excluded[where] = "an earlier handler takes every ApiException"
+            else:
+                site = _status_site(owner, child, parents)
+                if site is not None:
+                    taken = sum(other.key == site.key or other.key.startswith(site.key + " #") for other in sites)
+                    sites.append(site._replace(key=f"{site.key} #{taken + 1}") if taken else site)
+    retry_labels = tuple(label for site in sites if site.owner == _RETRY_DECISION for label in site.labels)
+    assert retry_labels, f"{_RETRY_DECISION} retries no status class the deriver can read"
+    sites = [site._replace(labels=retry_labels) if site.labels is None else site for site in sites]
+
+    public = {name for name in methods if not name.startswith("_")}
+    reachable = {name: closure(name) for name in public}
+    return sites, excluded, reachable
+
+
+def _status_nodes(node):
+    """Every `.status` comparison and every `is_retryable_error(...)` call under `node`, in
+    source order."""
+    found = [
+        child
+        for child in ast.walk(node)
+        if (
+            isinstance(child, ast.Compare)
+            and any(isinstance(o, ast.Attribute) and o.attr == "status" for o in (child.left, *child.comparators))
+        )
+        or (isinstance(child, ast.Call) and ast.unparse(child.func) == _RETRY_DECISION)
+    ]
+    return sorted(found, key=lambda child: (child.lineno, child.col_offset))
+
+
+def _status_site(owner, child, parents):
+    """The site `child` makes: an `if` branching on it, or one of `is_retryable_error`'s own
+    status classes. None for the retry decision handed to tenacity (`_should_retry` returns it).
+    A retry branch's labels are filled in from `is_retryable_error` afterwards."""
+    branch = _branch_of(child, parents)
+    if isinstance(child, ast.Call):
+        if branch is None and _is_returned(child, parents):
+            return None
+        if branch is None:
+            _unclassified(owner, child)
+        operand, of_exception, labels = child.args[0], True, None
+    else:
+        operand = next(o for o in (child.left, *child.comparators) if isinstance(o, ast.Attribute))
+        of_exception, labels = False, _status_labels(owner, child)
+        if branch is None and owner == _RETRY_DECISION and _is_returned(child, parents):
+            # The decision itself: each status class it retries, seen where it is computed.
+            key = f"{owner}: {ast.unparse(child)}"
+            return _StatusSite(owner, key, labels, frozenset({child.lineno}), _compiled(operand), False)
+        if branch is None:
+            _unclassified(owner, child)
+    first = branch.body[0]
+    lines = frozenset(range(first.lineno, first.end_lineno + 1))
+    return _StatusSite(owner, f"{owner}: {ast.unparse(branch.test)}", labels, lines, _compiled(operand), of_exception)
+
+
+def _compiled(expression):
+    return compile(ast.Expression(body=expression), kube_client_module.__file__, "eval")
+
+
+def _derived_status_branches():
+    """Every (public method, site key, label) the source treats specially."""
+    sites, _excluded, reachable = _status_sites(_kube_client_source())
+    return {
+        (method, site.key, label)
+        for method, owners in reachable.items()
+        for site in sites
+        if site.owner in owners
+        for label in site.labels
+    }
+
+
+class _BranchRecorder:
+    """While active, records each status site entered in lib/kube_client.py as (site key, label,
+    requests made so far), the label being one the site's status operand holds there."""
+
+    def __init__(self, sites):
+        self.probe = None
+        self._by_line = {}
+        for site in sites:
+            for line in site.lines:
+                self._by_line.setdefault(line, []).append(site)
+        self.entered = set()
+
+    def on_line(self, frame, line):
+        for site in self._by_line.get(line, ()):
+            try:
+                observed = eval(site.operand, frame.f_globals, frame.f_locals)  # noqa: S307 - our own source
+            except Exception:  # noqa: BLE001 - not this site's frame (a lambda on a body line)
+                continue
+            if site.of_exception:
+                if not isinstance(observed, ApiException):
+                    continue
+                observed = observed.status
+            for label in site.labels:
+                if _label_holds(label, observed):
+                    self.entered.add((site.key, label, len(self.probe.requests)))
+
+
+def _kube_client_code_objects():
+    """Every code object compiled from lib/kube_client.py: module functions and KubeClient
+    methods under their decorators, and every function, lambda and comprehension inside them."""
+    filename = kube_client_module.__file__
+    pending = []
+    for value in (*vars(kube_client_module).values(), *vars(KubeClient).values()):
+        value = getattr(value, "__func__", value)
+        if callable(value):
+            value = inspect.unwrap(value)
+        code = getattr(value, "__code__", None)
+        if code is not None and code.co_filename == filename:
+            pending.append(code)
+    found = set()
+    while pending:
+        code = pending.pop()
+        if code not in found:
+            found.add(code)
+            pending.extend(const for const in code.co_consts if inspect.iscode(const))
+    return found
+
+
+@contextlib.contextmanager
+def _recording(recorder):
+    """LINE events on lib/kube_client.py's code through `sys.monitoring` (Python 3.12+), or
+    through `sys.settrace` when no other tracer owns it; otherwise the test is skipped."""
+    monitoring = getattr(sys, "monitoring", None)
+    if monitoring is not None:
+        tool = next(t for t in (4, 3) if monitoring.get_tool(t) is None)  # neither a debugger's nor coverage's
+        codes = _kube_client_code_objects()
+        monitoring.use_tool_id(tool, _STATUS_SITE_TOOL)
+        try:
+            monitoring.register_callback(
+                tool, monitoring.events.LINE, lambda _code, line: recorder.on_line(sys._getframe(1), line)
+            )
+            for code in codes:
+                monitoring.set_local_events(tool, code, monitoring.events.LINE)
+            yield
+        finally:
+            for code in codes:
+                monitoring.set_local_events(tool, code, 0)
+            monitoring.register_callback(tool, monitoring.events.LINE, None)
+            monitoring.free_tool_id(tool)
+        return
+    if sys.gettrace() is not None:
+        pytest.skip(f"Python {sys.version_info[:2]} has no sys.monitoring and another tracer owns sys.settrace")
+    filename = kube_client_module.__file__
+
+    def local(frame, event, _arg):
+        if event == "line":
+            recorder.on_line(frame, frame.f_lineno)
+        return local
+
+    sys.settrace(lambda frame, _event, _arg: local if frame.f_code.co_filename == filename else None)
+    try:
+        yield
+    finally:
+        sys.settrace(None)
 
 
 @pytest.mark.unit
@@ -2400,13 +2946,8 @@ class TestRuntimeBoundaryInvariant:
     def test_every_request_is_made_inside_the_boundary(
         self, caplog, method, scenario, mode, script, args, kwargs, requests
     ):
-        probe = _BoundaryProbe(mode, script)
-        result = raised = None
         with caplog.at_level(logging.DEBUG):
-            try:
-                result = getattr(_probed_construction(probe, context="inv"), method)(*args, **kwargs)
-            except Exception as exc:  # failure modes raise; the invariant is judged first either way
-                raised = exc
+            probe, result, raised = _drive(method, mode, script, args, kwargs)
         outside = probe.outside() + self.foreign
         assert outside == [], f"KubeClient.{method} ({scenario}) reached the transport outside _call_sdk"
         assert len(probe.requests) == requests, f"KubeClient.{method} ({scenario}) did not drive the expected path"
@@ -2417,6 +2958,43 @@ class TestRuntimeBoundaryInvariant:
         assert not any(
             CANARY in text for text in (*released, caplog.text)
         ), f"KubeClient.{method} ({scenario}) let server or transport text out of _call_sdk"
+
+    def test_status_sites_are_derived_and_every_branch_case_names_one(self):
+        """Static half: the source is read without an unclassified status comparison, the
+        comparisons left out are the reviewed ones, every site is on code the recorder watches,
+        and every branch case names a (method, status) pair the source still has."""
+        sites, excluded, _reachable = _status_sites(_kube_client_source())
+        assert excluded == _EXCLUDED_STATUS_COMPARISONS
+        watched = {line for code in _kube_client_code_objects() for *_span, line in code.co_lines() if line}
+        assert all(site.lines & watched for site in sites), "a status site is on code the recorder does not watch"
+        named = {(method, label) for method, _key, label in _derived_status_branches()}
+        stale = sorted(pair for pair in _INV_BRANCH_LABELS.items() if (pair[0][0], pair[1]) not in named)
+        assert stale == [], f"branch cases for a (method, status) the source no longer treats specially: {stale}"
+
+    def test_every_status_branch_is_driven(self):
+        """Runtime half: every derived (public method, site, status) is entered by some case at
+        that status while every further request fails with the canary, no case enters a site
+        its method cannot reach statically, and every branch case enters its declared status."""
+        sites, _excluded, _reachable = _status_sites(_kube_client_source())
+        derived = _derived_status_branches()
+        driven, idle = set(), []
+        for method, scenario, mode, script, args, kwargs, _requests in _INV_CASES:
+            if mode == "ok":
+                continue  # its further requests succeed: nothing it enters counts
+            self.foreign.clear()
+            recorder = _BranchRecorder(sites)
+            probe, _result, _raised = _drive(method, mode, script, args, kwargs, recorder)
+            armed = {(method, key, label) for key, label, made in recorder.entered if probe.fails_from(made)}
+            driven |= armed
+            declared = _INV_BRANCH_LABELS.get((method, scenario))
+            if declared is not None and not any(label == declared for _m, _k, label in armed):
+                idle.append(f"{method} ({scenario}): {declared}")
+        assert idle == [], f"branch cases that do not enter their declared status branch: {idle}"
+        assert driven - derived == set(), "a case entered a status site its method does not reach statically"
+        undriven = sorted(derived - driven)
+        assert undriven == [], "status branches no case drives with every further request failing:\n" + "\n".join(
+            map(str, undriven)
+        )
 
     def test_every_public_method_is_driven_or_justified(self):
         public = {
