@@ -319,8 +319,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error keeps its HTTP status and the client's own exception class, with the standard HTTP phrase as
   its reason; a failure without a usable status (TLS, a timeout, a dropped connection, a malformed
   status line or chunk, an undecodable or unknown-charset response) keeps its exception family and
-  errno and carries a fixed diagnostic such as `Kubernetes API request failed: TLS error`, so a TLS
-  failure is no longer reported as `(0) Reason: None`. Retry decisions, attempt counts, and
+  errno and carries a fixed diagnostic such as `Kubernetes API request failed: TLS error`. Python
+  `warnings` raised by the client libraries are not covered (#385). Retry decisions, attempt counts, and
   404/409/410/412/422 handling are unchanged. While a request runs, the Kubernetes client's and
   urllib3's own log records (response bodies at DEBUG, connection-failure warnings) are dropped, and
   retry log lines name only the HTTP status or the fixed category. Visible changes: some transport
