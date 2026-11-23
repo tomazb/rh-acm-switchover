@@ -1031,6 +1031,17 @@ _MALFORMED_TYPED_READS = [
         {29: _off_model("ValueError"), 37: _off_model("ValidationError")},
         id="deployment-off-model",
     ),
+    pytest.param(
+        json.dumps({"metadata": {"name": "ns1", "creationTimestamp": CANARY}}).encode(),
+        "application/json",
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        # 29.x raises its own status-0 ApiException for a timestamp it cannot parse.
+        {29: "ApiException", 37: "ValidationError"},
+        {29: ApiException, 37: ValueError},
+        {29: _off_model("ApiException"), 37: _off_model("ValidationError")},
+        id="namespace-bad-timestamp",
+    ),
 ]
 
 
@@ -1054,9 +1065,13 @@ class TestMalformedTypedReadsAreNamed:
             raised = _raise(kube_call, _real_typed_kube_client(pool))
 
         expected = message[_MAJOR] if isinstance(message, dict) else message
+        family = family[_MAJOR] if isinstance(family, dict) else family
         assert type(raised) is family, "the catch family callers see is unchanged"
-        assert str(raised) == expected
-        assert str(raised) != _REQUEST_FAILED
+        if isinstance(raised, ApiException):
+            assert raised.status == 0 and raised.reason == expected
+        else:
+            assert str(raised) == expected
+        assert _REQUEST_FAILED not in str(raised)
         assert is_retryable_error(raised) is is_retryable_error(raw) is False
         assert len(pool.calls) == 1
         _assert_no_canary(caplog.text, *_rendered(raised))
@@ -1071,6 +1086,7 @@ class TestMalformedTypedReadsAreNamed:
 
         assert type(raised) is ValueError and str(raised) == _REQUEST_FAILED
         assert client._api_client.rest_client.pool_manager.calls == []
+        _assert_no_canary(*_rendered(raised))
 
 
 _DISCOVERY_DOCUMENT = {
@@ -1236,18 +1252,21 @@ class TestSwallowedFailuresKeepTheirDiagnosis:
         assert not any(f"HTTP {401 + 403 - status}" in line for line in lines)
         _assert_no_canary(caplog.text)
 
-    @pytest.mark.parametrize("route", [p for p in _OUTCOME_ROUTES if p.id.startswith("guarded")])
-    def test_a_status_0_tls_failure_logs_its_category_on_a_guarded_route(self, caplog, route):
+    @pytest.mark.parametrize("route,served_discovery", [p for p in _SWALLOWING_SITES if p.id != "pod-wait"])
+    def test_a_status_0_tls_failure_logs_its_category(self, caplog, route, served_discovery):
         """The SDK's own status-0 ApiException for a TLS failure is not logged as a bare `HTTP 0`."""
         pool = _RaisingPool(lambda: urllib3.exceptions.SSLError("certificate verify failed: " + CANARY))
         raw = _raise(lambda c: c.core_v1.read_namespace("ns1"), _real_typed_kube_client(pool))
         assert isinstance(raw, ApiException) and raw.status == 0, "precondition: the SDK raises status 0"
 
         with caplog.at_level(logging.DEBUG):
-            outcome = route(_real_typed_kube_client(pool))
+            outcome = route(_real_typed_kube_client(_ServedDiscovery(pool) if served_discovery else pool))
 
-        assert outcome["reason"] == "unverifiable"
-        assert any("TLS error" in line for line in _project_log(caplog)), _project_log(caplog)
+        if hasattr(outcome, "status"):
+            assert outcome.status is StrictReadStatus.ERROR
+        else:
+            assert outcome["reason"] == "unverifiable"
+        assert any("HTTP 0 (TLS error)" in line for line in _project_log(caplog)), _project_log(caplog)
         _assert_no_canary(caplog.text)
 
 
@@ -1292,6 +1311,7 @@ def test_a_custom_object_malformed_response_carries_the_malformed_category():
     raised = _raise(lambda c: c.get_custom_resource("g.io", "v1", "things", "t1", namespace="ns1"), make_client())
     assert isinstance(raised, MalformedResponseError)
     assert kube_client_module._failure_category_of(raised) == "malformed response"
+    _assert_no_canary(*_rendered(raised))
 
 
 def _raise_now(exc):
@@ -1309,6 +1329,12 @@ _MALFORMED_ON_STRICT_SITES = [
         lambda c: c.get_custom_resource_strict("g.io", "v1", "things", "t1", "ns1"), True, b"{not json", id="strict-get"
     ),
     pytest.param(lambda c: c.list_pods_strict("ns1"), False, b"{}", id="strict-pods"),
+    pytest.param(
+        lambda c: c.get_namespace_strict("ns1"),
+        False,
+        json.dumps({"metadata": {"name": "ns1", "creationTimestamp": CANARY}}).encode(),
+        id="strict-namespace-bad-timestamp",
+    ),
     pytest.param(
         lambda c: c.get_deployment_strict("d1", "ns1"),
         False,
