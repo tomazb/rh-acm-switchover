@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - ansible-core < 2.19
 
 
 RESOLVER = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "ansible_collections/tomazb/acm_switchover/roles/common/tasks/resolve_managed_cluster_expectation.yml"
 )
 COLLECTION_MODES = {"activation": "activation_restore_wait", "post_activation": "post_activation_verify"}

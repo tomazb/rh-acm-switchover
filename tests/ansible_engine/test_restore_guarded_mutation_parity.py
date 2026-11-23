@@ -22,7 +22,7 @@ import lib.kube_client as python_form
 from ansible_collections.tomazb.acm_switchover.plugins.modules import acm_restore_guarded_mutation as collection_form
 from lib.validation import ValidationError
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 NAME = "restore-acm-passive-sync"
 NAMESPACE = "open-cluster-management-backup"

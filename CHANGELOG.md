@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Root tests no longer need Ansible; engine-parity tests have their own CI lane (#371).** The two
+  tests that hard-require the Ansible engine moved to `tests/ansible_engine/`, which errors (never
+  skips) when Ansible is absent and runs in the new `ansible-engine-parity` CI job on ansible-core
+  2.16 and 2.21. `requirements-dev.txt` no longer declares `ansible-core`. `./run_tests.sh` now
+  refuses to run when Ansible is importable, so a `.venv` built from the old `requirements-dev.txt`
+  must be rebuilt.
+
 - **Python CLI `kubernetes` floor raised to 29.0.0 (#358).** The root `requirements.txt` now
   declares `kubernetes>=29.0.0`. The previous `>=28.0.0` was unreachable there: 28.1.0, the lowest
   final release it admitted, requires `urllib3<2`, while the root also requires

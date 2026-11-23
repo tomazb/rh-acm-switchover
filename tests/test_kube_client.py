@@ -3092,7 +3092,7 @@ class TestDiscoveryGroupVersionProof:
 
 # Unit expectations for the guarded Restore mutations (R4-04 Task 4). Equality with the
 # collection's acm_restore_guarded_mutation is enforced by
-# tests/test_restore_guarded_mutation_parity.py, which drives both form factors.
+# tests/ansible_engine/test_restore_guarded_mutation_parity.py, which drives both form factors.
 GUARDED_RESTORE_PATCH_VECTOR = {
     "uid": "3f0c2a4e-uid",
     "resource_version": "48213",

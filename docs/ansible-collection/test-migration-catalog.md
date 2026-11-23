@@ -49,8 +49,8 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `ansible_collections/tomazb/acm_switchover/tests/integration/test_uid_guarded_delete_runtime.py` | collection integration | `acm_uid_guarded_delete` against a fake Kubernetes API, including the UID-precondition wire body and the `no_log` fixture contract |
 | `tests/test_migration_evidence.py` | Python unit | R4-04 pure migration-evidence model edge cases |
 | `tests/test_migration_evidence_parity.py` | parity | R4-04 pure model in both form factors over `tests/fixtures/r4_04_migration_evidence_vectors.json` |
-| `tests/test_restore_guarded_mutation_parity.py` | parity | Guarded Restore patch, delete and create: request, classification, dry-run/check-mode prediction |
-| `tests/test_managed_cluster_expectation_parity.py` | parity | Additive ManagedCluster count/name expectation (Python resolver against the collection resolver task file) |
+| `tests/ansible_engine/test_restore_guarded_mutation_parity.py` | parity | Guarded Restore patch, delete and create: request, classification, dry-run/check-mode prediction |
+| `tests/ansible_engine/test_managed_cluster_expectation_parity.py` | parity | Additive ManagedCluster count/name expectation (Python resolver against the collection resolver task file) |
 | `tests/test_activation_evidence.py` | Python unit | Python activation transaction: freeze, guarded mutations, completion evidence, resume, dry-run |
 | `tests/test_activation_transaction_parity.py` | parity | Activation transaction outcomes, mutations and journals agree over identical fake hubs |
 | `tests/test_post_activation_transaction_parity.py` | parity | Post-activation evidence (readiness, name check or waiver, completion) agrees |
