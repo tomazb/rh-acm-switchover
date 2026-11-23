@@ -1064,11 +1064,13 @@ def test_decommission_keeps_prior_changes_and_survivors_after_a_transport_failur
 # ---------------------------------------------------------------------------
 
 _SDK_ROOTS = ("core_v1", "apps_v1", "custom_api", "_api_client")
-# Configuration loading and API-object construction, not hub requests.
-_EXEMPT_METHODS = {"__init__"}
+# The one method allowed to touch the SDK objects outside `_call_sdk`, and then only to build
+# them and to read or set their configuration (`_constructor_exempt`); it issues no requests.
+_CONSTRUCTOR = "__init__"
 # One entry per hub SDK step in KubeClient, as `_sdk_step` counts them. A change here is a
 # reviewed change to the set of operations the boundary owns.
 _EXPECTED_INVENTORY_SIZE = 45
+_CALLABLES = (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _is_sdk_object(node):
@@ -1080,22 +1082,127 @@ def _is_boundary_call(node):
     return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_call_sdk"
 
 
+def _body(function):
+    """The nodes that run when `function` is called, not when it is created."""
+    return [function.body] if isinstance(function, ast.Lambda) else function.body
+
+
+def _is_generator(function):
+    """Whether calling `function` only creates a generator, deferring its body."""
+    pending = list(_body(function))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        if not isinstance(node, _CALLABLES):
+            pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
 def _operations(method):
-    """The closures `method` hands to `_call_sdk`: a lambda passed as its first argument, or a
-    nested function passed by name as that argument and referenced nowhere else."""
+    """The callables whose body `_call_sdk` itself runs: a lambda passed as its first argument,
+    or an undecorated nested function passed by name as that argument and referenced nowhere
+    else; neither may be a generator. A decorator could run or replace the function before
+    `_call_sdk` sees it, and a generator's body runs only when iterated, after the boundary."""
     operations = set()
     for node in ast.walk(method):
         if not (_is_boundary_call(node) and node.args):
             continue
         operation = node.args[0]
-        if isinstance(operation, ast.Lambda):
-            operations.add(operation)
-        elif isinstance(operation, ast.Name):
+        if isinstance(operation, ast.Name):
             loads = [n for n in ast.walk(method) if isinstance(n, ast.Name) and n.id == operation.id]
-            nested = [n for n in ast.walk(method) if isinstance(n, ast.FunctionDef) and n.name == operation.id]
-            if len(loads) == 1 and len(nested) == 1 and nested[0] is not method:
-                operations.add(nested[0])
+            nested = [n for n in ast.walk(method) if isinstance(n, _CALLABLES[1:]) and n.name == operation.id]
+            if not (len(loads) == 1 and len(nested) == 1 and nested[0] is not method):
+                continue
+            operation = nested[0]
+        if isinstance(operation, ast.Lambda) or (
+            isinstance(operation, ast.FunctionDef) and not operation.decorator_list
+        ):
+            if not _is_generator(operation):
+                operations.add(operation)
     return operations
+
+
+def _inside_boundary(node, parents, operations):
+    """Whether `node` executes while `_call_sdk` runs an operation, judged by when Python runs
+    it rather than where it is written. Walking outwards: code in a callable's body runs when
+    that callable is called, so it is inside only if the callable is an operation; a callable's
+    defaults, decorators and annotations run where it is created, so the walk continues there;
+    a generator expression runs everything but its first iterable lazily, after the boundary;
+    list, set and dict comprehensions run on the spot."""
+    child = node
+    while child in parents:
+        parent = parents[child]
+        if isinstance(parent, _CALLABLES) and any(child is n for n in _body(parent)):
+            return parent in operations
+        if isinstance(parent, ast.GeneratorExp) and child is parent.elt:
+            return False
+        if isinstance(parent, ast.comprehension) and isinstance(parents[parent], ast.GeneratorExp):
+            if not (parent is parents[parent].generators[0] and child is parent.iter):
+                return False
+        child = parent
+    return False
+
+
+def _chain_root(node):
+    """The object an attribute, subscript or call chain starts from."""
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if isinstance(node, ast.Call) and ast.unparse(node.func) == "getattr" and node.args:
+        return _chain_root(node.args[0])
+    return node
+
+
+def _constructor_exempt(node, parents):
+    """In the constructor, an SDK object that is assigned (`self.core_v1 = ...`) or whose
+    configuration is read or set (`self.core_v1.api_client.configuration.timeout`), but not
+    called through."""
+    parent = parents.get(node)
+    if isinstance(node.ctx, ast.Store) and isinstance(parent, (ast.Assign, ast.AnnAssign)):
+        return True
+    configuration = False
+    while isinstance(parent, ast.Attribute) and parent.value is node:
+        configuration = configuration or parent.attr == "configuration"
+        node, parent = parent, parents.get(parent)
+    return configuration and not (isinstance(parent, ast.Call) and parent.func is node)
+
+
+def _constructor_requests(method, inside):
+    """Violations for calls the constructor makes on an object it built, or on anything reached
+    from one: `api_client.call_api(...)`, `client.CoreV1Api(api_client).read_namespace(...)`.
+    The constructor may build objects, hand them on and set their attributes, but calling into
+    what it built is a request issued under another name."""
+    constructed = set()
+    while True:
+        names = {
+            target.id
+            for node in ast.walk(method)
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Name)
+            and (
+                isinstance(_chain_root(node.value), ast.Call)
+                or (isinstance(_chain_root(node.value), ast.Name) and _chain_root(node.value).id in constructed)
+            )
+        }
+        if names <= constructed:
+            break
+        constructed |= names
+    violations = []
+    for node in ast.walk(method):
+        if not isinstance(node, ast.Call) or ast.unparse(node.func) == "getattr":
+            continue
+        if not isinstance(node.func, ast.Attribute) and not (
+            isinstance(node.func, ast.Call) and ast.unparse(node.func.func) == "getattr"
+        ):
+            continue
+        receiver = _chain_root(node.func.value if isinstance(node.func, ast.Attribute) else node.func)
+        built = isinstance(receiver, ast.Call) or (isinstance(receiver, ast.Name) and receiver.id in constructed)
+        if built and not inside(node):
+            violations.append(
+                f"{method.name}:{node.lineno} calls {ast.unparse(node.func)} on a constructed client outside _call_sdk"
+            )
+    return violations
 
 
 def _sdk_step(node):
@@ -1120,10 +1227,12 @@ def _sdk_step(node):
 def _boundary_violations(source):
     """(violations, inventory) for lib/kube_client.py.
 
-    Violations: an SDK object used outside KubeClient, or inside a KubeClient method (but
-    `__init__`) outside an operation handed to `_call_sdk`; and an SDK step that reaches no SDK
-    object itself (a raw body read, the legacy alias) outside such an operation. The inventory
-    lists every SDK step in KubeClient outside the exempt methods."""
+    Violations: an SDK object used outside KubeClient; inside KubeClient (every method and
+    every other class-body statement), an SDK object used, or an SDK step that reaches no SDK
+    object itself (a raw body read, the legacy alias) run, where it does not execute inside an
+    operation `_call_sdk` runs (`_inside_boundary`). The constructor may additionally build the
+    SDK objects and read or set their configuration, but may call nothing it built. The
+    inventory lists every SDK step in KubeClient."""
     tree = ast.parse(source)
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KubeClient")
     in_class = set(ast.walk(klass))
@@ -1133,27 +1242,26 @@ def _boundary_violations(source):
         if _is_sdk_object(node) and node not in in_class
     ]
     inventory = []
-    for method in klass.body:
-        if not isinstance(method, ast.FunctionDef) or method.name in _EXEMPT_METHODS:
-            continue
-        parents = {child: parent for parent in ast.walk(method) for child in ast.iter_child_nodes(parent)}
-        operations = _operations(method)
+    for member in klass.body:
+        name = member.name if isinstance(member, _CALLABLES[1:]) else "<KubeClient>"
+        constructor = isinstance(member, ast.FunctionDef) and member.name == _CONSTRUCTOR
+        parents = {child: parent for parent in ast.walk(member) for child in ast.iter_child_nodes(parent)}
+        operations = _operations(member)
 
-        def guarded(node):
-            while node in parents:
-                node = parents[node]
-                if node in operations:
-                    return True
-            return False
+        def inside(node):
+            return _inside_boundary(node, parents, operations)
 
-        for node in ast.walk(method):
+        if constructor:
+            violations.extend(_constructor_requests(member, inside))
+        for node in ast.walk(member):
             step = _sdk_step(node)
             if step is not None:
-                inventory.append(f"{method.name}: {step}")
-                if not any(_is_sdk_object(n) for n in ast.walk(node)) and not guarded(node):
-                    violations.append(f"{method.name}:{node.lineno} runs {step} outside _call_sdk")
-            if _is_sdk_object(node) and not guarded(node):
-                violations.append(f"{method.name}:{node.lineno} uses .{node.attr} outside _call_sdk")
+                inventory.append(f"{name}: {step}")
+                if not any(_is_sdk_object(n) for n in ast.walk(node)) and not inside(node):
+                    violations.append(f"{name}:{node.lineno} runs {step} outside _call_sdk")
+            if _is_sdk_object(node) and not inside(node):
+                if not (constructor and _constructor_exempt(node, parents)):
+                    violations.append(f"{name}:{node.lineno} uses .{node.attr} outside _call_sdk")
     return violations, inventory
 
 
@@ -1200,3 +1308,200 @@ class TestBoundaryGuardrail:
             ]
         )
         assert len(inventory) == 5
+
+    def test_the_guardrail_rejects_a_request_made_while_creating_the_operation(self):
+        # Defaults, decorators and annotations are evaluated when the callable is created,
+        # before `_call_sdk` runs it; only the callable's body runs inside the boundary.
+        source = (
+            "class KubeClient:\n"
+            "    def positional_default(self):\n"
+            "        return _call_sdk(lambda r=self.core_v1.read_namespace('a'): r.to_dict())\n"
+            "    def keyword_only_default(self):\n"
+            "        return _call_sdk(lambda *, r=self.core_v1.read_namespace('a'): r)\n"
+            "    def nested_default(self):\n"
+            "        def operation(r=self.core_v1.read_namespace('a')):\n"
+            "            return r\n"
+            "        return _call_sdk(operation)\n"
+            "    def nested_keyword_only_default(self):\n"
+            "        def operation(*, r=self.apps_v1.read_namespaced_deployment('a', 'b')):\n"
+            "            return r\n"
+            "        return _call_sdk(operation)\n"
+            "    def annotations(self):\n"
+            "        def operation(r: self.core_v1.read_namespace('a') = None) -> self.custom_api.get_x('b'):\n"
+            "            return r\n"
+            "        return _call_sdk(operation)\n"
+            "    def decorator_argument(self):\n"
+            "        @register(self.core_v1.read_namespace('a'))\n"
+            "        def operation():\n"
+            "            return None\n"
+            "        return _call_sdk(operation)\n"
+            "    def decorated_operation(self):\n"
+            "        @functools.cache\n"
+            "        def operation():\n"
+            "            return self.core_v1.read_namespace('a')\n"
+            "        return _call_sdk(operation)\n"
+            "    def default_inside_an_outer_operation(self):\n"
+            "        return _call_sdk(lambda: _call_sdk(lambda r=self.core_v1.read_namespace('a'): r))\n"
+            "    def body_only(self):\n"
+            "        def operation(r=None):\n"
+            "            return self.core_v1.read_namespace('a')\n"
+            "        return _call_sdk(operation)\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "positional_default:3 uses .core_v1 outside _call_sdk",
+                "keyword_only_default:5 uses .core_v1 outside _call_sdk",
+                "nested_default:7 uses .core_v1 outside _call_sdk",
+                "nested_keyword_only_default:11 uses .apps_v1 outside _call_sdk",
+                "annotations:15 uses .core_v1 outside _call_sdk",
+                "annotations:15 uses .custom_api outside _call_sdk",
+                "decorator_argument:19 uses .core_v1 outside _call_sdk",
+                "decorated_operation:26 uses .core_v1 outside _call_sdk",
+            ]
+        )
+        assert len(inventory) == 10
+
+    def test_the_guardrail_rejects_a_request_deferred_past_the_boundary(self):
+        # Code the operation only defines (a generator's lazy parts, an inner callable, a
+        # generator or coroutine operation's body) runs after `_call_sdk` has returned.
+        source = (
+            "class KubeClient:\n"
+            "    def generator_element(self, names):\n"
+            "        return _call_sdk(lambda: (self.core_v1.read_namespace(n) for n in names))\n"
+            "    def generator_condition(self, names):\n"
+            "        return _call_sdk(lambda: (n for n in names if self.core_v1.read_namespace(n)))\n"
+            "    def generator_later_iterable(self, names):\n"
+            "        return _call_sdk(lambda: (p for n in names for p in self.core_v1.list_x(n)))\n"
+            "    def generator_first_iterable(self):\n"
+            "        return _call_sdk(lambda: (n for n in self.core_v1.list_namespace().items))\n"
+            "    def comprehensions(self, names):\n"
+            "        return _call_sdk(lambda: ([self.core_v1.read_namespace(n) for n in names],"
+            " {n: self.core_v1.read_namespace(n) for n in names}))\n"
+            "    def returned_lambda(self):\n"
+            "        return _call_sdk(lambda: lambda: self.core_v1.read_namespace('a'))\n"
+            "    def returned_helper(self):\n"
+            "        def operation():\n"
+            "            def helper():\n"
+            "                return self.core_v1.read_namespace('a')\n"
+            "            return helper\n"
+            "        return _call_sdk(operation)\n"
+            "    def generator_operation(self):\n"
+            "        def operation():\n"
+            "            yield self.core_v1.read_namespace('a')\n"
+            "        return _call_sdk(operation)\n"
+            "    def generator_lambda(self):\n"
+            "        return _call_sdk(lambda: (yield self.core_v1.read_namespace('a')))\n"
+            "    def coroutine_operation(self):\n"
+            "        async def operation():\n"
+            "            return self.core_v1.read_namespace('a')\n"
+            "        return _call_sdk(operation)\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "generator_element:3 uses .core_v1 outside _call_sdk",
+                "generator_condition:5 uses .core_v1 outside _call_sdk",
+                "generator_later_iterable:7 uses .core_v1 outside _call_sdk",
+                "returned_lambda:13 uses .core_v1 outside _call_sdk",
+                "returned_helper:17 uses .core_v1 outside _call_sdk",
+                "generator_operation:22 uses .core_v1 outside _call_sdk",
+                "generator_lambda:25 uses .core_v1 outside _call_sdk",
+                "coroutine_operation:28 uses .core_v1 outside _call_sdk",
+            ]
+        )
+        assert len(inventory) == 11
+
+    def test_the_guardrail_rejects_an_operation_that_is_also_run_elsewhere(self):
+        source = (
+            "class KubeClient:\n"
+            "    def bound_lambda(self):\n"
+            "        operation = lambda: self.core_v1.read_namespace('a')\n"
+            "        operation()\n"
+            "        return _call_sdk(operation)\n"
+            "    def walrus(self):\n"
+            "        _call_sdk(operation := lambda: self.core_v1.read_namespace('a'))\n"
+            "        return operation()\n"
+            "    def handed_elsewhere(self):\n"
+            "        def operation():\n"
+            "            return self.core_v1.read_namespace('a')\n"
+            "        threading.Thread(target=operation).start()\n"
+            "        return _call_sdk(operation)\n"
+            "    def only_the_boundary_runs_it(self):\n"
+            "        def operation():\n"
+            "            return self.core_v1.read_namespace('a')\n"
+            "        return _call_sdk(operation)\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "bound_lambda:3 uses .core_v1 outside _call_sdk",
+                "walrus:7 uses .core_v1 outside _call_sdk",
+                "handed_elsewhere:11 uses .core_v1 outside _call_sdk",
+            ]
+        )
+        assert len(inventory) == 4
+
+    def test_the_guardrail_limits_the_constructor_to_building_and_configuring_clients(self):
+        # Mirrors KubeClient.__init__: building the API objects and setting or reading their
+        # configuration is allowed; any request on them, or on what built them, is not.
+        source = (
+            "class KubeClient:\n"
+            "    def __init__(self, request_timeout):\n"
+            "        api_client = config.new_client_from_config(context=None, persist_config=False)\n"
+            "        configuration = api_client.configuration\n"
+            "        configuration.retries = 0\n"
+            "        if hasattr(configuration, 'assert_hostname'):\n"
+            "            configuration.assert_hostname = False\n"
+            "        self.core_v1 = client.CoreV1Api(api_client)\n"
+            "        self._api_client = api_client\n"
+            "        self.core_v1.api_client.configuration.timeout = request_timeout\n"
+            "        self.timeout = self._api_client.configuration.timeout\n"
+            "        logger.info('Initialized %s', request_timeout)\n"
+            "        self.core_v1.read_namespace('ns1')\n"
+            "        alias = self.apps_v1\n"
+            "        register(self.custom_api)\n"
+            "        self._api_client.configuration.refresh_api_key_hook(None)\n"
+            "        api_client.call_api('/x', 'GET')\n"
+            "        rest = api_client.rest_client\n"
+            "        rest.request('GET', '/x')\n"
+            "        getattr(api_client, 'call_api')('/x', 'GET')\n"
+            "        client.CoreV1Api(api_client).read_namespace('x')\n"
+            "        self.ready = _call_sdk(lambda: api_client.call_api('/healthz', 'GET'))\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "__init__:13 uses .core_v1 outside _call_sdk",
+                "__init__:14 uses .apps_v1 outside _call_sdk",
+                "__init__:15 uses .custom_api outside _call_sdk",
+                "__init__:16 uses ._api_client outside _call_sdk",
+                "__init__:17 calls api_client.call_api on a constructed client outside _call_sdk",
+                "__init__:19 calls rest.request on a constructed client outside _call_sdk",
+                "__init__:20 calls getattr(api_client, 'call_api') on a constructed client outside _call_sdk",
+                "__init__:21 calls client.CoreV1Api(api_client).read_namespace on a constructed client"
+                " outside _call_sdk",
+            ]
+        )
+        assert inventory == [
+            "__init__: self.core_v1.read_namespace",
+            "__init__: self._api_client.configuration.refresh_api_key_hook",
+        ]
+
+    def test_the_guardrail_covers_the_whole_class_body(self):
+        source = (
+            "class KubeClient:\n"
+            "    probe = staticmethod(lambda kube: kube.core_v1.read_namespace('a'))\n"
+            "    async def fetch(self):\n"
+            "        return self.core_v1.read_namespace('a')\n"
+            "    async def fetch_inside(self):\n"
+            "        return _call_sdk(lambda: self.core_v1.read_namespace('a'))\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "<KubeClient>:2 uses .core_v1 outside _call_sdk",
+                "fetch:4 uses .core_v1 outside _call_sdk",
+            ]
+        )
+        assert len(inventory) == 3
