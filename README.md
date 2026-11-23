@@ -448,7 +448,7 @@ python -m pytest tests/release/test_release_certification.py \
   --release-mode certification
 
 # Or run the root test lane only
-python -m pytest tests/ --ignore=tests/release -v --cov=. --cov-report=html
+python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -m "not e2e" --cov=. --cov-report=html
 ```
 
 ### E2E Testing

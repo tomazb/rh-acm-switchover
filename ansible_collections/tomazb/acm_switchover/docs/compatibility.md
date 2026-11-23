@@ -291,7 +291,7 @@ the real engine (`tests/ansible_engine/`) run in the `ansible-engine-parity` job
 
 **Scope of this section.** The commands above reproduce the *collection* lanes in
 `ansible-collection-foundation.yml`. They are not the repository's whole test
-surface: the root suite (`python -m pytest tests/ -q`) runs in `ci-cd.yml` on its
+surface: the root suite (`python -m pytest tests/ --ignore=tests/release --ignore=tests/ansible_engine -q -m "not e2e"`) runs in `ci-cd.yml` on its
 own Python matrix, and it includes `tests/test_ci_guardrails.py`, which asserts
 properties of the collection workflow itself. Run the root suite as well when
 changing this workflow or the policy constants.
