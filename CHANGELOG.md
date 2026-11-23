@@ -323,7 +323,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   malformed response; a retryable `patch_custom_resource` failure no longer logs an ERROR line
   before it retries, its unexpected-exception log names only the exception type, and its success
   debug log gives a key count instead of the response's keys. A failed strict read or discovery
-  check now logs a WARNING naming only the HTTP status or a fixed failure category. Python CLI only; the Ansible
+  check now logs a WARNING naming the HTTP status or a fixed failure category. Python CLI only; the Ansible
   Collection, direct spoke-client paths and the direct RBAC permission check are not changed.
 - Python finalization Backup continuity now requires a positively complete strict inventory
   before recording or reusing a Backup name. Failed polls retain the existing baseline
