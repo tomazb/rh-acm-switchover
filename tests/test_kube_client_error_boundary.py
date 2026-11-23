@@ -15,6 +15,7 @@ import errno
 import io
 import json
 import logging
+import socket
 import ssl
 import threading
 import traceback
@@ -33,7 +34,7 @@ from lib.exceptions import MalformedResponseError, PreconditionConflict, TargetD
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.strict_read import StrictReadStatus
 from tests.api_error_canary import real_kube_client_apis
-from tests.test_kube_client import _real_typed_kube_client, _RecordingPoolManager
+from tests.test_kube_client import _real_typed_kube_client, _RecordingPoolManager, _UnreadableBody
 
 CANARY = "i283-boundary-canary-5c1e"
 _MAJOR = int(kubernetes.__version__.split(".")[0])
@@ -173,8 +174,9 @@ class _WirePool:
         return pool.urlopen(method, "/", preload_content=kwargs.get("preload_content", True), retries=False)
 
 
-def _configured_client(connect_failure):
-    """A KubeClient built by `__init__` over the SDK's own pool; only `connect()` is replaced.
+def _configured_client(connect_failure=None):
+    """A KubeClient built by `__init__` over the SDK's own pool; only `connect()` is replaced, and
+    only when `connect_failure` is given.
 
     The SDK builds its pool before KubeClient sets `configuration.retries = 0`, so this pool keeps
     urllib3's own retries: what it does on a connect failure is the production transport.
@@ -192,7 +194,8 @@ def _configured_client(connect_failure):
             connects.append(1)
             raise connect_failure()
 
-    pool.ConnectionCls = FailingConnection
+    if connect_failure is not None:
+        pool.ConnectionCls = FailingConnection
     return client, connects
 
 
@@ -319,6 +322,57 @@ class TestServerTextNeverLeavesKubeClient:
         assert is_retryable_error(raised) is True
         assert len(connects) == 20, "5 KubeClient attempts x 4 connects, as before"
         assert "TLS" in str(raised)
+        _assert_no_canary(caplog.text, *_rendered(raised))
+
+    @pytest.mark.parametrize(
+        "socket_failure,raw_reason,diagnosis",
+        [
+            (lambda: socket.timeout("timed out " + CANARY), urllib3.exceptions.ConnectTimeoutError, "timed out"),
+            # NewConnectionError subclasses ConnectTimeoutError: it must still read as a connection error.
+            (
+                lambda: ConnectionRefusedError(errno.ECONNREFUSED, CANARY),
+                urllib3.exceptions.NewConnectionError,
+                "connection error",
+            ),
+        ],
+        ids=["connect-timeout", "connection-refused"],
+    )
+    def test_timeout_and_refusal_through_the_sdk_built_pool(self, caplog, socket_failure, raw_reason, diagnosis):
+        """Faked at the socket factory urllib3's own connection calls, on the SDK-built pool."""
+        connects = []
+
+        def create_connection(*_args, **_kwargs):
+            connects.append(1)
+            raise socket_failure()
+
+        with patch("urllib3.util.connection.create_connection", side_effect=create_connection):
+            raw = _raise(lambda c: c.core_v1.read_namespace("ns1"), _configured_client()[0])
+            assert isinstance(raw, urllib3.exceptions.MaxRetryError) and type(raw.reason) is raw_reason
+            assert len(connects) == 4
+            connects.clear()
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                raised = _raise(lambda c: c.get_namespace("ns1"), _configured_client()[0])
+
+        assert isinstance(raised, urllib3.exceptions.HTTPError) and is_retryable_error(raised)
+        assert len(connects) == 20, "5 KubeClient attempts x 4 connects, as before"
+        assert str(raised) == "Kubernetes API request failed: " + diagnosis
+        _assert_no_canary(caplog.text, *_rendered(raised))
+
+    def test_a_body_read_timeout_is_diagnosed_as_a_timeout(self, caplog):
+        def make_pool():
+            return _RecordingPoolManager(body=_UnreadableBody(socket.timeout("read " + CANARY)))
+
+        raw = _raise(lambda c: c.core_v1.read_namespace("ns1"), _real_typed_kube_client(make_pool()))
+        assert isinstance(raw, urllib3.exceptions.ReadTimeoutError)
+
+        pool = make_pool()
+        with caplog.at_level(logging.DEBUG):
+            raised = _raise(lambda c: c.get_namespace("ns1"), _real_typed_kube_client(pool))
+
+        assert isinstance(raised, urllib3.exceptions.TimeoutError) and is_retryable_error(raised)
+        assert len(pool.calls) == 5
+        assert str(raised) == "Kubernetes API request failed: timed out"
         _assert_no_canary(caplog.text, *_rendered(raised))
 
     @_ONLY_BEFORE_37
