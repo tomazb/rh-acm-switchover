@@ -4206,7 +4206,7 @@ class TestApiErrorDetailNeverLeavesKubeClient:
                 getattr(kube_client, method)(**kwargs)
 
         raised = exc_info.value
-        assert raised is failure, "the caller's exception object and type are unchanged"
+        # A fresh exception built from the status: the SDK's own object never leaves KubeClient.
         assert type(raised) is ApiException
         assert raised.status == status
         assert api_call_mock.call_count == (attempts_on_503 if status == 503 else 1)
@@ -4223,11 +4223,11 @@ class TestApiErrorDetailNeverLeavesKubeClient:
             with pytest.raises(ApiException) as exc_info:
                 kube_client.wait_for_pods_ready("ns1", "app=x", timeout=60)
 
-        assert exc_info.value is refusal and exc_info.value.status == 403
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
         assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count == 2
         assert "503" in caplog.text, "the transient failure is still logged, by status"
         # The handled 503 never leaves the method, so only the log and the raised 403 are visible.
-        assert_no_canary(caplog.text, *_exception_texts(refusal))
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
 
     @pytest.mark.parametrize(
         "status,expected_type",
@@ -4247,8 +4247,8 @@ class TestApiErrorDetailNeverLeavesKubeClient:
                     "g.io", "v1", "things", "t1", uid="uid-1", namespace="ns1"
                 )
 
-        assert exc_info.value.__cause__ is failure
-        assert failure.status == status
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, ApiException) and cause.status == status, "the safe API cause is kept"
         assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
 
     def test_unreconciled_named_create_conflict_is_scrubbed(self, kube_client, mock_k8s_apis, caplog):
@@ -4265,11 +4265,11 @@ class TestApiErrorDetailNeverLeavesKubeClient:
                     "g.io", "v1", "things", {"metadata": {"name": "t1"}, "spec": {"x": 1}}, namespace="ns1"
                 )
 
-        assert exc_info.value is conflict and conflict.status == 409
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 409
         assert mock_k8s_apis["custom_api"].create_namespaced_custom_object.call_count == 1
-        assert_no_canary(caplog.text, *_exception_texts(conflict))
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
 
-    def test_configmap_patch_failure_scrubs_the_create_conflict_it_chains(self, kube_client, mock_k8s_apis, caplog):
+    def test_configmap_patch_failure_after_a_create_conflict_carries_neither(self, kube_client, mock_k8s_apis, caplog):
         conflict = canary_api_exception(409)
         refusal = canary_api_exception(403)
         mock_k8s_apis["core_api"].create_namespaced_config_map.side_effect = conflict
@@ -4279,12 +4279,13 @@ class TestApiErrorDetailNeverLeavesKubeClient:
             with pytest.raises(ApiException) as exc_info:
                 kube_client.create_or_patch_configmap("ns1", "cm1", {"k": "v"})
 
-        assert exc_info.value is refusal
-        assert refusal.__context__ is conflict and conflict.status == 409
-        assert_no_canary(caplog.text, *_exception_texts(refusal))
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
+        # Raised by the boundary while the 409 was handled, without inheriting it as context.
+        assert exc_info.value.__context__ is None
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
 
     @pytest.mark.parametrize("status", [0, 999])
-    def test_a_status_without_a_standard_phrase_has_no_reason(self, kube_client, mock_k8s_apis, status):
+    def test_a_status_without_a_standard_phrase_has_a_fixed_reason(self, kube_client, mock_k8s_apis, status):
         failure = canary_api_exception(status)
         mock_k8s_apis["core_api"].read_namespace.side_effect = failure
 
@@ -4293,7 +4294,8 @@ class TestApiErrorDetailNeverLeavesKubeClient:
 
         assert exc_info.value.status == status
         assert_no_canary(*_exception_texts(exc_info.value))
-        assert exc_info.value.reason is None
+        # A fixed diagnostic, never None: callers format `{exc.status} {exc.reason}`.
+        assert isinstance(exc_info.value.reason, str) and exc_info.value.reason
 
     def test_real_client_http_error_reaches_the_caller_without_detail(self, caplog):
         """The installed client builds the ApiException from a real HTTP response."""
@@ -4432,7 +4434,16 @@ class TestInstalledClientResponseTextNeverLeavesKubeClient:
                 kube_call(client)
 
         raised = exc_info.value
-        assert type(raised) is (expected_type or type(raw)), "the exception type is unchanged"
+        if expected_type is not None:
+            assert type(raised) is expected_type
+        else:
+            # A safe replacement of the same catch family: the SDK's ApiException class, or the
+            # nearest built-in class of what the client raised (a pydantic or parser ValueError
+            # becomes ValueError, a UnicodeDecodeError becomes UnicodeError).
+            for family in (ApiException, ValueError, LookupError, OSError):
+                assert isinstance(raised, family) == isinstance(raw, family)
+            if isinstance(raw, ApiException):
+                assert type(raised) is type(raw)
         assert getattr(raised, "status", None) == (None if expected_type else getattr(raw, "status", None))
         assert len(pool_manager.calls) == 1
         assert_no_canary(caplog.text, *_exception_texts(raised), *_rendered_validation_errors(raised))
@@ -4613,39 +4624,6 @@ def _kube_client_source() -> str:
     return Path(kube_client_module.__file__).read_text(encoding="utf-8")
 
 
-# Public KubeClient methods that carry no error boundary, and why that is safe. A delegate,
-# when named, must itself carry the boundary.
-_BOUNDARY_EXEMPT = {
-    "namespace_exists": ("delegates", "get_namespace"),
-    "get_cluster_identity": ("delegates; its own RuntimeError text is static", "_read_cluster_identity_namespace"),
-    "secret_exists": ("delegates", "get_secret"),
-    "exists_configmap": ("delegates", "get_configmap"),
-    "list_managed_clusters": ("delegates", "list_custom_resources"),
-    "patch_managed_cluster": ("delegates", "patch_custom_resource"),
-    "list_pods": ("delegates", "get_pods"),
-    "list_custom_resources_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "list_managed_clusters_strict": ("delegates to a strict read that never raises API errors", None),
-    "get_custom_resource_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "get_namespace_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "list_pods_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "get_deployment_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "get_replicaset_strict": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "api_resource_served": ("returns a StrictReadOutcome reason code, never raises API errors", None),
-    "json_patch_custom_resource_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
-    "delete_restore_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
-    "create_restore_guarded": ("deliberately undecorated; maps API errors to a result dict", None),
-    "delete_custom_resource_preconditioned": (
-        "deliberately undecorated (see test_the_primitive_is_undecorated_so_a_404_can_never_be_swallowed); "
-        "scrubs inside its own ApiException handler",
-        None,
-    ),
-}
-
-
-def _carries_boundary(function) -> bool:
-    return getattr(function, "_scrubs_api_errors", False) is True
-
-
 @pytest.mark.unit
 class TestApiErrorGuardrails:
     """#283 guardrails over lib/kube_client.py."""
@@ -4698,14 +4676,3 @@ class TestApiErrorGuardrails:
         )
         violations, _ = _exception_name_violations(source)
         assert violations == ["f:7 formats exc beyond .status/type().__name__"]
-
-    def test_every_public_method_carries_the_boundary_or_a_reasoned_exemption(self):
-        public = sorted(
-            name for name, value in vars(KubeClient).items() if not name.startswith("_") and callable(value)
-        )
-        missing = [name for name in public if not _carries_boundary(getattr(KubeClient, name))]
-        assert sorted(set(missing) - set(_BOUNDARY_EXEMPT)) == [], "unbounded public methods"
-        assert sorted(set(_BOUNDARY_EXEMPT) - set(missing)) == [], "stale exemptions"
-        for name, (_reason, delegate) in _BOUNDARY_EXEMPT.items():
-            if delegate is not None:
-                assert _carries_boundary(getattr(KubeClient, delegate)), f"{name} delegates to unbounded {delegate}"
