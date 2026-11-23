@@ -1205,6 +1205,35 @@ def _constructor_requests(method, inside):
     return violations
 
 
+def _called_in_place(node, parents, member, inside):
+    """Whether an SDK object referenced inside an operation is used there and then: called
+    through (`self.core_v1.read_namespace(...)`, `getattr(self.apps_v1, reader)(...)`), probed
+    with `hasattr`, or bound to a local alias whose every use is a call inside the boundary.
+    Anything else (returning it, wrapping it uncalled) lets the request run after `_call_sdk`
+    has returned."""
+    top, parent = node, parents.get(node)
+    while isinstance(parent, ast.Attribute) and parent.value is top:
+        top, parent = parent, parents.get(parent)
+    if isinstance(parent, ast.Call) and parent.func is top:
+        return True
+    if isinstance(parent, ast.Call) and parent.args and parent.args[0] is top:
+        if ast.unparse(parent.func) == "hasattr":
+            return True
+        if ast.unparse(parent.func) == "getattr":
+            caller = parents.get(parent)
+            return isinstance(caller, ast.Call) and caller.func is parent
+    if isinstance(parent, ast.Assign) and len(parent.targets) == 1:
+        alias = parent.targets[0]
+    elif isinstance(parent, ast.AnnAssign):
+        alias = parent.target
+    else:
+        return False
+    if not isinstance(alias, ast.Name):
+        return False
+    uses = [n for n in ast.walk(member) if isinstance(n, ast.Name) and n.id == alias.id and isinstance(n.ctx, ast.Load)]
+    return bool(uses) and all(isinstance(parents.get(n), ast.Call) and parents[n].func is n and inside(n) for n in uses)
+
+
 def _sdk_step(node):
     """The callee text of an SDK step: a call through an SDK object (directly, through `getattr`
     or through the `legacy_call_api` alias), or a raw response body read. Else None."""
@@ -1230,9 +1259,10 @@ def _boundary_violations(source):
     Violations: an SDK object used outside KubeClient; inside KubeClient (every method and
     every other class-body statement), an SDK object used, or an SDK step that reaches no SDK
     object itself (a raw body read, the legacy alias) run, where it does not execute inside an
-    operation `_call_sdk` runs (`_inside_boundary`). The constructor may additionally build the
-    SDK objects and read or set their configuration, but may call nothing it built. The
-    inventory lists every SDK step in KubeClient."""
+    operation `_call_sdk` runs (`_inside_boundary`), or that does execute there but is handed
+    out uncalled (`_called_in_place`). The constructor may additionally build the SDK objects
+    and read or set their configuration, but may call nothing it built. The inventory lists
+    every SDK step in KubeClient."""
     tree = ast.parse(source)
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KubeClient")
     in_class = set(ast.walk(klass))
@@ -1259,9 +1289,13 @@ def _boundary_violations(source):
                 inventory.append(f"{name}: {step}")
                 if not any(_is_sdk_object(n) for n in ast.walk(node)) and not inside(node):
                     violations.append(f"{name}:{node.lineno} runs {step} outside _call_sdk")
-            if _is_sdk_object(node) and not inside(node):
+            if not _is_sdk_object(node):
+                continue
+            if not inside(node):
                 if not (constructor and _constructor_exempt(node, parents)):
                     violations.append(f"{name}:{node.lineno} uses .{node.attr} outside _call_sdk")
+            elif not _called_in_place(node, parents, member, inside):
+                violations.append(f"{name}:{node.lineno} hands .{node.attr} out of _call_sdk uncalled")
     return violations, inventory
 
 
@@ -1487,6 +1521,41 @@ class TestBoundaryGuardrail:
             "__init__: self.core_v1.read_namespace",
             "__init__: self._api_client.configuration.refresh_api_key_hook",
         ]
+
+    def test_the_guardrail_rejects_an_sdk_object_handed_out_of_the_boundary_uncalled(self):
+        # A reference evaluated inside the operation but called after `_call_sdk` returns makes
+        # its request outside the boundary; inside an operation an SDK object is called in place.
+        source = (
+            "class KubeClient:\n"
+            "    def returned_object(self):\n"
+            "        return _call_sdk(lambda: self.core_v1).read_namespace('a')\n"
+            "    def returned_method(self):\n"
+            "        return _call_sdk(lambda: self.core_v1.read_namespace)('a')\n"
+            "    def returned_partial(self):\n"
+            "        return _call_sdk(lambda: functools.partial(self.core_v1.read_namespace, 'a'))()\n"
+            "    def returned_alias(self):\n"
+            "        def operation():\n"
+            "            read = self.core_v1.read_namespace\n"
+            "            return read\n"
+            "        return _call_sdk(operation)('a')\n"
+            "    def called_in_place(self, reader):\n"
+            "        def operation():\n"
+            "            if hasattr(self._api_client, 'param_serialize'):\n"
+            "                return getattr(self.apps_v1, reader)('a')\n"
+            "            call: Callable[..., Any] = self._api_client.call_api\n"
+            "            return call('/x', 'GET')\n"
+            "        return _call_sdk(operation)\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "returned_object:3 hands .core_v1 out of _call_sdk uncalled",
+                "returned_method:5 hands .core_v1 out of _call_sdk uncalled",
+                "returned_partial:7 hands .core_v1 out of _call_sdk uncalled",
+                "returned_alias:10 hands .core_v1 out of _call_sdk uncalled",
+            ]
+        )
+        assert inventory == ["called_in_place: getattr(self.apps_v1, reader)"]
 
     def test_the_guardrail_covers_the_whole_class_body(self):
         source = (
