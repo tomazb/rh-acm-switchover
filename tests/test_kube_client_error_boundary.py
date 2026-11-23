@@ -2164,7 +2164,9 @@ class _BoundaryProbe:
 
 def _probed_construction(probe, **kwargs):
     """`KubeClient(**kwargs)` through the real `__init__`, its kubeconfig client on `probe`."""
-    with patch.object(kube_client_module.config, "new_client_from_config", return_value=_real_api_client(probe)):
+    api_client = _real_api_client(probe)
+    api_client.configuration.host = "https://hub.invalid"
+    with patch.object(kube_client_module.config, "new_client_from_config", return_value=api_client):
         return KubeClient(**kwargs)
 
 
@@ -2326,8 +2328,18 @@ _INV_CONSTRUCTIONS = {
 @pytest.mark.unit
 class TestRuntimeBoundaryInvariant:
     @pytest.fixture(autouse=True)
-    def _fake_clock(self, monkeypatch):
+    def _isolated(self, monkeypatch):
+        """A fake clock for polling; and a request sent through any transport but the probe (a
+        second ApiClient, a bare urllib3 pool) is recorded in `self.foreign` and fails, never
+        reaching a socket."""
         monkeypatch.setattr(kube_client_module, "time", _FakeClock())
+        self.foreign = []
+
+        def urlopen(pool, method, url, *_args, **_kwargs):
+            self.foreign.append(f"{method} {pool.host}{url} (not through the probed client)")
+            raise urllib3.exceptions.ProtocolError("request outside the probed transport")
+
+        monkeypatch.setattr(urllib3.connectionpool.HTTPConnectionPool, "urlopen", urlopen)
 
     def test_the_probe_sees_a_request_made_outside_the_boundary(self):
         """Positive control: the same read is seen unset raw and set through KubeClient."""
@@ -2346,6 +2358,10 @@ class TestRuntimeBoundaryInvariant:
             raw = _raise(lambda c: c.core_v1.read_namespace(_INV_NS), _probed_construction(_BoundaryProbe(mode)))
             assert any(CANARY in text for text in _rendered(raw)), f"precondition: a raw {mode} failure carries text"
 
+        foreign = ApiClient(Configuration(host="http://foreign.invalid"))
+        _raise(lambda: kubernetes.client.CoreV1Api(foreign).read_namespace(_INV_NS))
+        assert self.foreign, "a request through another client is seen too"
+
     @pytest.mark.parametrize("mode", ["ok", "http", "transport"])
     @pytest.mark.parametrize("path", sorted(_INV_CONSTRUCTIONS))
     def test_construction_makes_no_request_outside_the_boundary(self, path, mode):
@@ -2355,7 +2371,8 @@ class TestRuntimeBoundaryInvariant:
             _probed_construction(probe, **_INV_CONSTRUCTIONS[path])
         except Exception as exc:  # the invariant is judged first, whatever construction raised
             raised = exc
-        assert probe.outside() == [], f"KubeClient.__init__ ({path}, {mode}) reached the transport outside _call_sdk"
+        outside = probe.outside() + self.foreign
+        assert outside == [], f"KubeClient.__init__ ({path}, {mode}) reached the transport outside _call_sdk"
         assert raised is None and probe.requests == [], "the constructor issues no request"
 
     @pytest.mark.parametrize(
@@ -2372,7 +2389,8 @@ class TestRuntimeBoundaryInvariant:
                 result = getattr(_probed_construction(probe, context="inv"), method)(*args, **kwargs)
             except Exception as exc:  # failure modes raise; the invariant is judged first either way
                 raised = exc
-        assert probe.outside() == [], f"KubeClient.{method} ({scenario}) reached the transport outside _call_sdk"
+        outside = probe.outside() + self.foreign
+        assert outside == [], f"KubeClient.{method} ({scenario}) reached the transport outside _call_sdk"
         assert len(probe.requests) == requests, f"KubeClient.{method} ({scenario}) did not drive the expected path"
         if mode == "ok":
             assert raised is None, f"KubeClient.{method} ({scenario}) failed on its success path: {raised!r}"
