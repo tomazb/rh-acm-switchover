@@ -2340,6 +2340,9 @@ _INV_SCRIPTED = [
 ]
 
 
+_OTHER = "other"
+
+
 def _answer_then_fail(*answers):
     """A script answering request i with `answers[i]`, and every later request by the mode."""
     return dict(enumerate(answers)).get
@@ -2357,7 +2360,8 @@ def _status(code):
 # the source applies and fails every further request with the canary (mode "http"), so a
 # request added inside that branch reaches the probe and is judged. (method, status label,
 # scenario, script, args, kwargs, requests). A label is a status, a status range, or a
-# `StrictReadStatus` member, exactly as `_status_sites` derives it.
+# `StrictReadStatus` member, exactly as `_status_sites` derives it, or `_OTHER`: a status the
+# branch's test does not select, which takes the path after it.
 _INV_BRANCHES = [
     # astra-r5 H1: the preconditioned DELETE's 409/412 handler, namespaced and cluster-scoped.
     ("delete_custom_resource_preconditioned", "409", "409-conflict", _answer_then_fail(_status(409)), None, None, 1),
@@ -2404,6 +2408,8 @@ _INV_BRANCHES = [
     ("get_deployment_strict", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
     ("get_replicaset_strict", "404", "absent", _answer_then_fail(_status(404)), None, None, 1),
     ("get_custom_resource_strict", "404", "absent", _answer_then_fail("ok", _status(404)), None, None, 2),
+    ("get_custom_resource_strict", _OTHER, "fails-after-discovery", _answer_then_fail("ok"), None, None, 2),
+    ("list_managed_clusters_strict", _OTHER, "fails-after-discovery", _answer_then_fail("ok"), None, None, 2),
     ("list_pods_strict", "404", "pods-404", _answer_then_fail(_status(404)), None, None, 2),
     (
         "list_pods_strict",
@@ -2461,8 +2467,9 @@ _INV_NOT_FOUND = (
     "list_pods",
     "get_pod_logs",
 )
-# Methods that retry a 429 as they retry a 5xx: it is answered to every attempt.
-_INV_RATE_LIMITED = (
+# Methods that retry on a status: a 429 is retried like a 5xx (it is answered to every attempt),
+# and a 403 is not retried, which takes the path after their retry branch.
+_INV_RETRYING = (
     "get_namespace",
     "namespace_exists",
     "get_cluster_identity",
@@ -2498,13 +2505,16 @@ _INV_RATE_LIMITED = (
 
 
 def _inv_branch_cases():
-    """`_INV_BRANCHES` plus the 404 and 429 cases, as (method, label, scenario, script, args,
-    kwargs, requests)."""
+    """`_INV_BRANCHES` plus the 404, 429 and 403 cases, as (method, label, scenario, script,
+    args, kwargs, requests)."""
     cases = list(_INV_BRANCHES)
     cases += [(m, "404", "404-not-found", _answer_then_fail(_status(404)), None, None, 1) for m in _INV_NOT_FOUND]
     cases += [
-        (m, "429", "429-rate-limited", _always(_status(429)), None, None, _INV_DRIVES[m][3]) for m in _INV_RATE_LIMITED
+        (m, "429", "429-rate-limited", _always(_status(429)), None, None, _INV_DRIVES[m][3]) for m in _INV_RETRYING
     ]
+    # get_cluster_identity's retry decision is tenacity's alone: no branch of its own follows it.
+    not_retried = [m for m in _INV_RETRYING if m != "get_cluster_identity"]
+    cases += [(m, _OTHER, "403-not-retried", _answer_then_fail(_status(403)), None, None, 1) for m in not_retried]
     return cases
 
 
@@ -2548,9 +2558,12 @@ _INV_CONSTRUCTIONS = {
 # constant, a range or a membership set (an HTTP status, or a `StrictReadStatus` member) or
 # branches on `is_retryable_error(...)`, plus `is_retryable_error`'s own status classes. A public
 # method owns every site in the code it can reach: methods and module functions it names,
-# decorators included. For each derived (public method, site, label), some case must answer that
-# status where the branch applies and every further request with a canary failure, and the site
-# must be seen entered with that status. A request added in the branch then reaches the probe.
+# decorators included. An `if` site's labels are the statuses its test selects plus `_OTHER`, a
+# status it does not select, which takes the path after it (the code after `if
+# is_retryable_error(e): raise`, an `else`). For each derived (public method, site, label), some
+# case must answer that status where the test applies and every further request with a canary
+# failure, and the site must be seen taking that side with that status. A request added on
+# either side of the test then reaches the probe.
 
 _RETRY_DECISION = "is_retryable_error"
 _STATUS_SITE_TOOL = "kube-client-status-sites"
@@ -2571,6 +2584,7 @@ class _StatusSite(NamedTuple):
     key: str  # "owner: test", stable across line moves
     labels: Tuple[str, ...]
     lines: FrozenSet[int]  # executing any of these proves the branch was entered
+    test_lines: FrozenSet[int]  # the `if` test's lines: where a status it does not select is seen
     operand: Any  # compiled: the status (or, for a retry decision, the exception) branched on
     of_exception: bool  # the operand is an exception whose `.status` is read if it is an ApiException
 
@@ -2770,12 +2784,14 @@ def _status_site(owner, child, parents):
         if branch is None and owner == _RETRY_DECISION and _is_returned(child, parents):
             # The decision itself: each status class it retries, seen where it is computed.
             key = f"{owner}: {ast.unparse(child)}"
-            return _StatusSite(owner, key, labels, frozenset({child.lineno}), _compiled(operand), False)
+            return _StatusSite(owner, key, labels, frozenset({child.lineno}), frozenset(), _compiled(operand), False)
         if branch is None:
             _unclassified(owner, child)
     first = branch.body[0]
     lines = frozenset(range(first.lineno, first.end_lineno + 1))
-    return _StatusSite(owner, f"{owner}: {ast.unparse(branch.test)}", labels, lines, _compiled(operand), of_exception)
+    test_lines = frozenset(range(branch.test.lineno, branch.test.end_lineno + 1))
+    key = f"{owner}: {ast.unparse(branch.test)}"
+    return _StatusSite(owner, key, labels, lines, test_lines, _compiled(operand), of_exception)
 
 
 def _compiled(expression):
@@ -2790,24 +2806,27 @@ def _derived_status_branches():
         for method, owners in reachable.items()
         for site in sites
         if site.owner in owners
-        for label in site.labels
+        for label in ((*site.labels, _OTHER) if site.test_lines else site.labels)
     }
 
 
 class _BranchRecorder:
-    """While active, records each status site entered in lib/kube_client.py as (site key, label,
-    requests made so far), the label being one the site's status operand holds there."""
+    """While active, records the status sites lib/kube_client.py enters as (site key, label,
+    requests made so far): on a branch's body, each label its status operand holds there; on
+    an `if` test, `_OTHER` when the operand is a status that holds none of them."""
 
     def __init__(self, sites):
         self.probe = None
         self._by_line = {}
         for site in sites:
             for line in site.lines:
-                self._by_line.setdefault(line, []).append(site)
+                self._by_line.setdefault(line, []).append((site, True))
+            for line in site.test_lines:
+                self._by_line.setdefault(line, []).append((site, False))
         self.entered = set()
 
     def on_line(self, frame, line):
-        for site in self._by_line.get(line, ()):
+        for site, body in self._by_line.get(line, ()):
             try:
                 observed = eval(site.operand, frame.f_globals, frame.f_locals)  # noqa: S307 - our own source
             except Exception:  # noqa: BLE001 - not this site's frame (a lambda on a body line)
@@ -2816,9 +2835,11 @@ class _BranchRecorder:
                 if not isinstance(observed, ApiException):
                     continue
                 observed = observed.status
-            for label in site.labels:
-                if _label_holds(label, observed):
-                    self.entered.add((site.key, label, len(self.probe.requests)))
+            if not isinstance(observed, (int, StrictReadStatus)):
+                continue
+            held = [label for label in site.labels if _label_holds(label, observed)]
+            for label in held if body else ([] if held else [_OTHER]):
+                self.entered.add((site.key, label, len(self.probe.requests)))
 
 
 def _kube_client_code_objects():
