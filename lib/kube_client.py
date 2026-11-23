@@ -455,24 +455,22 @@ def _call_sdk(operation: Callable[[], _T], *, malformed_body: bool = False) -> _
     _raise_alone(replacement)
 
 
-def _failure_summary(exc: Optional[BaseException]) -> str:
+def _failure_summary(exc: BaseException) -> str:
     """Status or fixed category only, for a retry log line."""
     if isinstance(exc, ApiException):
         return f"HTTP {exc.status}"
-    if exc is None:
-        return "no exception"
     if exc.args and exc.args[-1] in _FAILURE_DIAGNOSTICS:
         return f"{type(exc).__name__} ({exc.args[-1]})"
     return type(exc).__name__
 
 
 def _log_retry(retry_state: RetryCallState) -> None:
-    outcome = retry_state.outcome
+    """tenacity `before_sleep`: called only after a failed attempt that will be retried."""
     logger.debug(
         "Retrying %s in %s seconds after %s",
         getattr(retry_state.fn, "__qualname__", "Kubernetes API call"),
-        retry_state.next_action.sleep if retry_state.next_action else 0,
-        _failure_summary(outcome.exception() if outcome is not None else None),
+        retry_state.next_action.sleep,
+        _failure_summary(retry_state.outcome.exception()),
     )
 
 
