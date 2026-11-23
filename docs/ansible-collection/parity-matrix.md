@@ -64,8 +64,8 @@ Cross-implementation contracts are enforced by automated parity tests in `tests/
 | `tests/test_validation_parity.py` and collection `test_validation_parity_fixture.py` | Shared validation fixture keeps Argo CD option rules and safe-path policy aligned |
 | `tests/test_migration_evidence_parity.py` | R4-04 pure model (Backup selection, child evidence, journal, post-activation and cleanup decisions) over `tests/fixtures/r4_04_migration_evidence_vectors.json` |
 | `tests/test_activation_transaction_parity.py`, `tests/test_post_activation_transaction_parity.py`, `tests/test_restore_cleanup_transaction_parity.py` | The R4-04 activation, post-activation and Restore-cleanup transactions decide, mutate and journal identically over identical fake hubs |
-| `tests/test_restore_guarded_mutation_parity.py` | Guarded Restore patch, delete and create classify identically |
-| `tests/test_managed_cluster_expectation_parity.py` | Additive ManagedCluster count/name expectations resolve identically |
+| `tests/ansible_engine/test_restore_guarded_mutation_parity.py` | Guarded Restore patch, delete and create classify identically |
+| `tests/ansible_engine/test_managed_cluster_expectation_parity.py` | Additive ManagedCluster count/name expectations resolve identically |
 | `tests/release/scenarios/test_runtime_parity.py` | Release runtime parity required fields cover switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifact contracts |
 | `tests/release/adapters/test_ansible.py` and `tests/release/scenarios/test_catalog.py` | Release scenario wiring discovers decommission artifacts and keeps optional resilience scenarios selectable |
 

@@ -87,6 +87,10 @@ pip install -q --upgrade pip
 pip install -q -r requirements.txt
 pip install -q -r requirements-dev.txt
 
+# The root lane runs without the Ansible engine (#371). Engine parity tests live in
+# tests/ansible_engine/ and run in their own environment; see docs/development/testing.md.
+python -c 'import importlib.util, sys; sys.exit("ansible is importable, but root test jobs must run without it (#371)" if importlib.util.find_spec("ansible") else 0)'
+
 echo ""
 echo "======================================"
 echo "Running Unit Tests"
@@ -95,7 +99,7 @@ echo "======================================"
 # E2E tests are on-demand. Release-framework helper tests run as their own
 # explicit lane so local verification matches CI structure. Only this lane runs
 # under pytest-xdist; the release and E2E lanes below stay serial.
-pytest_args=(tests/ --ignore=tests/release -v -n auto --dist worksteal --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
+pytest_args=(tests/ --ignore=tests/release --ignore=tests/ansible_engine -v -n auto --dist worksteal --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
 
 echo ""

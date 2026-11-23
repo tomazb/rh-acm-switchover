@@ -1,8 +1,10 @@
 """Parity tests for collection RBAC expansion against Python RBAC definitions."""
 
 import importlib
+import subprocess
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +20,18 @@ def _load_expand_rbac_requirements():
         if exc.name not in {"ansible", "ansible.module_utils", "ansible.module_utils.basic"}:
             raise
 
+    # The stubs exist only for this one import and are removed again, together with the helper
+    # module imported against them. A stub left in sys.modules would satisfy a module-scope
+    # `import ansible` in any root test file collected later, hiding it from the no-Ansible lane.
+    missing = object()
+    parent_name, _, parent_attribute = module_name.rpartition(".")
+    managed_names = ("ansible", "ansible.module_utils", "ansible.module_utils.basic", module_name)
+    previous_modules = {name: sys.modules.get(name, missing) for name in managed_names}
+    parent_module = sys.modules.get(parent_name)
+    previous_parent_attribute = (
+        getattr(parent_module, parent_attribute, missing) if parent_module is not None else missing
+    )
+
     ansible_module = types.ModuleType("ansible")
     module_utils = types.ModuleType("ansible.module_utils")
     basic = types.ModuleType("ansible.module_utils.basic")
@@ -28,14 +42,77 @@ def _load_expand_rbac_requirements():
     basic.AnsibleModule = _AnsibleModule
     ansible_module.module_utils = module_utils
     module_utils.basic = basic
-    sys.modules.setdefault("ansible", ansible_module)
-    sys.modules.setdefault("ansible.module_utils", module_utils)
-    sys.modules.setdefault("ansible.module_utils.basic", basic)
-    sys.modules.pop(module_name, None)
-    return importlib.import_module(module_name).expand_rbac_requirements
+    try:
+        sys.modules["ansible"] = ansible_module
+        sys.modules["ansible.module_utils"] = module_utils
+        sys.modules["ansible.module_utils.basic"] = basic
+        sys.modules.pop(module_name, None)
+        return importlib.import_module(module_name).expand_rbac_requirements
+    finally:
+        current_parent_module = sys.modules.get(parent_name)
+        if current_parent_module is not None:
+            if previous_parent_attribute is missing:
+                if hasattr(current_parent_module, parent_attribute):
+                    delattr(current_parent_module, parent_attribute)
+            else:
+                setattr(current_parent_module, parent_attribute, previous_parent_attribute)
+        for name, previous_module in previous_modules.items():
+            if previous_module is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous_module
 
 
 expand_rbac_requirements = _load_expand_rbac_requirements()
+
+
+def test_absent_ansible_fallback_leaves_no_stub_behind():
+    """Without Ansible, the stub must not outlive the import (#371).
+
+    A leaked fake `ansible` in sys.modules would satisfy a module-scope `import ansible` in any
+    root test file collected later in the same process, hiding a hard engine dependency from the
+    no-Ansible root lane.
+    """
+    script = r"""
+import importlib
+import importlib.abc
+import sys
+
+module_name = "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate"
+stub_names = ("ansible", "ansible.module_utils", "ansible.module_utils.basic")
+for name in [*stub_names, module_name, "tests.test_rbac_collection_parity"]:
+    sys.modules.pop(name, None)
+
+class BlockAnsible(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "ansible" or fullname.startswith("ansible."):
+            raise ModuleNotFoundError(f"deliberately blocked {fullname}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockAnsible())
+import tests.test_rbac_collection_parity as tested
+
+assert tested.expand_rbac_requirements is not None
+leaked = sorted(name for name in (*stub_names, module_name) if name in sys.modules)
+assert not leaked, f"stub modules leaked into sys.modules: {leaked}"
+parent = sys.modules.get(module_name.rpartition(".")[0])
+assert parent is None or not hasattr(parent, "acm_rbac_validate"), "stubbed module left on its parent package"
+try:
+    import ansible  # noqa: F401
+except ModuleNotFoundError as exc:
+    assert exc.name == "ansible", exc
+else:
+    raise AssertionError("a later `import ansible` reused a leaked stub")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _expand(entries, namespace=None):

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -18,14 +19,6 @@ def _load_requirements(path: str) -> dict[str, list[Requirement]]:
         requirements.setdefault(requirement.name.lower(), []).append(requirement)
 
     return requirements
-
-
-def _requirements_for_python(requirements: list[Requirement], python_version: str) -> list[Requirement]:
-    return [
-        requirement
-        for requirement in requirements
-        if requirement.marker is None or requirement.marker.evaluate({"python_version": python_version})
-    ]
 
 
 def test_runtime_requirements_exclude_known_vulnerable_versions():
@@ -61,15 +54,15 @@ def test_dev_requirements_exclude_known_vulnerable_versions():
             fixed_version in requirement.specifier
         ), f"{name} constraint {requirement.specifier} does not allow fixed version {fixed_version}"
 
-    ansible_requirements = requirements.get("ansible-core", [])
-    assert len(ansible_requirements) == 2
 
-    python310_requirements = _requirements_for_python(ansible_requirements, "3.10")
-    assert len(python310_requirements) == 1
-    assert Version("2.17.14") in python310_requirements[0].specifier
-    assert Version("2.18.0") not in python310_requirements[0].specifier
+# #371: root test jobs run without the Ansible engine. Engine comparisons live in
+# tests/ansible_engine/ and run in the `ansible-engine-parity` CI job, which installs the
+# foundation lane's own ansible-core next to the root requirements.
+ANSIBLE_ENGINE_DISTRIBUTIONS = {"ansible", "ansible-core", "ansible-base"}
 
-    python311_requirements = _requirements_for_python(ansible_requirements, "3.11")
-    assert len(python311_requirements) == 1
-    assert Version("2.18.1") in python311_requirements[0].specifier
-    assert Version("2.18.0") not in python311_requirements[0].specifier
+
+def test_root_requirements_do_not_declare_the_ansible_engine():
+    for path in ("requirements.txt", "requirements-dev.txt"):
+        declared = {canonicalize_name(name) for name in _load_requirements(path)}
+        engine = sorted(declared & ANSIBLE_ENGINE_DISTRIBUTIONS)
+        assert not engine, f"{path} declares {engine}; root test jobs must run without Ansible (#371)"
