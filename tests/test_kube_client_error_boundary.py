@@ -2034,11 +2034,13 @@ class TestBoundaryGuardrail:
 # `_SDK_CALL_ACTIVE` is set at that moment. Every KubeClient is built by the real `__init__`,
 # and each public method is driven through a success, an HTTP error and a transport error,
 # plus scripted paths whose second and later requests (pages, restarts, re-reads, polls,
-# retries) are the ones that answer or fail. It sees only the paths it drives.
+# retries) are the ones that answer or fail. Failure answers carry the canary, and what the
+# method raises, returns or logs must not. It sees only the paths it drives.
 
 _INV_NS = "ns1"
 _INV_CUSTOM = ("g.io", "v1", "things")
-_INV_STATUS = {"kind": "Status", "apiVersion": "v1", "status": "Failure"}
+# Every failure answer carries the canary, so what leaves the boundary is checked as well.
+_INV_STATUS = {"kind": "Status", "apiVersion": "v1", "status": "Failure", "message": CANARY}
 _INV_BODY = {
     "apiVersion": "g.io/v1",
     "kind": "Thing",
@@ -2125,8 +2127,9 @@ class _ProbedBody(io.BytesIO):
 
 class _BoundaryProbe:
     """The urllib3 pool manager under a real ApiClient. Request `i` is answered by `script(i)`
-    when that gives an answer, else by `mode`: "ok" (a well-formed 200, or 201 to a create), "http" (500) or
-    "transport" (a dropped connection); a `(status, payload)` answer is served as is."""
+    when that gives an answer, else by `mode`: "ok" (a well-formed 200, or 201 to a create),
+    "http" (500) or "transport" (a dropped connection); a `(status, payload)` answer is served
+    as is. Failure answers carry the canary."""
 
     def __init__(self, mode, script=None):
         self._mode = mode
@@ -2139,7 +2142,7 @@ class _BoundaryProbe:
         self.requests.append((method, "/" + path, kube_client_module._SDK_CALL_ACTIVE.get()))
         answer = self._script(len(self.requests) - 1) or self._mode
         if answer == "transport":
-            raise urllib3.exceptions.ProtocolError("Connection aborted.")
+            raise urllib3.exceptions.ProtocolError("Connection aborted.", ConnectionResetError(CANARY))
         if answer == "http":
             answer = (500, {**_INV_STATUS, "code": 500})
         if answer == "ok":
@@ -2339,6 +2342,10 @@ class TestRuntimeBoundaryInvariant:
         assert [active for _, _, active in probe.requests] == [True]
         assert probe.reads and all(probe.reads)
 
+        for mode in ("http", "transport"):
+            raw = _raise(lambda c: c.core_v1.read_namespace(_INV_NS), _probed_construction(_BoundaryProbe(mode)))
+            assert any(CANARY in text for text in _rendered(raw)), f"precondition: a raw {mode} failure carries text"
+
     @pytest.mark.parametrize("mode", ["ok", "http", "transport"])
     @pytest.mark.parametrize("path", sorted(_INV_CONSTRUCTIONS))
     def test_construction_makes_no_request_outside_the_boundary(self, path, mode):
@@ -2355,17 +2362,25 @@ class TestRuntimeBoundaryInvariant:
         "method,scenario,mode,script,args,kwargs,requests",
         [pytest.param(*case, id=f"{case[0]}-{case[1]}") for case in _INV_CASES],
     )
-    def test_every_request_is_made_inside_the_boundary(self, method, scenario, mode, script, args, kwargs, requests):
+    def test_every_request_is_made_inside_the_boundary(
+        self, caplog, method, scenario, mode, script, args, kwargs, requests
+    ):
         probe = _BoundaryProbe(mode, script)
-        raised = None
-        try:
-            getattr(_probed_construction(probe, context="inv"), method)(*args, **kwargs)
-        except Exception as exc:  # failure modes raise; the invariant is judged first either way
-            raised = exc
+        result = raised = None
+        with caplog.at_level(logging.DEBUG):
+            try:
+                result = getattr(_probed_construction(probe, context="inv"), method)(*args, **kwargs)
+            except Exception as exc:  # failure modes raise; the invariant is judged first either way
+                raised = exc
         assert probe.outside() == [], f"KubeClient.{method} ({scenario}) reached the transport outside _call_sdk"
         assert len(probe.requests) == requests, f"KubeClient.{method} ({scenario}) did not drive the expected path"
         if mode == "ok":
             assert raised is None, f"KubeClient.{method} ({scenario}) failed on its success path: {raised!r}"
+        # A request made inside the boundary whose raw failure is kept and released afterwards.
+        released = _rendered(raised) if raised is not None else [repr(result)]
+        assert not any(
+            CANARY in text for text in (*released, caplog.text)
+        ), f"KubeClient.{method} ({scenario}) let server or transport text out of _call_sdk"
 
     def test_every_public_method_is_driven_or_justified(self):
         public = {
