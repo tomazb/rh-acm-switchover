@@ -1958,6 +1958,9 @@ class TestBoundaryGuardrail:
             "    def aliased_outside_an_operation(self):\n"
             "        read = self.core_v1.read_namespace\n"
             "        return read('ns1')\n"
+            "    def built_and_aliased_outside_an_operation(self):\n"
+            "        read = client.CoreV1Api(self._api_client).read_namespace\n"
+            "        return read('ns1')\n"
         )
         violations, inventory = _boundary_violations(source)
         assert sorted(violations) == sorted(
@@ -1966,6 +1969,7 @@ class TestBoundaryGuardrail:
                 "__init__:7 calls call, bound from a constructed client, outside _call_sdk",
                 "__init__:9 calls send, bound from a constructed client, outside _call_sdk",
                 "aliased_outside_an_operation:13 uses .core_v1 outside _call_sdk",
+                "built_and_aliased_outside_an_operation:16 uses ._api_client outside _call_sdk",
             ]
         )
         assert inventory == []
@@ -2375,6 +2379,15 @@ class TestRuntimeBoundaryInvariant:
         assert outside == [], f"KubeClient.__init__ ({path}, {mode}) reached the transport outside _call_sdk"
         assert raised is None and probe.requests == [], "the constructor issues no request"
 
+    @pytest.mark.parametrize("log_config_errors", [True, False])
+    def test_a_kubeconfig_failure_makes_no_request(self, log_config_errors):
+        from kubernetes.config.config_exception import ConfigException
+
+        failing = patch.object(kube_client_module.config, "new_client_from_config", side_effect=ConfigException("x"))
+        with failing, pytest.raises(ConfigException):
+            KubeClient(context="c1", log_config_errors=log_config_errors)
+        assert self.foreign == [], "KubeClient.__init__ (kubeconfig failure) reached a transport"
+
     @pytest.mark.parametrize(
         "method,scenario,mode,script,args,kwargs,requests",
         [pytest.param(*case, id=f"{case[0]}-{case[1]}") for case in _INV_CASES],
@@ -2407,7 +2420,8 @@ class TestRuntimeBoundaryInvariant:
             if not name.startswith("_") and (inspect.isroutine(member) or isinstance(member, property))
         }
         driven = {}
-        for method, _scenario, mode, *_rest in _INV_CASES:
+        for method, scenario, mode, *_rest, requests in _INV_CASES:
+            assert requests >= 1, f"KubeClient.{method} ({scenario}) drives no request; justify it as request-free"
             driven.setdefault(method, set()).add(mode)
         assert set(driven) <= public, f"cases for methods KubeClient lacks: {sorted(set(driven) - public)}"
         assert set(_INV_REQUEST_FREE) <= public and not set(_INV_REQUEST_FREE) & set(driven)
