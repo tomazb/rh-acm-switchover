@@ -604,10 +604,12 @@ class TestCallersSeeTheSameFailure:
         [
             (lambda: OSError(errno.ECONNRESET, CANARY), 5),
             (lambda: OSError(errno.ETIMEDOUT, CANARY), 5),
+            # Retried by errno alone: BlockingIOError is not a ConnectionError or TimeoutError.
+            (lambda: OSError(errno.EAGAIN, CANARY), 5),
             (lambda: OSError(errno.EACCES, CANARY), 1),
             (lambda: OSError(CANARY), 1),
         ],
-        ids=["econnreset", "etimedout", "eacces", "no-errno"],
+        ids=["econnreset", "etimedout", "eagain", "eacces", "no-errno"],
     )
     def test_network_and_other_os_errors_keep_their_retry_decision(self, kube_client, mock_k8s_apis, failure, attempts):
         def boom(*_args, **_kwargs):
