@@ -445,13 +445,17 @@ def _safe_api_exception(raw: ApiException) -> ApiException:
     """The SDK's own ApiException class with the integer status and a fixed reason.
 
     The reason is the canonical HTTP phrase, or a fixed diagnostic for status 0 (the SDK's own
-    TLS and content-type failures), a missing or invalid status (published as 0, which no
-    caller retries) and a status without a standard phrase. Never None: callers format it.
+    TLS, content-type and value-parse failures), a missing or invalid status (published as 0,
+    which no caller retries) and a status without a standard phrase. Never None: callers
+    format it.
     """
     status = raw.status if type(raw.status) is int else 0
     if status == 0:
         if _is_unsupported_content_type(raw):
             category, reason = _CATEGORY_MALFORMED, _UNSUPPORTED_CONTENT_TYPE
+        elif _raised_while_deserializing(raw):
+            # 29.x raises its own status-0 ApiException for a value it cannot parse (a timestamp).
+            category, reason = _CATEGORY_MALFORMED, f"{_OFF_MODEL_BODY} ({type(raw).__name__})"
         else:
             category = _transport_category(raw)
             reason = _TRANSPORT_MESSAGES[category]
