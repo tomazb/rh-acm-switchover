@@ -129,9 +129,11 @@ class TestConfigMapAdvisoryReads:
             with pytest.raises(ApiException) as exc_info:
                 kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
 
-        assert exc_info.value is failure
+        # A fresh ApiException of the same class and status (#283): the SDK's object stays inside.
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 1
         assert "R302-CONFIGMAP-ADVISORY-SENTINEL" not in caplog.text
+        assert "R302-CONFIGMAP-ADVISORY-SENTINEL" not in str(exc_info.value)
 
     def test_configmap_advisory_retries_retryable_failure(self, kube_client, mock_k8s_apis):
         configmap = MagicMock()
@@ -156,9 +158,10 @@ class TestConfigMapAdvisoryReads:
                 with pytest.raises(ApiException) as exc_info:
                     kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
 
-        assert exc_info.value is failure
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 503
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 5
         assert "R302-CONFIGMAP-RETRY-SENTINEL" not in caplog.text
+        assert "R302-CONFIGMAP-RETRY-SENTINEL" not in str(exc_info.value)
 
     @pytest.mark.parametrize(
         ("namespace", "name"),
