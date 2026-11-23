@@ -12,6 +12,7 @@ canary in this lane, so it cannot pass vacuously.
 
 import ast
 import errno
+import inspect
 import io
 import json
 import logging
@@ -35,7 +36,7 @@ from lib.exceptions import MalformedResponseError, PreconditionConflict, TargetD
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.strict_read import StrictReadStatus
 from tests.api_error_canary import real_kube_client_apis
-from tests.test_kube_client import _real_typed_kube_client, _RecordingPoolManager, _UnreadableBody
+from tests.test_kube_client import _real_api_client, _real_typed_kube_client, _RecordingPoolManager, _UnreadableBody
 
 CANARY = "i283-boundary-canary-5c1e"
 _MAJOR = int(kubernetes.__version__.split(".")[0])
@@ -1599,6 +1600,15 @@ def _constructor_requests(method, inside):
     for node in ast.walk(method):
         if not isinstance(node, ast.Call) or ast.unparse(node.func) == "getattr":
             continue
+        if isinstance(node.func, ast.Name):
+            # A name bound from a constructed client (`read = client.CoreV1Api(c).read_namespace`)
+            # is that client's bound method: calling it is a request under a local name.
+            if node.func.id in constructed and not inside(node):
+                violations.append(
+                    f"{method.name}:{node.lineno} calls {node.func.id}, bound from a constructed client,"
+                    " outside _call_sdk"
+                )
+            continue
         if not isinstance(node.func, ast.Attribute) and not (
             isinstance(node.func, ast.Call) and ast.unparse(node.func.func) == "getattr"
         ):
@@ -1929,6 +1939,37 @@ class TestBoundaryGuardrail:
             "__init__: self._api_client.configuration.refresh_api_key_hook",
         ]
 
+    def test_the_guardrail_rejects_a_bound_method_alias_called_outside_an_operation(self):
+        # astra-r4 H1: a bound method taken from a constructed client and called through a local
+        # name is a request. Called inside an operation it is allowed; outside the constructor,
+        # taking the alias from an SDK attribute is already a use outside the boundary.
+        source = (
+            "class KubeClient:\n"
+            "    def __init__(self):\n"
+            "        api_client = config.new_client_from_config(context=None, persist_config=False)\n"
+            "        read_namespace = client.CoreV1Api(api_client).read_namespace\n"
+            "        read_namespace('ns1')\n"
+            "        call = api_client.call_api\n"
+            "        call('/x', 'GET')\n"
+            "        send = api_client.rest_client.request\n"
+            "        send('GET', '/x')\n"
+            "        ready = client.CoreV1Api(api_client).read_namespace\n"
+            "        self.ready = _call_sdk(lambda: ready('ns1'))\n"
+            "    def aliased_outside_an_operation(self):\n"
+            "        read = self.core_v1.read_namespace\n"
+            "        return read('ns1')\n"
+        )
+        violations, inventory = _boundary_violations(source)
+        assert sorted(violations) == sorted(
+            [
+                "__init__:5 calls read_namespace, bound from a constructed client, outside _call_sdk",
+                "__init__:7 calls call, bound from a constructed client, outside _call_sdk",
+                "__init__:9 calls send, bound from a constructed client, outside _call_sdk",
+                "aliased_outside_an_operation:13 uses .core_v1 outside _call_sdk",
+            ]
+        )
+        assert inventory == []
+
     def test_the_guardrail_rejects_an_sdk_object_handed_out_of_the_boundary_uncalled(self):
         # A reference evaluated inside the operation but called after `_call_sdk` returns makes
         # its request outside the boundary; inside an operation an SDK object is called in place.
@@ -1981,3 +2022,368 @@ class TestBoundaryGuardrail:
             ]
         )
         assert len(inventory) == 3
+
+
+# ---------------------------------------------------------------------------
+# Runtime invariant: every request that reaches the transport is made inside `_call_sdk`
+# ---------------------------------------------------------------------------
+#
+# The static guardrail above reads source, and no static reading of Python is complete. This
+# layer checks the property itself: under a real, installed ApiClient whose only fake is the
+# urllib3 pool manager, every request and every response-body read records whether
+# `_SDK_CALL_ACTIVE` is set at that moment. Every KubeClient is built by the real `__init__`,
+# and each public method is driven through a success, an HTTP error and a transport error,
+# plus scripted paths whose second and later requests (pages, restarts, re-reads, polls,
+# retries) are the ones that answer or fail. It sees only the paths it drives.
+
+_INV_NS = "ns1"
+_INV_CUSTOM = ("g.io", "v1", "things")
+_INV_STATUS = {"kind": "Status", "apiVersion": "v1", "status": "Failure"}
+_INV_BODY = {
+    "apiVersion": "g.io/v1",
+    "kind": "Thing",
+    "metadata": {"name": "t1", "namespace": _INV_NS},
+    "spec": {"a": 1},
+}
+_INV_CLUSTER_BODY = {"apiVersion": "g.io/v1", "kind": "Thing", "metadata": {"name": "t1"}, "spec": {"a": 1}}
+_INV_RESTORE = {
+    "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+    "kind": "Restore",
+    "metadata": {"name": "r1"},
+}
+_INV_GUARD = {"namespace": _INV_NS, "uid": "uid-r1", "resource_version": "9"}
+
+
+def _inv_object(name, namespace=None, **fields):
+    metadata = {"name": name, "uid": "uid-" + name, "resourceVersion": "9"}
+    if namespace:
+        metadata["namespace"] = namespace
+    return {**fields, "metadata": metadata}
+
+
+def _inv_page(items, **metadata):
+    return {"items": items, "metadata": {"resourceVersion": "9", **metadata}}
+
+
+_INV_READY_POD = _inv_object("p1", _INV_NS, status={"conditions": [{"type": "Ready", "status": "True"}]})
+_INV_CONTINUED = (200, _inv_page([_inv_object("t0", _INV_NS)], **{"continue": "c1"}))
+
+
+def _inv_success(method, path, body):
+    """A well-formed 2xx answer to any request KubeClient makes, by path."""
+    parts = path.strip("/").split("/")
+    if parts[0] == "api":  # api/v1/namespaces[/<ns>[/<kind>[/<name>[/log]]]]
+        rest = parts[2:]
+        if len(rest) == 1:
+            return _inv_page([_inv_object(_INV_NS)])
+        if len(rest) == 2:
+            return _inv_object(rest[1])
+        if rest[-1] == "log":
+            return "log line"
+        if rest[2] == "pods" and len(rest) == 3:
+            return _inv_page([_INV_READY_POD])
+        return _inv_object(rest[3] if len(rest) > 3 else "cm1", rest[1])
+    if parts[1] == "apps":  # apis/apps/v1/namespaces/<ns>/<kind>/<name>[/scale]
+        spec = {"replicas": 0} if parts[-1] == "scale" else {"selector": {}, "template": {}, "serviceName": "s"}
+        return _inv_object(parts[6], parts[4], spec=spec)
+    group, version, rest = parts[1], parts[2], parts[3:]
+    if not rest:
+        resources = [{"name": plural, "kind": "Kind"} for plural in (_INV_CUSTOM[2], "managedclusters")]
+        return {"kind": "APIResourceList", "groupVersion": f"{group}/{version}", "resources": resources}
+    namespace = rest[1] if rest[0] == "namespaces" else None
+    rest = rest[2:] if namespace else rest
+    if len(rest) == 1 and method == "POST":
+        created = json.loads(body)
+        created["metadata"].update(uid="uid-" + created["metadata"]["name"], resourceVersion="9")
+        return created
+    if len(rest) == 1:
+        return _inv_page([_inv_object("t1", namespace, apiVersion=f"{group}/{version}", kind="Thing")])
+    if method == "DELETE":
+        return {"kind": "Status", "apiVersion": "v1", "status": "Success"}
+    return _inv_object(rest[1], namespace, apiVersion=f"{group}/{version}", kind="Thing", spec={"a": 1})
+
+
+class _ProbedBody(io.BytesIO):
+    """A response body that records whether the boundary is active whenever it is read."""
+
+    def __init__(self, data, reads):
+        super().__init__(data)
+        self._reads = reads
+
+    def read(self, *args):
+        self._reads.append(kube_client_module._SDK_CALL_ACTIVE.get())
+        return super().read(*args)
+
+    def read1(self, *args):
+        self._reads.append(kube_client_module._SDK_CALL_ACTIVE.get())
+        return super().read1(*args)
+
+    def readinto(self, buffer):
+        self._reads.append(kube_client_module._SDK_CALL_ACTIVE.get())
+        return super().readinto(buffer)
+
+
+class _BoundaryProbe:
+    """The urllib3 pool manager under a real ApiClient. Request `i` is answered by `script(i)`
+    when that gives an answer, else by `mode`: "ok" (a well-formed 200, or 201 to a create), "http" (500) or
+    "transport" (a dropped connection); a `(status, payload)` answer is served as is."""
+
+    def __init__(self, mode, script=None):
+        self._mode = mode
+        self._script = script or (lambda _index: None)
+        self.requests = []
+        self.reads = []
+
+    def request(self, method, url, **kwargs):
+        path = url.split("://", 1)[-1].split("/", 1)[-1].split("?", 1)[0]
+        self.requests.append((method, "/" + path, kube_client_module._SDK_CALL_ACTIVE.get()))
+        answer = self._script(len(self.requests) - 1) or self._mode
+        if answer == "transport":
+            raise urllib3.exceptions.ProtocolError("Connection aborted.")
+        if answer == "http":
+            answer = (500, {**_INV_STATUS, "code": 500})
+        if answer == "ok":
+            answer = (201 if method == "POST" else 200, _inv_success(method, "/" + path, kwargs.get("body")))
+        status, payload = answer
+        return urllib3.HTTPResponse(
+            body=_ProbedBody(json.dumps(payload).encode("utf-8"), self.reads),
+            status=status,
+            reason="Fake",
+            headers={"Content-Type": "application/json"},
+            preload_content=False,
+        )
+
+    def outside(self):
+        """Every request and body read that happened with the boundary flag unset."""
+        found = [f"{method} {path}" for method, path, active in self.requests if not active]
+        return found + [f"body read #{i}" for i, active in enumerate(self.reads) if not active]
+
+
+def _probed_construction(probe, **kwargs):
+    """`KubeClient(**kwargs)` through the real `__init__`, its kubeconfig client on `probe`."""
+    with patch.object(kube_client_module.config, "new_client_from_config", return_value=_real_api_client(probe)):
+        return KubeClient(**kwargs)
+
+
+class _FakeClock:
+    """`time` for `lib.kube_client`: `sleep` advances `time`, so polling ends without waiting."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    @staticmethod
+    def strftime(fmt):
+        return "20261123000000"
+
+
+# method: (args, kwargs, requests on success, on an HTTP 500, on a transport error). A retried
+# method makes 5 attempts; a strict custom read stops at a failed discovery.
+_INV_DRIVES = {
+    "get_namespace": ((_INV_NS,), {}, 1, 5, 5),
+    "namespace_exists": ((_INV_NS,), {}, 1, 5, 5),
+    "get_cluster_identity": ((), {}, 1, 5, 5),
+    "list_namespaces": ((), {}, 1, 5, 5),
+    "get_secret": ((_INV_NS, "s1"), {}, 1, 5, 5),
+    "secret_exists": ((_INV_NS, "s1"), {}, 1, 5, 5),
+    "get_configmap": ((_INV_NS, "cm1"), {}, 1, 5, 5),
+    "get_configmap_advisory": ((_INV_NS, "cm1"), {}, 1, 5, 5),
+    "exists_configmap": ((_INV_NS, "cm1"), {}, 1, 5, 5),
+    "create_or_patch_configmap": ((_INV_NS, "cm1", {"k": "v"}), {}, 1, 5, 5),
+    "delete_configmap": ((_INV_NS, "cm1"), {}, 1, 5, 5),
+    "delete_pod": ((_INV_NS, "p1"), {}, 1, 5, 5),
+    "get_route_host": ((_INV_NS, "route1"), {}, 1, 5, 5),
+    "get_custom_resource": ((*_INV_CUSTOM, "t1"), {"namespace": _INV_NS}, 1, 5, 5),
+    "get_custom_resource_advisory": ((*_INV_CUSTOM, "t1"), {"namespace": _INV_NS}, 1, 5, 5),
+    "list_custom_resources": (_INV_CUSTOM, {"namespace": _INV_NS}, 1, 5, 5),
+    "list_custom_resources_advisory": (_INV_CUSTOM, {"namespace": _INV_NS}, 1, 5, 5),
+    "list_custom_resources_strict": (_INV_CUSTOM, {"namespace": _INV_NS}, 2, 1, 1),
+    "get_custom_resource_strict": ((*_INV_CUSTOM, "t1"), {"namespace": _INV_NS}, 2, 1, 1),
+    "get_namespace_strict": ((_INV_NS,), {}, 1, 1, 1),
+    "list_pods_strict": ((_INV_NS,), {}, 1, 1, 1),
+    "get_deployment_strict": (("d1", _INV_NS), {}, 1, 1, 1),
+    "get_replicaset_strict": (("rs1", _INV_NS), {}, 1, 1, 1),
+    "patch_custom_resource": ((*_INV_CUSTOM, "t1", {"spec": {"a": 2}}), {"namespace": _INV_NS}, 1, 5, 5),
+    "json_patch_custom_resource_guarded": (
+        ("r1",),
+        {
+            **_INV_GUARD,
+            "expected_managed_clusters_backup_name": "b1",
+            "replacement_managed_clusters_backup_name": "latest",
+        },
+        1,
+        1,
+        1,
+    ),
+    "delete_restore_guarded": (("r1",), _INV_GUARD, 1, 1, 1),
+    "create_restore_guarded": ((_INV_RESTORE,), {"namespace": _INV_NS}, 1, 1, 1),
+    "api_resource_served": (_INV_CUSTOM, {}, 1, 1, 1),
+    "create_custom_resource": ((*_INV_CUSTOM, _INV_BODY), {"namespace": _INV_NS}, 1, 5, 5),
+    "delete_custom_resource_preconditioned": ((*_INV_CUSTOM, "t1"), {"uid": "uid-t1", "namespace": _INV_NS}, 1, 1, 1),
+    "delete_custom_resource": ((*_INV_CUSTOM, "t1"), {"namespace": _INV_NS}, 1, 5, 5),
+    "list_managed_clusters": ((), {}, 1, 5, 5),
+    "list_managed_clusters_strict": ((), {}, 2, 1, 1),
+    "patch_managed_cluster": (("mc1", {"spec": {"hubAcceptsClient": True}}), {}, 1, 5, 5),
+    "get_deployment": (("d1", _INV_NS), {}, 1, 5, 5),
+    "get_statefulset": (("ss1", _INV_NS), {}, 1, 5, 5),
+    "scale_deployment": (("d1", _INV_NS, 0), {}, 1, 5, 5),
+    "scale_statefulset": (("ss1", _INV_NS, 0), {}, 1, 5, 5),
+    "rollout_restart_deployment": (("d1", _INV_NS), {}, 1, 5, 5),
+    "get_pods": ((_INV_NS,), {}, 1, 5, 5),
+    "list_pods": ((_INV_NS,), {}, 1, 5, 5),
+    "get_pod_logs": (("p1", _INV_NS), {"container": "c", "tail_lines": 10}, 1, 5, 5),
+    # Polls every 5s of a 12s budget: three failed polls, then the budget is spent.
+    "wait_for_pods_ready": ((_INV_NS, "app=x"), {"timeout": 12}, 1, 3, 3),
+}
+
+# Public methods that make no SDK request: name -> (reason, args, kwargs). Each is asserted at
+# runtime to reach the transport zero times in every mode.
+_INV_REQUEST_FREE = {}
+
+
+def _every_other(answer):
+    """A script whose even requests get `answer` and odd ones the mode: each retried attempt
+    first succeeds partway, then fails on its later request."""
+    return lambda index: answer if index % 2 == 0 else None
+
+
+_CLUSTER = {"namespace": None}
+# (method, scenario, mode, script, args, kwargs, requests): paths whose later requests matter.
+_INV_SCRIPTED = [
+    ("create_or_patch_configmap", "409-then-patch", "ok", {0: (409, _INV_STATUS)}.get, None, None, 2),
+    ("create_or_patch_configmap", "409-then-patch-fails", "http", _every_other((409, _INV_STATUS)), None, None, 10),
+    ("create_custom_resource", "409-then-reread", "ok", {0: (409, _INV_STATUS)}.get, None, None, 2),
+    ("create_custom_resource", "409-then-reread-fails", "transport", _every_other((409, _INV_STATUS)), None, None, 10),
+    ("create_custom_resource", "cluster-scoped", "ok", None, (*_INV_CUSTOM, _INV_CLUSTER_BODY), _CLUSTER, 1),
+    ("create_custom_resource", "cluster-scoped-http", "http", None, (*_INV_CUSTOM, _INV_CLUSTER_BODY), _CLUSTER, 5),
+    ("create_custom_resource", "unnamed-not-retried", "http", None, (*_INV_CUSTOM, {"kind": "Thing"}), None, 1),
+    ("list_custom_resources", "second-page", "ok", {0: _INV_CONTINUED}.get, None, None, 2),
+    ("list_custom_resources", "second-page-fails", "transport", _every_other(_INV_CONTINUED), None, None, 10),
+    ("list_custom_resources", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    ("list_custom_resources_advisory", "second-page-fails", "http", _every_other(_INV_CONTINUED), None, None, 10),
+    ("list_custom_resources_strict", "second-page", "ok", {1: _INV_CONTINUED}.get, None, None, 3),
+    (
+        "list_custom_resources_strict",
+        "expired-continuation",
+        "ok",
+        {1: _INV_CONTINUED, 2: (410, _INV_STATUS)}.get,
+        None,
+        None,
+        4,
+    ),
+    ("list_custom_resources_strict", "page-fails-after-discovery", "http", {0: "ok"}.get, None, None, 2),
+    ("list_custom_resources_strict", "second-page-fails", "transport", {0: "ok", 1: _INV_CONTINUED}.get, None, None, 3),
+    ("list_custom_resources_strict", "cluster-scoped", "ok", None, None, _CLUSTER, 2),
+    ("get_custom_resource_strict", "get-fails-after-discovery", "transport", {0: "ok"}.get, None, None, 2),
+    ("get_custom_resource_strict", "absent-after-discovery", "ok", {1: (404, _INV_STATUS)}.get, None, None, 2),
+    ("get_custom_resource_strict", "cluster-scoped", "ok", None, None, _CLUSTER, 2),
+    ("list_pods_strict", "second-page", "ok", {0: _INV_CONTINUED}.get, None, None, 2),
+    ("list_pods_strict", "expired-continuation", "ok", {0: _INV_CONTINUED, 1: (410, _INV_STATUS)}.get, None, None, 3),
+    ("list_pods_strict", "404-then-namespace-read", "ok", {0: (404, _INV_STATUS)}.get, None, None, 2),
+    ("list_pods_strict", "404-then-namespace-read-fails", "transport", {0: (404, _INV_STATUS)}.get, None, None, 2),
+    ("get_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    ("get_custom_resource_advisory", "cluster-scoped-http", "http", None, None, _CLUSTER, 5),
+    ("patch_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    ("delete_custom_resource", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    ("delete_custom_resource_preconditioned", "cluster-scoped", "ok", None, None, _CLUSTER, 1),
+    ("wait_for_pods_ready", "polls-until-ready", "ok", {0: (200, _inv_page([]))}.get, None, {"expected_count": 1}, 2),
+    ("wait_for_pods_ready", "fails-then-ready", "ok", {0: "transport", 1: "http"}.get, None, None, 3),
+]
+
+
+def _inv_cases():
+    """Every runtime case as (method, scenario, mode, script, args, kwargs, requests)."""
+    cases = []
+    for method, (args, kwargs, ok, http, transport) in _INV_DRIVES.items():
+        for mode, requests in (("ok", ok), ("http", http), ("transport", transport)):
+            cases.append((method, mode, mode, None, args, kwargs, requests))
+    for method, scenario, mode, script, args, kwargs, requests in _INV_SCRIPTED:
+        base_args, base_kwargs = _INV_DRIVES[method][:2]
+        merged = {**base_kwargs, **(kwargs or {})}
+        cases.append((method, scenario, mode, script, base_args if args is None else args, merged, requests))
+    return cases
+
+
+_INV_CASES = _inv_cases()
+_INV_CONSTRUCTIONS = {
+    "default": {},
+    "named-context": {"context": "c1"},
+    "dry-run": {"context": "c1", "dry_run": True},
+    "insecure-hostname": {"disable_hostname_verification": True},
+    "request-timeout": {"request_timeout": 5},
+    "quiet-config-errors": {"log_config_errors": False},
+}
+
+
+@pytest.mark.unit
+class TestRuntimeBoundaryInvariant:
+    @pytest.fixture(autouse=True)
+    def _fake_clock(self, monkeypatch):
+        monkeypatch.setattr(kube_client_module, "time", _FakeClock())
+
+    def test_the_probe_sees_a_request_made_outside_the_boundary(self):
+        """Positive control: the same read is seen unset raw and set through KubeClient."""
+        probe = _BoundaryProbe("ok")
+        client = _probed_construction(probe, context="inv")
+        client.core_v1.read_namespace(_INV_NS)
+        assert [active for _, _, active in probe.requests] == [False]
+        assert probe.reads and not any(probe.reads)
+
+        probe = _BoundaryProbe("ok")
+        _probed_construction(probe, context="inv").get_namespace(_INV_NS)
+        assert [active for _, _, active in probe.requests] == [True]
+        assert probe.reads and all(probe.reads)
+
+    @pytest.mark.parametrize("mode", ["ok", "http", "transport"])
+    @pytest.mark.parametrize("path", sorted(_INV_CONSTRUCTIONS))
+    def test_construction_makes_no_request_outside_the_boundary(self, path, mode):
+        probe = _BoundaryProbe(mode)
+        raised = None
+        try:
+            _probed_construction(probe, **_INV_CONSTRUCTIONS[path])
+        except Exception as exc:  # the invariant is judged first, whatever construction raised
+            raised = exc
+        assert probe.outside() == [], f"KubeClient.__init__ ({path}, {mode}) reached the transport outside _call_sdk"
+        assert raised is None and probe.requests == [], "the constructor issues no request"
+
+    @pytest.mark.parametrize(
+        "method,scenario,mode,script,args,kwargs,requests",
+        [pytest.param(*case, id=f"{case[0]}-{case[1]}") for case in _INV_CASES],
+    )
+    def test_every_request_is_made_inside_the_boundary(self, method, scenario, mode, script, args, kwargs, requests):
+        probe = _BoundaryProbe(mode, script)
+        raised = None
+        try:
+            getattr(_probed_construction(probe, context="inv"), method)(*args, **kwargs)
+        except Exception as exc:  # failure modes raise; the invariant is judged first either way
+            raised = exc
+        assert probe.outside() == [], f"KubeClient.{method} ({scenario}) reached the transport outside _call_sdk"
+        assert len(probe.requests) == requests, f"KubeClient.{method} ({scenario}) did not drive the expected path"
+        if mode == "ok":
+            assert raised is None, f"KubeClient.{method} ({scenario}) failed on its success path: {raised!r}"
+
+    def test_every_public_method_is_driven_or_justified(self):
+        public = {
+            name
+            for name, member in vars(KubeClient).items()
+            if not name.startswith("_") and (inspect.isroutine(member) or isinstance(member, property))
+        }
+        driven = {}
+        for method, _scenario, mode, *_rest in _INV_CASES:
+            driven.setdefault(method, set()).add(mode)
+        assert set(driven) <= public, f"cases for methods KubeClient lacks: {sorted(set(driven) - public)}"
+        assert set(_INV_REQUEST_FREE) <= public and not set(_INV_REQUEST_FREE) & set(driven)
+        unaccounted = sorted(public - set(driven) - set(_INV_REQUEST_FREE))
+        assert unaccounted == [], f"public KubeClient methods neither driven nor justified: {unaccounted}"
+        partial = {method: sorted(modes) for method, modes in driven.items() if modes != {"ok", "http", "transport"}}
+        assert partial == {}, "every driven method needs a success, an HTTP error and a transport error"
+        for name, (_reason, args, kwargs) in _INV_REQUEST_FREE.items():
+            for mode in ("ok", "http", "transport"):
+                probe = _BoundaryProbe(mode)
+                getattr(_probed_construction(probe, context="inv"), name)(*args, **kwargs)
+                assert probe.requests == [], f"KubeClient.{name} is listed as request-free but reached the transport"
