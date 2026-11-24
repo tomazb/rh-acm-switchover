@@ -8,6 +8,8 @@ from threading import Thread
 
 import pytest
 
+BACKUP_LIST_PATH = "/apis/velero.io/v1/namespaces/open-cluster-management-backup/backups"
+
 ARGOCD_FAILURE_SENTINELS = (
     "nested-bearer-token",
     "api.nested-secret.example",
@@ -122,6 +124,31 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
                 ],
             },
         }
+        backup_lists = getattr(self.server, "fixture_backup_lists", None)
+        if backup_lists is not None:
+            responses["/apis"]["groups"].append(
+                {
+                    "name": "velero.io",
+                    "versions": [{"groupVersion": "velero.io/v1", "version": "v1"}],
+                    "preferredVersion": {"groupVersion": "velero.io/v1", "version": "v1"},
+                }
+            )
+            responses["/apis/velero.io/v1"] = {
+                "kind": "APIResourceList",
+                "groupVersion": "velero.io/v1",
+                "resources": [
+                    {
+                        "name": "backups",
+                        "singularName": "backup",
+                        "namespaced": True,
+                        "kind": "Backup",
+                        "verbs": ["list"],
+                    },
+                ],
+            }
+            if path == BACKUP_LIST_PATH and backup_lists:
+                self._write_json({"apiVersion": "velero.io/v1", "kind": "BackupList", "items": backup_lists.pop(0)})
+                return
         payload = responses.get(path)
         if payload is None:
             self.send_response(404)
@@ -164,6 +191,7 @@ class _ConnectivityHTTPServer(ThreadingHTTPServer):
     fixture_default_namespace_body: dict | None
     fixture_advertise_namespace: bool
     fixture_requests: list[dict[str, str]]
+    fixture_backup_lists: list[list[dict]] | None
 
 
 class _ConnectivityAPIServer:
@@ -173,6 +201,7 @@ class _ConnectivityAPIServer:
         status: int = 200,
         body: dict | None = None,
         advertise_namespace: bool = True,
+        backup_lists: list[list[dict]] | None = None,
     ):
         self._server = _ConnectivityHTTPServer(
             ("127.0.0.1", 0),
@@ -182,6 +211,7 @@ class _ConnectivityAPIServer:
         self._server.fixture_default_namespace_body = body
         self._server.fixture_advertise_namespace = advertise_namespace
         self._server.fixture_requests = []
+        self._server.fixture_backup_lists = backup_lists
         self._thread = Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
@@ -322,6 +352,116 @@ def test_preflight_success_fixture_passes(
     assert completed.returncode == 0
     assert report["status"] == "pass"
     assert any(item["id"] == "preflight-version-compatibility" for item in report["results"])
+
+
+def _velero_backup(name: str, phase: str) -> dict:
+    return {
+        "apiVersion": "velero.io/v1",
+        "kind": "Backup",
+        "metadata": {"name": name},
+        "status": {"phase": phase},
+    }
+
+
+@pytest.mark.parametrize("playbook", ["switchover", "restore_only"])
+@pytest.mark.parametrize(
+    ("backup_lists", "expected_count", "expected_name", "expected_phase"),
+    [
+        pytest.param([[_velero_backup("discovered", "Completed")]], 1, "discovered", "Completed", id="settled"),
+        pytest.param(
+            [
+                [_velero_backup("discovered", "InProgress")],
+                [_velero_backup("waited", "Completed")],
+                [_velero_backup("refreshed", "Completed")],
+            ],
+            1,
+            "refreshed",
+            "Completed",
+            id="refresh",
+        ),
+        pytest.param(
+            [
+                [_velero_backup("discovered", "InProgress")],
+                [_velero_backup("waited", "InProgress")],
+                [_velero_backup("waited", "Completed")],
+                [_velero_backup("still-running", "InProgress")],
+            ],
+            1,
+            "still-running",
+            "InProgress",
+            id="stuck",
+        ),
+        pytest.param(
+            [
+                [_velero_backup("discovered", "InProgress")],
+                [_velero_backup("waited", "Completed")],
+                [],
+            ],
+            0,
+            None,
+            "missing",
+            id="removed",
+        ),
+    ],
+)
+def test_preflight_uses_active_velero_backup_inventory(
+    run_preflight_fixture,
+    connectivity_api_factory,
+    playbook,
+    backup_lists,
+    expected_count,
+    expected_name,
+    expected_phase,
+):
+    restore_only = playbook == "restore_only"
+    hub = "secondary" if restore_only else "primary"
+    active = connectivity_api_factory(backup_lists=list(backup_lists))
+    inactive = connectivity_api_factory()
+    completed, report = run_preflight_fixture(
+        "passive_success.yml",
+        overrides={
+            "acm_switchover_hubs": {"primary": {"context": "", "kubeconfig": ""}} if restore_only else {},
+            "acm_switchover_features": {"skip_gitops_check": True},
+            "acm_switchover_operation": {"method": "full", "old_hub_action": "none"},
+            "acm_switchover_backup_wait_retries": 1,
+            "acm_switchover_backup_wait_delay": 0,
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_servers": {
+                    "primary": inactive.url if restore_only else active.url,
+                    "secondary": active.url if restore_only else inactive.url,
+                },
+            },
+        },
+        playbook=playbook,
+        discover_backups_on=hub,
+    )
+
+    assert report, completed.stdout + completed.stderr
+    expected_get = {"method": "GET", "path": BACKUP_LIST_PATH}
+    assert active.requests.count(expected_get) == len(backup_lists)
+    assert expected_get not in inactive.requests
+
+    results = {item["id"]: item for item in report["results"]}
+    suffix = "-restore-only" if restore_only else ""
+    inactive_suffix = "" if restore_only else "-restore-only"
+    artifact = results[f"preflight-backup-latest{suffix}"]
+    completion = results[f"preflight-backup-latest-completed{suffix}"]
+    assert artifact["details"]["backup_count"] == expected_count
+    assert artifact["status"] == ("pass" if expected_count else "fail")
+    assert completion["details"] == {"backup_name": expected_name, "phase": expected_phase}
+    expected_status = "pass" if expected_phase == "Completed" else "fail"
+    assert completion["status"] == expected_status
+    assert report["status"] == expected_status
+    assert (completed.returncode == 0) == (expected_status == "pass"), completed.stdout + completed.stderr
+    assert f"preflight-backup-latest{inactive_suffix}" not in results
+
+    progress = results.get(f"preflight-backup-in-progress-after-wait{suffix}")
+    if expected_phase == "InProgress":
+        assert progress["severity"] == "critical"
+        assert progress["status"] == "fail"
+        assert progress["details"] == {"backup_names": ["still-running"], "attempts": 2}
+    else:
+        assert progress is None
 
 
 def _connectivity_results(report: dict) -> dict[str, dict]:

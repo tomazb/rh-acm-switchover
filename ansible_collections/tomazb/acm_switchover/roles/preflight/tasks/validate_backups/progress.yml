@@ -43,10 +43,15 @@
     namespace: open-cluster-management-backup
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
-  register: acm_primary_backups_info
+  register: _acm_switchover_primary_refreshed_backups
   when:
     - not (acm_switchover_operation.restore_only | default(false))
     - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Use refreshed primary backup inventory
+  ansible.builtin.set_fact:
+    acm_primary_backups_info: "{{ _acm_switchover_primary_refreshed_backups }}"
+  when: _acm_switchover_primary_refreshed_backups is not skipped
 
 - name: Identify primary backups still in progress after wait
   ansible.builtin.set_fact:
@@ -129,10 +134,15 @@
     namespace: open-cluster-management-backup
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_secondary_backups_info
+  register: _acm_switchover_secondary_refreshed_backups
   when:
     - acm_switchover_operation.restore_only | default(false)
     - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
+- name: Use refreshed restore-only target backup inventory
+  ansible.builtin.set_fact:
+    acm_secondary_backups_info: "{{ _acm_switchover_secondary_refreshed_backups }}"
+  when: _acm_switchover_secondary_refreshed_backups is not skipped
 
 - name: Identify restore-only target backups still in progress after wait
   ansible.builtin.set_fact:

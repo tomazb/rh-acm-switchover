@@ -156,6 +156,9 @@ def run_preflight_fixture(tmp_path):
     def _run(
         fixture_name: str,
         overrides: dict | None = None,
+        *,
+        playbook: str = "preflight",
+        discover_backups_on: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
@@ -165,6 +168,12 @@ def run_preflight_fixture(tmp_path):
         if overrides:
             _merge_test_vars(vars_payload, overrides)
         _seed_fixture_defaults(vars_payload)
+        if discover_backups_on:
+            # A registered Backup inventory must be writable by Ansible during the test.
+            vars_payload.pop(f"acm_{discover_backups_on}_backups_info", None)
+        if playbook == "restore_only":
+            # Let the shipped playbook set its own operation flags.
+            vars_payload.pop("acm_switchover_operation", None)
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 
         vars_file = tmp_path / "vars.yml"
@@ -175,7 +184,7 @@ def run_preflight_fixture(tmp_path):
         completed = subprocess.run(
             [
                 "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml",
+                f"ansible_collections/tomazb/acm_switchover/playbooks/{playbook}.yml",
                 "-i",
                 "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
                 "-e",
