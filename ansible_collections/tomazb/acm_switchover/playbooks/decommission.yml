@@ -20,6 +20,14 @@
           Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
           acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
 
+    - name: Validate the standalone decommission execution mode
+      ansible.builtin.assert:
+        that:
+          - (acm_switchover_execution.mode | default('dry_run')) in ['dry_run', 'execute', 'validate']
+        fail_msg: >-
+          Invalid acm_switchover_execution.mode for standalone decommission.
+          Use dry_run to preview or execute with checkpointing enabled.
+
     # The standalone entry point declares itself, so every validation surface in this
     # run can tell it apart from an integrated switchover's decommission disposition.
     # This is the collection's equivalent of the Python CLI's `--decommission`, and

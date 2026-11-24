@@ -311,6 +311,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Standalone Ansible decommission rejects unrecognized execution modes before
+  checkpoint entry or Kubernetes access, including when checkpointing is disabled (#391).
 - Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
   exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request
   `KubeClient` makes through the Kubernetes client (generated Core, Apps and Custom Objects calls,
