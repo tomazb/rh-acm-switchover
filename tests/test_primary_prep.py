@@ -1177,3 +1177,45 @@ class TestPrimaryPreparationIntegration:
         assert state.is_step_completed("pause_backup_schedule")
         assert state.is_step_completed("disable_auto_import")
         assert state.is_step_completed("scale_down_thanos")
+
+
+@pytest.mark.unit
+def test_api_error_detail_never_reaches_the_state_file_or_report(tmp_path, caplog):
+    """#283: a raw API refusal from a real KubeClient is recorded through prepare()'s catch-all
+    (`Unexpected: ...`) by status only, in the state file and in the report built from it."""
+    import json as json_module
+    from types import SimpleNamespace
+
+    from lib.cli_outcomes import write_python_report
+    from lib.kube_client import KubeClient
+    from lib.utils import StateManager
+    from tests.api_error_canary import assert_no_canary, canary_api_exception, real_kube_client_apis
+
+    state_path = tmp_path / "state.json"
+    report_dir = tmp_path / "reports"
+    with real_kube_client_apis() as apis:
+        client = KubeClient(context="primary", dry_run=False)
+        apis["apps_api"].patch_namespaced_stateful_set_scale.side_effect = canary_api_exception(403)
+        state = StateManager(str(state_path))
+        state.mark_step_completed("pause_backup_schedule")
+        state.mark_step_completed("disable_auto_import")
+        prep = primary_prep_module.PrimaryPreparation(
+            primary_client=client, state_manager=state, acm_version="2.12.0", has_observability=True
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            assert prep.prepare() is False
+
+    write_python_report(
+        SimpleNamespace(report_dir=str(report_dir), validate_only=False, decommission=False, restore_only=False),
+        state,
+        "fail",
+        logging.getLogger("test_primary_prep"),
+    )
+    state_text = state_path.read_text(encoding="utf-8")
+    report_text = next(report_dir.iterdir()).read_text(encoding="utf-8")
+
+    errors = json_module.loads(state_text)["errors"]
+    assert [entry["error"] for entry in errors] == ["Unexpected: (403)\nReason: Forbidden\n"]
+    assert json_module.loads(report_text)["errors"] == errors
+    assert_no_canary(state_text, report_text, caplog.text)

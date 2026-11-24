@@ -4,12 +4,18 @@ Modernized pytest tests with fixtures, markers, and parameterization.
 Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 """
 
+import ast
 import errno
+import http
 import inspect
 import json
+import traceback
 from itertools import chain, repeat
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+import kubernetes
 import pytest
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
@@ -17,6 +23,7 @@ from tenacity import wait_none
 from urllib3.exceptions import ProtocolError, ReadTimeoutError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
+import lib.kube_client as kube_client_module
 from lib.constants import (
     MANAGED_CLUSTER_API_GROUP,
     MANAGED_CLUSTER_API_VERSION,
@@ -35,6 +42,14 @@ from lib.constants import (
 from lib.exceptions import MalformedResponseError
 from lib.kube_client import KubeClient, api_call, is_retryable_error
 from lib.strict_read import StrictReadOutcome, StrictReadStatus
+from tests.api_error_canary import (
+    API_BODY_CANARY,
+    API_CANARIES,
+    API_HEADER_CANARY,
+    API_REASON_CANARY,
+    assert_no_canary,
+    canary_api_exception,
+)
 
 
 @pytest.fixture
@@ -114,9 +129,11 @@ class TestConfigMapAdvisoryReads:
             with pytest.raises(ApiException) as exc_info:
                 kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
 
-        assert exc_info.value is failure
+        # A fresh ApiException of the same class and status (#283): the SDK's object stays inside.
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 1
         assert "R302-CONFIGMAP-ADVISORY-SENTINEL" not in caplog.text
+        assert "R302-CONFIGMAP-ADVISORY-SENTINEL" not in str(exc_info.value)
 
     def test_configmap_advisory_retries_retryable_failure(self, kube_client, mock_k8s_apis):
         configmap = MagicMock()
@@ -141,9 +158,10 @@ class TestConfigMapAdvisoryReads:
                 with pytest.raises(ApiException) as exc_info:
                     kube_client.get_configmap_advisory("multicluster-engine", "import-controller-config")
 
-        assert exc_info.value is failure
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 503
         assert mock_k8s_apis["core_api"].read_namespaced_config_map.call_count == 5
         assert "R302-CONFIGMAP-RETRY-SENTINEL" not in caplog.text
+        assert "R302-CONFIGMAP-RETRY-SENTINEL" not in str(exc_info.value)
 
     @pytest.mark.parametrize(
         ("namespace", "name"),
@@ -1363,7 +1381,7 @@ class TestApiCallDecorator:
         mock_error.assert_called_once()
         log_message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
         assert "Failed to get some resource:" in log_message
-        assert "Forbidden" in log_message
+        assert "403" in log_message
 
     def test_uses_custom_resource_desc(self):
         """Decorator logs the provided resource_desc instead of the method name."""
@@ -3939,3 +3957,805 @@ class TestApiResourceServed:
         client = TestDiscoveryProver()._client(Mock(return_value=TestDiscoveryProver._body(body)))
         absent = client.api_resource_served("cluster.open-cluster-management.io", "v1beta1", "restores/status")
         assert absent.status is StrictReadStatus.CRD_ABSENT
+
+
+# ---------------------------------------------------------------------------
+# #283: Kubernetes API error bodies, headers, data and reasons never leave KubeClient
+# ---------------------------------------------------------------------------
+
+# Every public method that can raise an ApiException, with the generated-API call it makes
+# and how often a 503 is attempted. A 403 is attempted once everywhere.
+_RAISING_METHODS = [
+    pytest.param("get_namespace", "core_api", "read_namespace", {"name": "ns1"}, 5, id="get_namespace"),
+    pytest.param("namespace_exists", "core_api", "read_namespace", {"name": "ns1"}, 5, id="namespace_exists"),
+    pytest.param("get_cluster_identity", "core_api", "read_namespace", {}, 5, id="get_cluster_identity"),
+    pytest.param("list_namespaces", "core_api", "list_namespace", {}, 5, id="list_namespaces"),
+    pytest.param(
+        "get_secret", "core_api", "read_namespaced_secret", {"namespace": "ns1", "name": "s1"}, 5, id="get_secret"
+    ),
+    pytest.param(
+        "secret_exists",
+        "core_api",
+        "read_namespaced_secret",
+        {"namespace": "ns1", "name": "s1"},
+        5,
+        id="secret_exists",
+    ),
+    pytest.param(
+        "get_configmap",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="get_configmap",
+    ),
+    pytest.param(
+        "get_configmap_advisory",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="get_configmap_advisory",
+    ),
+    pytest.param(
+        "exists_configmap",
+        "core_api",
+        "read_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="exists_configmap",
+    ),
+    pytest.param(
+        "create_or_patch_configmap",
+        "core_api",
+        "create_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1", "data": {"k": "v"}},
+        5,
+        id="create_or_patch_configmap",
+    ),
+    pytest.param(
+        "delete_configmap",
+        "core_api",
+        "delete_namespaced_config_map",
+        {"namespace": "ns1", "name": "cm1"},
+        5,
+        id="delete_configmap",
+    ),
+    pytest.param(
+        "delete_pod", "core_api", "delete_namespaced_pod", {"namespace": "ns1", "name": "p1"}, 5, id="delete_pod"
+    ),
+    pytest.param(
+        "get_route_host",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"namespace": "ns1", "name": "r1"},
+        5,
+        id="get_route_host",
+    ),
+    pytest.param(
+        "get_custom_resource",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="get_custom_resource",
+    ),
+    pytest.param(
+        "get_custom_resource_advisory",
+        "custom_api",
+        "get_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="get_custom_resource_advisory",
+    ),
+    pytest.param(
+        "list_custom_resources",
+        "custom_api",
+        "list_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "namespace": "ns1"},
+        5,
+        id="list_custom_resources",
+    ),
+    pytest.param(
+        "list_custom_resources_advisory",
+        "custom_api",
+        "list_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "namespace": "ns1"},
+        5,
+        id="list_custom_resources_advisory",
+    ),
+    pytest.param(
+        "list_managed_clusters", "custom_api", "list_cluster_custom_object", {}, 5, id="list_managed_clusters"
+    ),
+    pytest.param(
+        "patch_custom_resource",
+        "custom_api",
+        "patch_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "patch": {"spec": {}}, "namespace": "ns1"},
+        5,
+        id="patch_custom_resource",
+    ),
+    pytest.param(
+        "patch_managed_cluster",
+        "custom_api",
+        "patch_cluster_custom_object",
+        {"name": "mc1", "patch": {"metadata": {}}},
+        5,
+        id="patch_managed_cluster",
+    ),
+    pytest.param(
+        "create_custom_resource",
+        "custom_api",
+        "create_namespaced_custom_object",
+        {
+            "group": "g.io",
+            "version": "v1",
+            "plural": "things",
+            "body": {"metadata": {"name": "t1"}},
+            "namespace": "ns1",
+        },
+        5,
+        id="create_custom_resource-named",
+    ),
+    pytest.param(
+        "create_custom_resource",
+        "custom_api",
+        "create_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "body": {"metadata": {}}, "namespace": "ns1"},
+        1,
+        id="create_custom_resource-unnamed",
+    ),
+    pytest.param(
+        "delete_custom_resource_preconditioned",
+        "custom_api",
+        "delete_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "uid": "uid-1", "namespace": "ns1"},
+        1,
+        id="delete_custom_resource_preconditioned",
+    ),
+    pytest.param(
+        "delete_custom_resource",
+        "custom_api",
+        "delete_namespaced_custom_object",
+        {"group": "g.io", "version": "v1", "plural": "things", "name": "t1", "namespace": "ns1"},
+        5,
+        id="delete_custom_resource",
+    ),
+    pytest.param(
+        "get_deployment",
+        "apps_api",
+        "read_namespaced_deployment",
+        {"name": "d1", "namespace": "ns1"},
+        5,
+        id="get_deployment",
+    ),
+    pytest.param(
+        "get_statefulset",
+        "apps_api",
+        "read_namespaced_stateful_set",
+        {"name": "s1", "namespace": "ns1"},
+        5,
+        id="get_statefulset",
+    ),
+    pytest.param(
+        "scale_deployment",
+        "apps_api",
+        "patch_namespaced_deployment_scale",
+        {"name": "d1", "namespace": "ns1", "replicas": 0},
+        5,
+        id="scale_deployment",
+    ),
+    pytest.param(
+        "scale_statefulset",
+        "apps_api",
+        "patch_namespaced_stateful_set_scale",
+        {"name": "s1", "namespace": "ns1", "replicas": 0},
+        5,
+        id="scale_statefulset",
+    ),
+    pytest.param(
+        "rollout_restart_deployment",
+        "apps_api",
+        "patch_namespaced_deployment",
+        {"name": "d1", "namespace": "ns1"},
+        5,
+        id="rollout_restart_deployment",
+    ),
+    pytest.param("get_pods", "core_api", "list_namespaced_pod", {"namespace": "ns1"}, 5, id="get_pods"),
+    pytest.param("list_pods", "core_api", "list_namespaced_pod", {"namespace": "ns1"}, 5, id="list_pods"),
+    pytest.param(
+        "get_pod_logs", "core_api", "read_namespaced_pod_log", {"name": "p1", "namespace": "ns1"}, 5, id="get_pod_logs"
+    ),
+]
+
+
+def _exception_texts(exc: BaseException) -> list:
+    """Every rendering of an exception an operator, a log or a state file could see."""
+    return [str(exc), repr(exc), "".join(traceback.format_exception(exc))]
+
+
+@pytest.fixture
+def no_retry_wait(monkeypatch):
+    """Retry without sleeping. Each decorated method owns its Retrying object, and the named
+    create builds one per call, so the backoff sleep itself is patched."""
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _seconds: None)
+
+
+@pytest.mark.unit
+class TestApiErrorDetailNeverLeavesKubeClient:
+    """#283: status and type survive; body, headers, data and server reason do not."""
+
+    @pytest.mark.parametrize("status", [403, 503])
+    @pytest.mark.parametrize("method,api,api_method,kwargs,attempts_on_503", _RAISING_METHODS)
+    def test_no_canary_in_logs_or_exception_text(
+        self,
+        kube_client,
+        mock_k8s_apis,
+        caplog,
+        no_retry_wait,
+        method,
+        api,
+        api_method,
+        kwargs,
+        attempts_on_503,
+        status,
+    ):
+        failure = canary_api_exception(status)
+        api_call_mock = getattr(mock_k8s_apis[api], api_method)
+        api_call_mock.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                getattr(kube_client, method)(**kwargs)
+
+        raised = exc_info.value
+        # A fresh exception built from the status: the SDK's own object never leaves KubeClient.
+        assert type(raised) is ApiException
+        assert raised.status == status
+        assert api_call_mock.call_count == (attempts_on_503 if status == 503 else 1)
+        assert_no_canary(caplog.text, *_exception_texts(raised))
+        assert raised.reason == http.HTTPStatus(status).phrase
+
+    @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_scrubs_retried_and_raised_errors(self, _sleep, kube_client, mock_k8s_apis, caplog):
+        transient = canary_api_exception(503)
+        refusal = canary_api_exception(403)
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = [transient, refusal]
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.wait_for_pods_ready("ns1", "app=x", timeout=60)
+
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
+        assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count == 2
+        assert "503" in caplog.text, "the transient failure is still logged, by status"
+        # The handled 503 never leaves the method, so only the log and the raised 403 are visible.
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+    @pytest.mark.parametrize(
+        "status,expected_type",
+        [
+            (409, kube_client_module.PreconditionConflict),
+            (412, kube_client_module.PreconditionConflict),
+            (404, kube_client_module.TargetDisappeared),
+        ],
+    )
+    def test_preconditioned_delete_cause_is_scrubbed(self, kube_client, mock_k8s_apis, caplog, status, expected_type):
+        failure = canary_api_exception(status)
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.side_effect = failure
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(expected_type) as exc_info:
+                kube_client.delete_custom_resource_preconditioned(
+                    "g.io", "v1", "things", "t1", uid="uid-1", namespace="ns1"
+                )
+
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, ApiException) and cause.status == status, "the safe API cause is kept"
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+    def test_unreconciled_named_create_conflict_is_scrubbed(self, kube_client, mock_k8s_apis, caplog):
+        conflict = canary_api_exception(409)
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = conflict
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = {
+            "metadata": {"name": "t1"},
+            "spec": {"other": True},
+        }
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.create_custom_resource(
+                    "g.io", "v1", "things", {"metadata": {"name": "t1"}, "spec": {"x": 1}}, namespace="ns1"
+                )
+
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 409
+        assert mock_k8s_apis["custom_api"].create_namespaced_custom_object.call_count == 1
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+    def test_configmap_patch_failure_after_a_create_conflict_carries_neither(self, kube_client, mock_k8s_apis, caplog):
+        conflict = canary_api_exception(409)
+        refusal = canary_api_exception(403)
+        mock_k8s_apis["core_api"].create_namespaced_config_map.side_effect = conflict
+        mock_k8s_apis["core_api"].patch_namespaced_config_map.side_effect = refusal
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                kube_client.create_or_patch_configmap("ns1", "cm1", {"k": "v"})
+
+        assert type(exc_info.value) is ApiException and exc_info.value.status == 403
+        # Raised by the boundary while the 409 was handled, without inheriting it as context.
+        assert exc_info.value.__context__ is None
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+    @pytest.mark.parametrize("status", [0, 999])
+    def test_a_status_without_a_standard_phrase_has_a_fixed_reason(self, kube_client, mock_k8s_apis, status):
+        failure = canary_api_exception(status)
+        mock_k8s_apis["core_api"].read_namespace.side_effect = failure
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.get_namespace("ns1")
+
+        assert exc_info.value.status == status
+        assert_no_canary(*_exception_texts(exc_info.value))
+        # A fixed diagnostic, never None: callers format `{exc.status} {exc.reason}`.
+        assert isinstance(exc_info.value.reason, str) and exc_info.value.reason
+
+    def test_real_client_http_error_reaches_the_caller_without_detail(self, caplog):
+        """The installed client builds the ApiException from a real HTTP response."""
+
+        class _CanaryPoolManager(_RecordingPoolManager):
+            def request(self, method, url, **kwargs):
+                response = super().request(method, url, **kwargs)
+                response.reason = API_REASON_CANARY
+                response.headers["Audit-Id"] = API_HEADER_CANARY
+                return response
+
+        pool_manager = _CanaryPoolManager(status=403, payload={"kind": "Status", "message": API_BODY_CANARY})
+        client = _real_kube_client(pool_manager)
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(ApiException) as exc_info:
+                client.get_custom_resource("g.io", "v1", "things", "t1", namespace="ns1")
+
+        assert exc_info.value.status == 403
+        assert_no_canary(caplog.text, *_exception_texts(exc_info.value))
+
+
+# Response failures the installed client raises itself, from a faked socket. Each case names how
+# the generated API is called directly (to prove the canary is really in what the client raises
+# in this lane) and how KubeClient makes the same request. A hand-built ApiException cannot
+# reproduce these: the server text sits in a chained parser error (29.x), a pydantic or
+# int() ValueError (37.x / 29.x), the bytes of a UnicodeDecodeError, or a status-0 reason.
+_KUBERNETES_MAJOR = int(kubernetes.__version__.split(".")[0])
+_ONLY_37 = pytest.mark.skipif(
+    _KUBERNETES_MAJOR < 37,
+    reason=f"kubernetes {kubernetes.__version__} deserializes any Content-Type; only 37.x rejects an unsupported one",
+)
+_ONLY_BEFORE_37 = pytest.mark.skipif(
+    _KUBERNETES_MAJOR >= 37,
+    reason=f"kubernetes {kubernetes.__version__} raises an undecodable error body as an ApiException without its bytes",
+)
+_NAMESPACE = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "ns1"}}
+# Server text followed by a byte that is not UTF-8: the decode fails after the canary.
+_UNDECODABLE_NAMESPACE = b'{"kind": "Namespace", "metadata": {"name": "' + API_BODY_CANARY.encode("utf-8") + b'\xff"}}'
+_RESPONSE_FAILURES = [
+    pytest.param(
+        {"payload": {**_NAMESPACE, "metadata": {"name": "ns1", "creationTimestamp": API_BODY_CANARY}}},
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        None,
+        id="namespace-unparseable-timestamp",
+    ),
+    pytest.param(
+        {
+            "payload": {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": "d1"},
+                "spec": {"replicas": API_BODY_CANARY},
+            }
+        },
+        lambda c: c.apps_v1.read_namespaced_deployment("d1", "ns1"),
+        lambda c: c.get_deployment("d1", "ns1"),
+        None,
+        id="deployment-non-integer-replicas",
+    ),
+    pytest.param(
+        {"body": _UNDECODABLE_NAMESPACE},
+        lambda c: c.core_v1.read_namespace("ns1"),
+        lambda c: c.get_namespace("ns1"),
+        None,
+        id="namespace-invalid-utf8",
+    ),
+    pytest.param(
+        {"status": 403, "body": _UNDECODABLE_NAMESPACE},
+        lambda c: c.custom_api.delete_namespaced_custom_object("g.io", "v1", "ns1", "things", "t1"),
+        lambda c: c.delete_custom_resource_preconditioned("g.io", "v1", "things", "t1", uid="u1", namespace="ns1"),
+        None,
+        id="preconditioned-delete-invalid-utf8-403",
+        marks=_ONLY_BEFORE_37,
+    ),
+    pytest.param(
+        {"payload": {"metadata": {"name": "t1"}}, "content_type": f"application/x-{API_HEADER_CANARY}"},
+        lambda c: c.custom_api.patch_namespaced_custom_object("g.io", "v1", "ns1", "things", "t1", {"spec": {}}),
+        lambda c: c.patch_custom_resource("g.io", "v1", "things", "t1", {"spec": {}}, namespace="ns1"),
+        MalformedResponseError,
+        id="patch-unsupported-content-type",
+        marks=_ONLY_37,
+    ),
+    pytest.param(
+        {"payload": {"metadata": {"name": "t1"}}, "content_type": f"application/x-{API_HEADER_CANARY}"},
+        lambda c: c.custom_api.get_namespaced_custom_object("g.io", "v1", "ns1", "things", "t1"),
+        lambda c: c.get_custom_resource("g.io", "v1", "things", "t1", namespace="ns1"),
+        MalformedResponseError,
+        id="get-unsupported-content-type",
+        marks=_ONLY_37,
+    ),
+]
+
+
+def _real_typed_kube_client(pool_manager):
+    """`_real_kube_client` plus the installed generated core and apps APIs on the same socket."""
+    from kubernetes.client import AppsV1Api, CoreV1Api
+
+    client = _real_kube_client(pool_manager)
+    client.core_v1 = CoreV1Api(client._api_client)
+    client.apps_v1 = AppsV1Api(client._api_client)
+    return client
+
+
+def _raise_from_installed_client(response, raw_call) -> BaseException:
+    """What the generated API itself raises for `response`; it must carry a canary, or the
+    KubeClient assertions that follow would pass vacuously."""
+    with pytest.raises(Exception) as exc_info:
+        raw_call(_real_typed_kube_client(_RecordingPoolManager(**response)))
+    raw = exc_info.value
+    assert any(
+        canary in text for text in _exception_texts(raw) for canary in API_CANARIES
+    ), f"precondition: kubernetes {kubernetes.__version__} raised {type(raw).__name__} without server text"
+    return raw
+
+
+def _rendered_validation_errors(exc: BaseException) -> list:
+    """pydantic's structured errors, which keep the input even where the message does not."""
+    errors = getattr(exc, "errors", None)
+    return [repr(errors())] if callable(errors) else []
+
+
+@pytest.mark.unit
+class TestInstalledClientResponseTextNeverLeavesKubeClient:
+    """#283 against the installed client: only the HTTP socket is faked."""
+
+    @pytest.mark.parametrize("response,raw_call,kube_call,expected_type", _RESPONSE_FAILURES)
+    def test_no_canary_in_logs_or_exception_text(self, caplog, response, raw_call, kube_call, expected_type):
+        raw = _raise_from_installed_client(response, raw_call)
+        pool_manager = _RecordingPoolManager(**response)
+        client = _real_typed_kube_client(pool_manager)
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            with pytest.raises(Exception) as exc_info:
+                kube_call(client)
+
+        raised = exc_info.value
+        if expected_type is not None:
+            assert type(raised) is expected_type
+        else:
+            # A safe replacement of the same catch family: the SDK's ApiException class, or the
+            # nearest built-in class of what the client raised (a pydantic or parser ValueError
+            # becomes ValueError, a UnicodeDecodeError becomes UnicodeError).
+            for family in (ApiException, ValueError, LookupError, OSError):
+                assert isinstance(raised, family) == isinstance(raw, family)
+            if isinstance(raw, ApiException):
+                assert type(raised) is type(raw)
+        assert getattr(raised, "status", None) == (None if expected_type else getattr(raw, "status", None))
+        assert len(pool_manager.calls) == 1
+        assert_no_canary(caplog.text, *_exception_texts(raised), *_rendered_validation_errors(raised))
+
+    @pytest.mark.parametrize("response,raw_call,kube_call,expected_type", _RESPONSE_FAILURES)
+    def test_no_canary_in_state_file_report_or_verbose_log(
+        self, tmp_path, caplog, response, raw_call, kube_call, expected_type
+    ):
+        import logging
+
+        from lib.cli_outcomes import CliOperationHooks, run_operation_mode, write_python_report
+        from lib.utils import StateManager
+
+        _raise_from_installed_client(response, raw_call)
+        client = _real_typed_kube_client(_RecordingPoolManager(**response))
+        state_path = tmp_path / "state.json"
+        report_dir = tmp_path / "reports"
+        state = StateManager(str(state_path))
+        args = SimpleNamespace(
+            argocd_resume_only=False,
+            verbose=True,
+            state_file=str(state_path),
+            report_dir=str(report_dir),
+            validate_only=False,
+            decommission=False,
+            restore_only=False,
+        )
+        hooks = CliOperationHooks(
+            bind_runtime_hub_identities=Mock(),
+            run_argocd_resume_only=Mock(),
+            execute_operation=lambda *_args: kube_call(client),
+            write_python_report=write_python_report,
+            gitops_reporter_factory=Mock,
+        )
+        logger = logging.getLogger("acm_switchover")
+
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            exit_code = run_operation_mode(
+                args,
+                state,
+                client,
+                None,
+                logger,
+                should_bind_state=False,
+                should_record_state_errors=True,
+                hooks=hooks,
+                exit_success=0,
+                exit_failure=1,
+                exit_interrupt=130,
+            )
+
+        assert exit_code == 1
+        state_text = state_path.read_text(encoding="utf-8")
+        report_text = next(report_dir.iterdir()).read_text(encoding="utf-8")
+        assert json.loads(state_text)["errors"], "the failure is recorded"
+        assert "Traceback" in caplog.text, "the verbose traceback route is exercised"
+        assert_no_canary(state_text, report_text, caplog.text)
+
+    def test_no_canary_in_the_debug_log_of_a_successful_patch(self, caplog):
+        """A successful response is returned whole, but none of it is logged."""
+        pool_manager = _RecordingPoolManager(payload={"metadata": {"name": "t1"}, API_BODY_CANARY: {"x": 1}})
+        client = _real_typed_kube_client(pool_manager)
+
+        with caplog.at_level("DEBUG", logger="acm_switchover"):
+            result = client.patch_custom_resource("g.io", "v1", "things", "t1", {"spec": {}}, namespace="ns1")
+
+        assert API_BODY_CANARY in result, "the response itself is returned unchanged"
+        assert "returned successfully" in caplog.text, "the success-path debug log is exercised"
+        assert_no_canary(caplog.text)
+
+
+# ---------------------------------------------------------------------------
+# #283 guardrails
+# ---------------------------------------------------------------------------
+
+# Attributes of a caught exception that may be formatted, besides `type(X).__name__`.
+_FORMATTABLE_EXCEPTION_ATTRIBUTES = {"status"}
+# The one reader a caught exception may be passed to inside a log or message: it returns the
+# boundary's fixed failure category (a closed set of constants), never the exception's text.
+_FAILURE_CATEGORY_READER = "_failure_category_of"
+_NEVER_READ_ATTRIBUTES = {"body", "headers", "data"}
+_BROAD_EXCEPTION_NAMES = {"Exception", "BaseException"}
+
+
+def _handler_type_names(handler: ast.ExceptHandler) -> set:
+    if handler.type is None:
+        return {"BaseException"}
+    nodes = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return {node.id if isinstance(node, ast.Name) else getattr(node, "attr", "") for node in nodes}
+
+
+def _api_reachable_handlers(tree: ast.AST):
+    """Yield (enclosing function, handler) for every named handler of an API or response error.
+
+    A broad handler (`Exception`, `BaseException`, bare) is always in scope, even after an
+    `ApiException` handler: the installed client raises response failures that are not
+    ApiExceptions (a pydantic or parser ValueError, a decode error) and quote the body.
+    """
+    enclosing = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(function):
+                enclosing[node] = function.name  # inner functions are walked later and win
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        for handler in node.handlers:
+            names = _handler_type_names(handler)
+            if ("ApiException" in names or names & _BROAD_EXCEPTION_NAMES) and handler.name:
+                yield enclosing.get(handler, "<module>"), handler
+
+
+def _is_format_sink(node: ast.AST) -> bool:
+    if isinstance(node, ast.JoinedStr):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and isinstance(node.left, ast.Constant):
+        return isinstance(node.left.value, str)
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in {"str", "repr", "format", "print"}:
+        return True
+    if isinstance(func, ast.Attribute):
+        if func.attr == "format":
+            return True
+        if isinstance(func.value, ast.Name) and func.value.id in {"logger", "logging"}:
+            return True
+    return False
+
+
+def _exception_name_violations(source: str) -> list:
+    tree = ast.parse(source)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    violations = []
+    handlers = list(_api_reachable_handlers(tree))
+    for function, handler in handlers:
+        name = handler.name
+        sinks = []
+        for node in ast.walk(handler):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == name
+                and node.attr in _NEVER_READ_ATTRIBUTES
+            ):
+                violations.append(f"{function}:{node.lineno} reads {name}.{node.attr}")
+            if _is_format_sink(node):
+                sinks.append(node)
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                sinks.append(node.exc)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in {"logger", "logging"}
+                and (node.func.attr == "exception" or any(kw.arg == "exc_info" for kw in node.keywords))
+            ):
+                violations.append(f"{function}:{node.lineno} logs a traceback inside an API error handler")
+        seen = set()
+        for sink in sinks:
+            for node in ast.walk(sink):
+                if not (isinstance(node, ast.Name) and node.id == name) or node in seen:
+                    continue
+                seen.add(node)
+                parent = parents[node]
+                if isinstance(parent, ast.Attribute) and parent.attr in _FORMATTABLE_EXCEPTION_ATTRIBUTES:
+                    continue
+                if (
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Name)
+                    and parent.func.id == _FAILURE_CATEGORY_READER
+                    and parent.args == [node]
+                    and not parent.keywords
+                ):
+                    continue
+                if (
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Name)
+                    and parent.func.id == "type"
+                    and isinstance(parents[parent], ast.Attribute)
+                    and parents[parent].attr == "__name__"
+                ):
+                    continue
+                violations.append(f"{function}:{node.lineno} formats {name} beyond .status/type().__name__")
+    return violations, len(handlers)
+
+
+def _kube_client_source() -> str:
+    return Path(kube_client_module.__file__).read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+class TestApiErrorGuardrails:
+    """#283 guardrails over lib/kube_client.py."""
+
+    def test_caught_api_errors_are_formatted_only_by_status(self):
+        violations, handler_count = _exception_name_violations(_kube_client_source())
+        assert handler_count >= 10, "the scan must actually find the API error handlers"
+        assert violations == []
+
+    def test_the_scan_rejects_a_raw_exception_log(self):
+        """The guardrail bites: a raw `%s, e` log in an ApiException handler is a violation."""
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ApiException as e:\n"
+            "        logger.error('%s', e)\n"
+            "        raise Wrapped(f'{e.status}: {e}')\n"
+        )
+        violations, handler_count = _exception_name_violations(source)
+        assert handler_count == 1
+        assert len(violations) == 2
+
+    def test_the_scan_rejects_a_raw_log_in_a_broad_handler_after_an_api_handler(self):
+        """A broad handler after `except ApiException` still sees response failures that quote the body."""
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ApiException as e:\n"
+            "        raise\n"
+            "    except Exception as e:\n"
+            "        logger.error('%s: %s', type(e).__name__, e)\n"
+            "        raise\n"
+        )
+        violations, handler_count = _exception_name_violations(source)
+        assert handler_count == 2
+        assert violations == ["f:7 formats e beyond .status/type().__name__"]
+
+    def test_the_scan_allows_only_the_category_reader_on_the_handler_name(self):
+        """The fixed failure category may be logged through its one reader; any other helper, an
+        attribute passed to the reader, or an extra argument is still formatting the exception."""
+        allowed = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception as e:\n"
+            "        logger.error('%s: %s', type(e).__name__, _failure_category_of(e))\n"
+        )
+        assert _exception_name_violations(allowed) == ([], 1)
+        rejected = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception as e:\n"
+            "        logger.error('%s', describe(e))\n"
+            "        logger.error('%s', _failure_category_of(e.args))\n"
+            "        logger.error('%s', _failure_category_of(e, e))\n"
+            "        logger.error('%s', e.kube_failure_category)\n"
+        )
+        violations, _ = _exception_name_violations(rejected)
+        assert violations == [
+            "f:5 formats e beyond .status/type().__name__",
+            "f:6 formats e beyond .status/type().__name__",
+            "f:7 formats e beyond .status/type().__name__",
+            "f:7 formats e beyond .status/type().__name__",
+            "f:8 formats e beyond .status/type().__name__",
+        ]
+
+    def test_the_category_attribute_has_one_writer_and_one_reader(self):
+        """Only `_tagged` writes the category and only `_failure_category_of` reads it, both by
+        the named constant: no other code can put text there or take it out."""
+        tree = ast.parse(_kube_client_source())
+        attribute = kube_client_module._FAILURE_CATEGORY_ATTRIBUTE
+        users = []
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef):
+                continue
+            for node in ast.walk(function):
+                if isinstance(node, ast.Name) and node.id == "_FAILURE_CATEGORY_ATTRIBUTE":
+                    users.append(function.name)
+                if isinstance(node, ast.Attribute) and node.attr == attribute:
+                    users.append(f"{function.name}:direct")
+                if isinstance(node, ast.Constant) and node.value == attribute:
+                    users.append(f"{function.name}:literal")
+        assert sorted(users) == ["_failure_category_of", "_tagged"]
+
+    def test_the_category_is_always_one_of_the_closed_set(self):
+        tag = kube_client_module._tagged
+        read = kube_client_module._failure_category_of
+        categories = kube_client_module._FAILURE_CATEGORIES
+        assert read(tag(ValueError("x"), "TLS error")) == "TLS error"
+        stored = tag(ValueError("x"), "server text " + API_BODY_CANARY)
+        assert getattr(stored, kube_client_module._FAILURE_CATEGORY_ATTRIBUTE) == "request failed"
+        assert read(stored) == "request failed"
+        assert read(ValueError(API_BODY_CANARY)) == "request failed", "an untagged exception reads as the fallback"
+        forged = ValueError("x")
+        setattr(forged, kube_client_module._FAILURE_CATEGORY_ATTRIBUTE, API_BODY_CANARY)
+        assert read(forged) == "request failed"
+        assert categories == {
+            "HTTP error",
+            "TLS error",
+            "timed out",
+            "connection error",
+            "malformed response",
+            "request failed",
+        }
+
+    def test_the_scan_rejects_formatting_a_reason(self):
+        """No reason is formatted anywhere: a status-0 reason embeds a response header or value."""
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ApiException as exc:\n"
+            "        if isinstance(exc.reason, str) and exc.reason.startswith('x'):\n"
+            "            raise Wrapped('static') from exc\n"
+            "        raise Wrapped(f'{exc.reason}')\n"
+        )
+        violations, _ = _exception_name_violations(source)
+        assert violations == ["f:7 formats exc beyond .status/type().__name__"]

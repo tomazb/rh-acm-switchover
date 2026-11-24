@@ -5,27 +5,25 @@ This module includes comprehensive input validation for Kubernetes resource
 names, namespaces, and other parameters to improve security and reliability.
 """
 
-import contextlib
 import errno
 import functools
+import http
 import json
 import logging
 import socket
+import ssl
 import sys
 import time
-from typing import Any, Callable, Dict, Iterator, List, Optional, TypedDict
+from contextvars import ContextVar
+from typing import Any, Callable, Dict, List, NoReturn, Optional, TypedDict, TypeVar
 
 from kubernetes import client, config
+from kubernetes.client import exceptions as sdk_exceptions
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
-from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
+from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
+from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError, ProtocolError, ProxyError
+from urllib3.exceptions import SSLError as Urllib3SSLError
 from urllib3.exceptions import TimeoutError as Urllib3TimeoutError
 
 from lib.constants import (
@@ -56,6 +54,8 @@ from lib.strict_read import StrictReadOutcome, StrictReadStatus
 from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
+_T = TypeVar("_T")
+_E = TypeVar("_E", bound=BaseException)
 
 
 class RequestTimeoutKwargs(TypedDict):
@@ -121,44 +121,6 @@ def _json_object(response: object) -> Dict[str, Any]:
             f"Malformed Kubernetes API response: expected a JSON object, got {type(response).__name__}"
         )
     return response
-
-
-_UNSUPPORTED_CONTENT_TYPE_REASON = "Unsupported content type"
-
-
-@contextlib.contextmanager
-def _undecodable_body_is_malformed() -> Iterator[None]:
-    """Report a 2xx body the installed client cannot decode as a malformed response.
-
-    What the generated custom-object methods raise for such a body differs by client version:
-    37.x raises `JSONDecodeError` for invalid JSON and a status-0 `ApiException` for a content
-    type it does not deserialize, and every supported version raises `UnicodeDecodeError` for
-    invalid UTF-8. None of them is an HTTP error, so none may reach a handler written for one.
-    Before 37.x the client decodes an HTTP error's body while raising it, so an undecodable
-    error body surfaces as `UnicodeDecodeError` too; that one is re-raised as the `ApiException`
-    it interrupted, and only that one: an exception the caller was already handling when the
-    request started (say, the 409 a create is reconciling) is not this response's outcome.
-    """
-    inherited = sys.exc_info()[1]
-    try:
-        yield
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        http_error = exc.__context__
-        if (
-            isinstance(http_error, ApiException)
-            and http_error is not inherited
-            and isinstance(http_error.status, int)
-            and http_error.status > 0
-            and not 200 <= http_error.status <= 299
-        ):
-            raise http_error from None
-        raise MalformedResponseError(
-            f"Malformed Kubernetes API response: undecodable body ({type(exc).__name__})"
-        ) from exc
-    except ApiException as exc:
-        if exc.status == 0 and str(exc.reason).startswith(_UNSUPPORTED_CONTENT_TYPE_REASON):
-            raise MalformedResponseError(f"Malformed Kubernetes API response: {exc.reason}") from exc
-        raise
 
 
 def _sanitize_created_resource_for_compare(resource: Any) -> Any:
@@ -293,23 +255,373 @@ def _reject_json_constant(constant: str) -> Any:
     raise ValueError(f"Malformed Kubernetes API response: non-JSON constant {constant}")
 
 
-# Standard retry decorator for API calls
-retry_api_call = retry(
+# ---------------------------------------------------------------------------------------
+# The KubeClient SDK boundary (#283)
+#
+# Every hub request KubeClient makes through the kubernetes client runs inside `_call_sdk`.
+# Nothing the SDK raises or logs while it runs leaves it: a failure is replaced by a fresh
+# exception built only from approved facts (the integer HTTP status, the SDK's own
+# ApiException class, the canonical HTTP phrase, the nearest built-in or urllib3 class, the
+# errno, and a fixed diagnostic), and the SDK's own loggers are silenced for the duration.
+# The replacement keeps every fact a caller branches on, so except clauses, retry decisions
+# and 404/409/410/412/422 handling see the same failure as before.
+# ---------------------------------------------------------------------------------------
+
+# The closed set of failure categories. The boundary tags every replacement with one of them
+# (`_tagged`), and a site that swallows a failure into an outcome reports it through
+# `_failure_category_of`, never through the exception's text.
+_CATEGORY_HTTP = "HTTP error"
+_CATEGORY_TLS = "TLS error"
+_CATEGORY_TIMEOUT = "timed out"
+_CATEGORY_CONNECTION = "connection error"
+_CATEGORY_MALFORMED = "malformed response"
+_CATEGORY_REQUEST = "request failed"
+_FAILURE_CATEGORIES = frozenset(
+    {
+        _CATEGORY_HTTP,
+        _CATEGORY_TLS,
+        _CATEGORY_TIMEOUT,
+        _CATEGORY_CONNECTION,
+        _CATEGORY_MALFORMED,
+        _CATEGORY_REQUEST,
+    }
+)
+_FAILURE_CATEGORY_ATTRIBUTE = "kube_failure_category"
+
+_TLS_FAILURE = "Kubernetes API request failed: TLS error"
+_TIMEOUT_FAILURE = "Kubernetes API request failed: timed out"
+_CONNECTION_FAILURE = "Kubernetes API request failed: connection error"
+_REQUEST_FAILURE = "Kubernetes API request failed"
+_UNSUPPORTED_CONTENT_TYPE = "Malformed Kubernetes API response: unsupported content type"
+_UNDECODABLE_BODY = "Malformed Kubernetes API response: undecodable body"
+_OFF_MODEL_BODY = "Malformed Kubernetes API response: body does not match the expected model"
+_NO_STANDARD_PHRASE = "HTTP status without a standard reason phrase"
+_FAILURE_DIAGNOSTICS = frozenset({_TLS_FAILURE, _TIMEOUT_FAILURE, _CONNECTION_FAILURE, _REQUEST_FAILURE})
+_TRANSPORT_MESSAGES = {
+    _CATEGORY_TLS: _TLS_FAILURE,
+    _CATEGORY_TIMEOUT: _TIMEOUT_FAILURE,
+    _CATEGORY_CONNECTION: _CONNECTION_FAILURE,
+    _CATEGORY_REQUEST: _REQUEST_FAILURE,
+}
+# The installed client's module that turns a received body into a model, and the marker in the
+# names of its functions that do so (`deserialize`, `response_deserialize`, `__deserialize_model`).
+_SDK_DESERIALIZER_MODULE = "kubernetes.client.api_client"
+_DESERIALIZE_MARKER = "deserialize"
+_MAX_TRACEBACK_FRAMES = 64
+
+# The fixed prefix of the SDK's own status-0 reason for a content type it does not deserialize
+# (37.x). Read to classify only; the rest of that reason is the response's Content-Type header.
+_UNSUPPORTED_CONTENT_TYPE_REASON = "Unsupported content type"
+# Modules whose exception classes a replacement may be built from: an instance holds only what
+# it is constructed with. A class whose constructor needs more than a message is passed over
+# for its parent.
+_REPLACEMENT_MODULES = frozenset({"builtins", "urllib3.exceptions"})
+_SDK_API_EXCEPTIONS = frozenset(
+    cls for cls in vars(sdk_exceptions).values() if isinstance(cls, type) and issubclass(cls, ApiException)
+)
+_TLS_ERRORS = (Urllib3SSLError, ssl.SSLError)
+# Exception links the TLS/timeout/connection classification follows, by type only.
+_MAX_FAILURE_LINKS = 16
+
+# Loggers the installed kubernetes client and urllib3 emit from while a request runs: response
+# bodies (29.x `rest`), connection failures and redirect targets, and retried URLs. A filter on
+# a parent logger does not see a child's records, so each emitting logger carries it.
+_SDK_LOGGER_NAMES = (
+    "kubernetes.client.rest",
+    "urllib3.connection",
+    "urllib3.connectionpool",
+    "urllib3.poolmanager",
+    "urllib3.response",
+    "urllib3.util.retry",
+)
+_SDK_CALL_ACTIVE: ContextVar[bool] = ContextVar("kube_client_sdk_call_active", default=False)
+
+
+class _SdkCallLogFilter(logging.Filter):
+    """Drop every record of an SDK logger while a KubeClient SDK call is active in this context.
+
+    Filters run in the emitting thread before any handler, so a record dropped here reaches no
+    log. Another thread, or a call outside `_call_sdk`, keeps its records.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _SDK_CALL_ACTIVE.get()
+
+
+# One stateless instance, registered once at import (serialized by the import lock), before
+# any KubeClient call can run.
+_SDK_LOG_FILTER = _SdkCallLogFilter()
+for _logger_name in _SDK_LOGGER_NAMES:
+    logging.getLogger(_logger_name).addFilter(_SDK_LOG_FILTER)
+
+
+def _tagged(replacement: _E, category: str) -> _E:
+    """Tag a replacement with its failure category. The only writer of the category attribute;
+    a value outside the closed set is recorded as `request failed`."""
+    setattr(
+        replacement,
+        _FAILURE_CATEGORY_ATTRIBUTE,
+        category if category in _FAILURE_CATEGORIES else _CATEGORY_REQUEST,
+    )
+    return replacement
+
+
+def _failure_category_of(exc: BaseException) -> str:
+    """The fixed category the boundary tagged `exc` with, else `request failed`.
+
+    The only reader of the category attribute, and the one way a site that swallows a failure
+    may describe it beyond its HTTP status and class name: the value is always one of the
+    closed set of constants, never text taken from the exception.
+    """
+    category = getattr(exc, _FAILURE_CATEGORY_ATTRIBUTE, None)
+    if isinstance(category, str) and category in _FAILURE_CATEGORIES:
+        return category
+    return _CATEGORY_REQUEST
+
+
+def _transport_category(raw: BaseException) -> str:
+    """The fixed category of a request failure, decided by exception type only.
+
+    Follows the links that wrap a transport failure, and nothing else: a status-0 ApiException's
+    cause and context (the SDK raises one while handling urllib3's SSLError), MaxRetryError's
+    `reason` and ProxyError's `original_error`. Bounded and cycle-safe.
+    """
+    seen: set = set()
+    found: List[BaseException] = []
+    pending: List[Any] = [raw]
+    while pending and len(found) < _MAX_FAILURE_LINKS:
+        current = pending.pop()
+        if not isinstance(current, BaseException) or id(current) in seen:
+            continue
+        seen.add(id(current))
+        found.append(current)
+        if isinstance(current, ApiException):
+            if current.status == 0:
+                pending.extend((current.__cause__, current.__context__))
+        elif isinstance(current, MaxRetryError):
+            pending.append(current.reason)
+        elif isinstance(current, ProxyError):
+            pending.append(current.original_error)
+    if any(isinstance(link, _TLS_ERRORS) for link in found):
+        return _CATEGORY_TLS
+    # NewConnectionError subclasses urllib3's ConnectTimeoutError, so it is decided first.
+    if any(isinstance(link, NewConnectionError) for link in found):
+        return _CATEGORY_CONNECTION
+    if any(isinstance(link, (Urllib3TimeoutError, TimeoutError)) for link in found):
+        return _CATEGORY_TIMEOUT
+    if any(isinstance(link, (ProtocolError, ConnectionError)) for link in found):
+        return _CATEGORY_CONNECTION
+    return _CATEGORY_REQUEST
+
+
+def _is_unsupported_content_type(exc: ApiException) -> bool:
+    return exc.status == 0 and isinstance(exc.reason, str) and exc.reason.startswith(_UNSUPPORTED_CONTENT_TYPE_REASON)
+
+
+def _is_undecodable_body(raw: BaseException) -> bool:
+    """A received body the client could not decode, by exception type only."""
+    return isinstance(raw, (json.JSONDecodeError, UnicodeDecodeError)) or type(raw) is LookupError
+
+
+def _raised_while_deserializing(raw: BaseException) -> bool:
+    """Whether `raw` was raised while the installed client turned a received body into a model.
+
+    Reads only code identity from the traceback (each frame's module and function name), never
+    a value: deserialization runs only after a response arrived, so a failure there is a
+    malformed response, while the same class raised preparing the request is not.
+    """
+    tb = raw.__traceback__
+    for _ in range(_MAX_TRACEBACK_FRAMES):
+        if tb is None:
+            return False
+        frame = tb.tb_frame
+        if frame.f_globals.get("__name__") == _SDK_DESERIALIZER_MODULE and _DESERIALIZE_MARKER in frame.f_code.co_name:
+            return True
+        tb = tb.tb_next
+    return False
+
+
+def _safe_api_exception(raw: ApiException) -> ApiException:
+    """The SDK's own ApiException class with the integer status and a fixed reason.
+
+    The reason is the canonical HTTP phrase, or a fixed diagnostic for status 0 (the SDK's own
+    TLS, content-type and value-parse failures), a missing or invalid status (published as 0,
+    which no caller retries) and a status without a standard phrase. Never None: callers
+    format it.
+    """
+    status = raw.status if type(raw.status) is int else 0
+    if status == 0:
+        if _is_unsupported_content_type(raw):
+            category, reason = _CATEGORY_MALFORMED, _UNSUPPORTED_CONTENT_TYPE
+        elif _raised_while_deserializing(raw):
+            # 29.x raises its own status-0 ApiException for a value it cannot parse (a timestamp).
+            category, reason = _CATEGORY_MALFORMED, f"{_OFF_MODEL_BODY} ({type(raw).__name__})"
+        else:
+            category = _transport_category(raw)
+            reason = _TRANSPORT_MESSAGES[category]
+    else:
+        category = _CATEGORY_HTTP
+        try:
+            reason = http.HTTPStatus(status).phrase
+        except ValueError:
+            reason = _NO_STANDARD_PHRASE
+    cls = type(raw) if type(raw) in _SDK_API_EXCEPTIONS else ApiException
+    return _tagged(cls(status=status, reason=reason), category)
+
+
+def _safe_failure(raw: Exception) -> Exception:
+    """A fresh exception of `raw`'s nearest built-in or urllib3 class, with a fixed diagnostic.
+
+    Walking `raw`'s own MRO keeps every except clause and `is_retryable_error` answer: a pydantic
+    or parser ValueError becomes ValueError, a UnicodeDecodeError becomes UnicodeError,
+    MaxRetryError becomes urllib3's HTTPError, and an OSError keeps its class and errno. The
+    errno is assigned, not passed: `OSError(errno, ...)` would pick a different built-in subclass.
+
+    A body that arrived but could not be decoded, or deserialized into the client's model, is
+    named a malformed response: only the message and category say so, the class is the same.
+    """
+    if _is_undecodable_body(raw):
+        category, message = _CATEGORY_MALFORMED, f"{_UNDECODABLE_BODY} ({type(raw).__name__})"
+    elif _raised_while_deserializing(raw):
+        category, message = _CATEGORY_MALFORMED, f"{_OFF_MODEL_BODY} ({type(raw).__name__})"
+    else:
+        category = _transport_category(raw)
+        message = _TRANSPORT_MESSAGES[category]
+    for family in type(raw).__mro__:
+        if family.__module__ not in _REPLACEMENT_MODULES or not issubclass(family, Exception):
+            continue
+        try:
+            replacement = family(message)
+        except TypeError:  # its constructor needs more than a message: try the next class up
+            continue
+        if isinstance(replacement, OSError):
+            replacement.errno = getattr(raw, "errno", None)
+        return _tagged(replacement, category)
+    return _tagged(Exception(message), category)
+
+
+def _malformed_body(raw: Exception, inherited: Optional[BaseException]) -> Optional[Exception]:
+    """Classify a custom-object response the installed client could not decode, else None.
+
+    What the generated custom-object methods raise for an undecodable 2xx body differs by
+    client version: JSONDecodeError, UnicodeDecodeError, or (37.x) LookupError for an unknown
+    response charset and a status-0 ApiException for a content type it does not deserialize.
+    None of them is an HTTP error, so each is a malformed response. An HTTP error that decoding
+    interrupted keeps its status, unless that error was already being handled when the request
+    started (say, the 409 a create is reconciling): it is not this response's outcome.
+    """
+    if _is_undecodable_body(raw):
+        http_error = raw.__context__
+        if (
+            isinstance(http_error, ApiException)
+            and http_error is not inherited
+            and type(http_error.status) is int
+            and http_error.status > 0
+            and not 200 <= http_error.status <= 299
+        ):
+            return _safe_api_exception(http_error)
+        return _tagged(
+            MalformedResponseError(f"{_UNDECODABLE_BODY} ({type(raw).__name__})"),
+            _CATEGORY_MALFORMED,
+        )
+    if isinstance(raw, ApiException) and _is_unsupported_content_type(raw):
+        return _tagged(MalformedResponseError(_UNSUPPORTED_CONTENT_TYPE), _CATEGORY_MALFORMED)
+    return None
+
+
+def _raise_alone(replacement: BaseException) -> NoReturn:
+    """Raise `replacement` without the exception its caller may be handling as its context."""
+    try:
+        raise replacement
+    finally:
+        replacement.__context__ = None
+
+
+def _call_sdk(operation: Callable[[], _T], *, malformed_body: bool = False) -> _T:
+    """Run one KubeClient SDK operation inside the #283 boundary.
+
+    `operation` is the whole SDK step, from request preparation to the last body read or
+    model conversion. It runs exactly once; retry stays with the caller. While it runs, the
+    SDK's loggers are silenced in this context. If it fails, a safe replacement is raised in
+    its place, outside the handler, so no link to the SDK's exception survives. With
+    `malformed_body`, a custom-object body the client could not decode is classified first
+    (`_malformed_body`). A process interrupt is not an `Exception` and passes through.
+    """
+    inherited = sys.exc_info()[1]
+    active = _SDK_CALL_ACTIVE.set(True)
+    try:
+        return operation()
+    except Exception as raw:
+        replacement = _malformed_body(raw, inherited) if malformed_body else None
+        if replacement is None:
+            replacement = _safe_api_exception(raw) if isinstance(raw, ApiException) else _safe_failure(raw)
+    finally:
+        _SDK_CALL_ACTIVE.reset(active)
+    _raise_alone(replacement)
+
+
+def _failure_summary(exc: BaseException) -> str:
+    """Status or fixed category only, for a retry log line."""
+    if isinstance(exc, ApiException):
+        return f"HTTP {exc.status}"
+    if exc.args and exc.args[-1] in _FAILURE_DIAGNOSTICS:
+        return f"{type(exc).__name__} ({exc.args[-1]})"
+    return type(exc).__name__
+
+
+def _log_retry(retry_state: RetryCallState) -> None:
+    """tenacity `before_sleep`: called only after a failed attempt that will be retried."""
+    logger.debug(
+        "Retrying %s in %s seconds after %s",
+        getattr(retry_state.fn, "__qualname__", "Kubernetes API call"),
+        retry_state.next_action.sleep,
+        _failure_summary(retry_state.outcome.exception()),
+    )
+
+
+def _published(retried: Callable[..., Any]) -> Callable[..., Any]:
+    """`retried` (a tenacity-wrapped function) with its final exception detached from the
+    caller's: tenacity re-raises the last attempt's exception from its own frame, where Python
+    attaches whatever the caller is handling as that exception's context."""
+
+    @functools.wraps(retried)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        inherited = sys.exc_info()[1]
+        try:
+            return retried(*args, **kwargs)
+        except Exception as exc:
+            if inherited is not None and exc.__context__ is inherited:
+                exc.__context__ = None
+            raise
+
+    return wrapper
+
+
+_retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(5),
-    before_sleep=before_sleep_log(logger, logging.DEBUG),
+    before_sleep=_log_retry,
     reraise=True,
 )
 
-# Advisory discovery retains retries but deliberately has no before-sleep
-# logger because exception strings may contain server-provided response data.
-retry_api_call_advisory = retry(
+# Advisory reads retry the same way but log nothing between attempts.
+_retry_api_call_advisory = retry(
     retry=retry_if_exception(_should_retry),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(5),
     reraise=True,
 )
+
+
+def retry_api_call(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Standard retry decorator for API calls: 5xx/429 and transport failures, five attempts."""
+    return _published(_retry_api_call(func))
+
+
+def retry_api_call_advisory(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Retry decorator without between-attempt logging."""
+    return _published(_retry_api_call_advisory(func))
 
 
 def api_call(
@@ -349,7 +661,7 @@ def api_call(
                 if is_retryable_error(e):
                     raise
                 if log_on_error:
-                    logger.error("Failed to %s: %s", desc, e)
+                    logger.error("Failed to %s: HTTP %s", desc, e.status)
                 raise
 
         # Apply retry decorator
@@ -458,37 +770,43 @@ class KubeClient:
         raising on HTTP errors; older clients take everything in one `call_api` whose
         deserialization keyword was itself renamed (`response_type` on 28.x/31.x,
         `response_types_map` on 36.x), so it is bypassed with `_preload_content=False`. The
-        generation is detected by feature, never by version string.
+        generation is detected by feature, never by version string. The whole exchange, the
+        deferred body read included, is one `_call_sdk` operation.
         """
-        if hasattr(self._api_client, "param_serialize"):
-            prepared = self._api_client.param_serialize(
-                method,
+
+        def exchange() -> bytes:
+            if hasattr(self._api_client, "param_serialize"):
+                prepared = self._api_client.param_serialize(
+                    method,
+                    path,
+                    path_params=path_params,
+                    header_params=dict(header_params or {}),
+                    body=body,
+                    auth_settings=["BearerToken"],
+                )
+                raw = self._api_client.call_api(*prepared, _request_timeout=timeout)
+                data = raw.read()
+                if not 200 <= raw.status <= 299:
+                    # Raises the status-specific ApiException, as the generated API methods do.
+                    self._api_client.response_deserialize(raw, response_types_map={})
+                return data
+            # The pre-37 `call_api` signature; 37.x's type annotations do not describe it.
+            legacy_call_api: Callable[..., Any] = self._api_client.call_api
+            raw = legacy_call_api(
                 path,
+                method,
                 path_params=path_params,
                 header_params=dict(header_params or {}),
                 body=body,
                 auth_settings=["BearerToken"],
+                _preload_content=False,
+                _return_http_data_only=True,
+                _request_timeout=timeout,
             )
-            raw = self._api_client.call_api(*prepared, _request_timeout=timeout)
-            data = raw.read()
-            if not 200 <= raw.status <= 299:
-                # Raises the status-specific ApiException, as the generated API methods do.
-                self._api_client.response_deserialize(raw, response_types_map={})
-            return data
-        # The pre-37 `call_api` signature; 37.x's type annotations do not describe it.
-        legacy_call_api: Callable[..., Any] = self._api_client.call_api
-        raw = legacy_call_api(
-            path,
-            method,
-            path_params=path_params,
-            header_params=dict(header_params or {}),
-            body=body,
-            auth_settings=["BearerToken"],
-            _preload_content=False,
-            _return_http_data_only=True,
-            _request_timeout=timeout,
-        )
-        return raw.data
+            # 29.x reads the body here, on first access.
+            return raw.data
+
+        return _call_sdk(exchange)
 
     def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
         """Positively determine whether one kind is served, or fail closed.
@@ -504,16 +822,28 @@ class KubeClient:
         discovery cache swallows some failures into an empty resource list.
         """
         path = f"/apis/{group}/{version}" if group else f"/api/{version}"
+        # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
+        # transport failure, and an undecodable body are all indistinguishable from an
+        # unserved kind, so none of them may be reported as absence. The log names which.
+        try:
+            data = self._request_bytes("GET", path, timeout=self.request_timeout)
+        except ApiException as exc:
+            logger.warning(
+                "Discovery of %s could not be verified: HTTP %s (%s)", path, exc.status, _failure_category_of(exc)
+            )
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        except Exception as exc:
+            logger.warning(
+                "Discovery of %s could not be verified (%s: %s)", path, type(exc).__name__, _failure_category_of(exc)
+            )
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
         try:
             # The raw body is decoded here rather than by the client: client-side
             # deserialization differs across the supported dependency range, which would make
             # this prover version-dependent — the exact failure mode it exists to avoid.
-            data = self._request_bytes("GET", path, timeout=self.request_timeout)
             response = json.loads(data.decode("utf-8"))
         except Exception:
-            # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
-            # transport failure, and an undecodable body are all indistinguishable from an
-            # unserved kind, so none of them may be reported as absence.
+            logger.warning("Discovery of %s could not be verified (%s)", path, _CATEGORY_MALFORMED)
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
 
         if not isinstance(response, dict):
@@ -581,8 +911,7 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace=name)
 
-        ns = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
-        return ns.to_dict()
+        return _call_sdk(lambda: self.core_v1.read_namespace(name, **self._request_timeout_kwargs()).to_dict())
 
     def namespace_exists(self, name: str) -> bool:
         """Check if namespace exists.
@@ -601,8 +930,7 @@ class KubeClient:
     @retry_api_call_advisory
     def _read_cluster_identity_namespace(self) -> Dict:
         """Read kube-system identity evidence without generic API-error logging."""
-        namespace = self.core_v1.read_namespace("kube-system", **self._request_timeout_kwargs())
-        return namespace.to_dict()
+        return _call_sdk(lambda: self.core_v1.read_namespace("kube-system", **self._request_timeout_kwargs()).to_dict())
 
     def get_cluster_identity(self) -> Dict[str, Optional[str]]:
         """Return a stable live identity for the connected cluster."""
@@ -622,8 +950,12 @@ class KubeClient:
         Raises:
             None (uses api_call decorator for error handling)
         """
-        result = self.core_v1.list_namespace(**self._request_timeout_kwargs())
-        return [ns.to_dict() for ns in (result.items or [])]
+
+        def list_all() -> List[Dict]:
+            result = self.core_v1.list_namespace(**self._request_timeout_kwargs())
+            return [ns.to_dict() for ns in (result.items or [])]
+
+        return _call_sdk(list_all)
 
     @api_call(not_found_value=None, log_on_error=False)
     def get_secret(self, namespace: str, name: str) -> Optional[Dict]:
@@ -641,12 +973,13 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "secret")
 
-        secret = self.core_v1.read_namespaced_secret(
-            name=name,
-            namespace=namespace,
-            **self._request_timeout_kwargs(),
+        return _call_sdk(
+            lambda: self.core_v1.read_namespaced_secret(
+                name=name,
+                namespace=namespace,
+                **self._request_timeout_kwargs(),
+            ).to_dict()
         )
-        return secret.to_dict()
 
     def secret_exists(self, namespace: str, name: str) -> bool:
         """Check if a secret exists.
@@ -682,24 +1015,26 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "ConfigMap")
 
-        cm = self.core_v1.read_namespaced_config_map(
-            name=name,
-            namespace=namespace,
-            **self._request_timeout_kwargs(),
+        return _call_sdk(
+            lambda: self.core_v1.read_namespaced_config_map(
+                name=name,
+                namespace=namespace,
+                **self._request_timeout_kwargs(),
+            ).to_dict()
         )
-        return cm.to_dict()
 
     def _get_configmap_raw(self, namespace: str, name: str) -> Optional[Dict]:
         """Read a ConfigMap once without generic API-error logging."""
         self._validate_resource_inputs(namespace, name, "ConfigMap")
 
         try:
-            configmap = self.core_v1.read_namespaced_config_map(
-                name=name,
-                namespace=namespace,
-                **self._request_timeout_kwargs(),
+            return _call_sdk(
+                lambda: self.core_v1.read_namespaced_config_map(
+                    name=name,
+                    namespace=namespace,
+                    **self._request_timeout_kwargs(),
+                ).to_dict()
             )
-            return configmap.to_dict()
         except ApiException as exc:
             if exc.status == 404:
                 return None
@@ -762,12 +1097,13 @@ class KubeClient:
             data=data,
         )
         try:
-            result = self.core_v1.create_namespaced_config_map(
-                namespace=namespace,
-                body=create_body,
-                **self._request_timeout_kwargs(),
+            return _call_sdk(
+                lambda: self.core_v1.create_namespaced_config_map(
+                    namespace=namespace,
+                    body=create_body,
+                    **self._request_timeout_kwargs(),
+                ).to_dict()
             )
-            return result.to_dict()
         except ApiException as e:
             if e.status == 409:
                 # ConfigMap already exists (concurrent create or timeout-after-create);
@@ -777,16 +1113,17 @@ class KubeClient:
                     namespace,
                     name,
                 )
-                result = self.core_v1.patch_namespaced_config_map(
-                    name=name,
-                    namespace=namespace,
-                    body={"data": data},
-                    **self._request_timeout_kwargs(),
+                return _call_sdk(
+                    lambda: self.core_v1.patch_namespaced_config_map(
+                        name=name,
+                        namespace=namespace,
+                        body={"data": data},
+                        **self._request_timeout_kwargs(),
+                    ).to_dict()
                 )
-                return result.to_dict()
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
+            logger.error("Failed to create/patch configmap %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @api_call(not_found_value=True, resource_desc="delete configmap")
@@ -809,7 +1146,11 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        _call_sdk(
+            lambda: self.core_v1.delete_namespaced_config_map(
+                name=name, namespace=namespace, **self._request_timeout_kwargs()
+            )
+        )
         return True
 
     @api_call(not_found_value=True, resource_desc="delete pod")
@@ -832,7 +1173,9 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
             return True
 
-        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        _call_sdk(
+            lambda: self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, **self._request_timeout_kwargs())
+        )
         return True
 
     @api_call(not_found_value=None, resource_desc="read Route")
@@ -851,15 +1194,17 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "Route")
 
-        with _undecodable_body_is_malformed():
-            route = self.custom_api.get_namespaced_custom_object(
+        route = _call_sdk(
+            lambda: self.custom_api.get_namespaced_custom_object(
                 group="route.openshift.io",
                 version="v1",
                 namespace=namespace,
                 plural="routes",
                 name=name,
                 **self._request_timeout_kwargs(),
-            )
+            ),
+            malformed_body=True,
+        )
         return _json_object(route).get("spec", {}).get("host")
 
     @api_call(not_found_value=None, log_on_error=False)
@@ -889,24 +1234,29 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "custom resource")
 
-        with _undecodable_body_is_malformed():
-            if namespace:
-                resource = self.custom_api.get_namespaced_custom_object(
+        if namespace:
+            resource = _call_sdk(
+                lambda: self.custom_api.get_namespaced_custom_object(
                     group=group,
                     version=version,
                     namespace=namespace,
                     plural=plural,
                     name=name,
                     **self._request_timeout_kwargs(),
-                )
-            else:
-                resource = self.custom_api.get_cluster_custom_object(
+                ),
+                malformed_body=True,
+            )
+        else:
+            resource = _call_sdk(
+                lambda: self.custom_api.get_cluster_custom_object(
                     group=group,
                     version=version,
                     plural=plural,
                     name=name,
                     **self._request_timeout_kwargs(),
-                )
+                ),
+                malformed_body=True,
+            )
         return _json_object(resource)
 
     def _get_custom_resource_raw(
@@ -921,24 +1271,29 @@ class KubeClient:
         self._validate_resource_inputs(namespace, name, "custom resource")
 
         try:
-            with _undecodable_body_is_malformed():
-                if namespace:
-                    resource = self.custom_api.get_namespaced_custom_object(
+            if namespace:
+                resource = _call_sdk(
+                    lambda: self.custom_api.get_namespaced_custom_object(
                         group=group,
                         version=version,
                         namespace=namespace,
                         plural=plural,
                         name=name,
                         **self._request_timeout_kwargs(),
-                    )
-                else:
-                    resource = self.custom_api.get_cluster_custom_object(
+                    ),
+                    malformed_body=True,
+                )
+            else:
+                resource = _call_sdk(
+                    lambda: self.custom_api.get_cluster_custom_object(
                         group=group,
                         version=version,
                         plural=plural,
                         name=name,
                         **self._request_timeout_kwargs(),
-                    )
+                    ),
+                    malformed_body=True,
+                )
         except ApiException as e:
             if e.status == 404:
                 return None
@@ -1027,9 +1382,9 @@ class KubeClient:
                 remaining = max_items - len(items)
 
             try:
-                with _undecodable_body_is_malformed():
-                    if namespace:
-                        result = self.custom_api.list_namespaced_custom_object(
+                if namespace:
+                    result = _call_sdk(
+                        lambda: self.custom_api.list_namespaced_custom_object(
                             group=group,
                             version=version,
                             namespace=namespace,
@@ -1038,9 +1393,12 @@ class KubeClient:
                             _continue=continue_token,
                             limit=remaining,
                             **self._request_timeout_kwargs(),
-                        )
-                    else:
-                        result = self.custom_api.list_cluster_custom_object(
+                        ),
+                        malformed_body=True,
+                    )
+                else:
+                    result = _call_sdk(
+                        lambda: self.custom_api.list_cluster_custom_object(
                             group=group,
                             version=version,
                             plural=plural,
@@ -1048,7 +1406,9 @@ class KubeClient:
                             _continue=continue_token,
                             limit=remaining,
                             **self._request_timeout_kwargs(),
-                        )
+                        ),
+                        malformed_body=True,
+                    )
             except ApiException as e:
                 if e.status == 404:
                     return []
@@ -1135,33 +1495,41 @@ class KubeClient:
         for _ in range(STRICT_READ_MAX_PAGES):
             try:
                 if namespace:
-                    page = self.custom_api.list_namespaced_custom_object(
-                        group=group,
-                        version=version,
-                        namespace=namespace,
-                        plural=plural,
-                        label_selector=label_selector,
-                        _continue=continue_token,
-                        limit=STRICT_READ_PAGE_LIMIT,
-                        **self._request_timeout_kwargs(),
+                    page = _call_sdk(
+                        lambda: self.custom_api.list_namespaced_custom_object(
+                            group=group,
+                            version=version,
+                            namespace=namespace,
+                            plural=plural,
+                            label_selector=label_selector,
+                            _continue=continue_token,
+                            limit=STRICT_READ_PAGE_LIMIT,
+                            **self._request_timeout_kwargs(),
+                        )
                     )
                 else:
-                    page = self.custom_api.list_cluster_custom_object(
-                        group=group,
-                        version=version,
-                        plural=plural,
-                        label_selector=label_selector,
-                        _continue=continue_token,
-                        limit=STRICT_READ_PAGE_LIMIT,
-                        **self._request_timeout_kwargs(),
+                    page = _call_sdk(
+                        lambda: self.custom_api.list_cluster_custom_object(
+                            group=group,
+                            version=version,
+                            plural=plural,
+                            label_selector=label_selector,
+                            _continue=continue_token,
+                            limit=STRICT_READ_PAGE_LIMIT,
+                            **self._request_timeout_kwargs(),
+                        )
                     )
             except ApiException as exc:
                 # 410 Gone means the continuation expired: discard the prefix and
                 # restart the whole read rather than returning what was collected.
                 if exc.status == 410 and continue_token is not None:
                     return _RESTART_READ
+                logger.warning("Strict list of %s failed: HTTP %s (%s)", plural, exc.status, _failure_category_of(exc))
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Strict list of %s did not complete (%s: %s)", plural, type(exc).__name__, _failure_category_of(exc)
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
             if not isinstance(page, dict):
@@ -1219,27 +1587,41 @@ class KubeClient:
 
         try:
             if namespace:
-                resource = self.custom_api.get_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                    **self._request_timeout_kwargs(request_timeout),
+                resource = _call_sdk(
+                    lambda: self.custom_api.get_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                        **self._request_timeout_kwargs(request_timeout),
+                    )
                 )
             else:
-                resource = self.custom_api.get_cluster_custom_object(
-                    group=group,
-                    version=version,
-                    plural=plural,
-                    name=name,
-                    **self._request_timeout_kwargs(request_timeout),
+                resource = _call_sdk(
+                    lambda: self.custom_api.get_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        name=name,
+                        **self._request_timeout_kwargs(request_timeout),
+                    )
                 )
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            logger.warning(
+                "Strict read of %s/%s failed: HTTP %s (%s)", plural, name, exc.status, _failure_category_of(exc)
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of %s/%s did not complete (%s: %s)",
+                plural,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         if not isinstance(resource, dict):
@@ -1260,12 +1642,21 @@ class KubeClient:
         # published as a positive absence proof. `get_namespace` and `list_pods_strict` agree.
         self._validate_resource_inputs(namespace=name)
         try:
-            namespace = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
+            namespace = _call_sdk(lambda: self.core_v1.read_namespace(name, **self._request_timeout_kwargs()))
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.namespace_absent(STRICT_READ_REASON_NAMESPACE_NOT_FOUND)
+            logger.warning(
+                "Strict read of namespaces/%s failed: HTTP %s (%s)", name, exc.status, _failure_category_of(exc)
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of namespaces/%s did not complete (%s: %s)",
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         metadata = getattr(namespace, "metadata", None)
@@ -1304,12 +1695,14 @@ class KubeClient:
 
         for _ in range(STRICT_READ_MAX_PAGES):
             try:
-                page = self.core_v1.list_namespaced_pod(
-                    namespace=namespace,
-                    label_selector=label_selector,
-                    _continue=continue_token,
-                    limit=STRICT_READ_PAGE_LIMIT,
-                    **self._request_timeout_kwargs(),
+                page = _call_sdk(
+                    lambda: self.core_v1.list_namespaced_pod(
+                        namespace=namespace,
+                        label_selector=label_selector,
+                        _continue=continue_token,
+                        limit=STRICT_READ_PAGE_LIMIT,
+                        **self._request_timeout_kwargs(),
+                    )
                 )
             except ApiException as exc:
                 if exc.status == 410 and continue_token is not None:
@@ -1321,8 +1714,17 @@ class KubeClient:
                     if namespace_outcome.status is StrictReadStatus.NAMESPACE_ABSENT:
                         return namespace_outcome
                     return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
+                logger.warning(
+                    "Strict list of pods in %s failed: HTTP %s (%s)", namespace, exc.status, _failure_category_of(exc)
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Strict list of pods in %s did not complete (%s: %s)",
+                    namespace,
+                    type(exc).__name__,
+                    _failure_category_of(exc),
+                )
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
             page_items = getattr(page, "items", None)
@@ -1362,22 +1764,42 @@ class KubeClient:
 
     def get_deployment_strict(self, name: str, namespace: str) -> StrictReadOutcome:
         """Strictly GET one Deployment with its identity, or fail closed."""
-        return self._get_apps_object_strict(self.apps_v1.read_namespaced_deployment, name, namespace)
+        return self._get_apps_object_strict("read_namespaced_deployment", name, namespace)
 
     def get_replicaset_strict(self, name: str, namespace: str) -> StrictReadOutcome:
         """Strictly GET one ReplicaSet with its identity, or fail closed."""
-        return self._get_apps_object_strict(self.apps_v1.read_namespaced_replica_set, name, namespace)
+        return self._get_apps_object_strict("read_namespaced_replica_set", name, namespace)
 
-    def _get_apps_object_strict(self, reader, name: str, namespace: str) -> StrictReadOutcome:
-        """One bounded named Apps GET whose success always carries identity."""
+    def _get_apps_object_strict(self, reader: str, name: str, namespace: str) -> StrictReadOutcome:
+        """One bounded named Apps GET, by the `AppsV1Api` reader's name, whose success always
+        carries identity. The reader is named rather than passed bound so the SDK object is only
+        ever reached inside `_call_sdk`."""
         self._validate_resource_inputs(namespace, name, "apps object")
         try:
-            model = reader(name=name, namespace=namespace, **self._request_timeout_kwargs())
+            model = _call_sdk(
+                lambda: getattr(self.apps_v1, reader)(name=name, namespace=namespace, **self._request_timeout_kwargs())
+            )
         except ApiException as exc:
             if exc.status == 404:
                 return StrictReadOutcome.object_absent(STRICT_READ_REASON_OBJECT_NOT_FOUND)
+            logger.warning(
+                "Strict read of %s %s/%s failed: HTTP %s (%s)",
+                reader,
+                namespace,
+                name,
+                exc.status,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Strict read of %s %s/%s did not complete (%s: %s)",
+                reader,
+                namespace,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
+            )
             return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
         resource = self._model_to_mapping(model)
@@ -1442,10 +1864,10 @@ class KubeClient:
         )
 
         try:
-            with _undecodable_body_is_malformed():
-                if namespace:
-                    logger.debug("KUBE_CLIENT: Calling patch_namespaced_custom_object...")
-                    result = self.custom_api.patch_namespaced_custom_object(
+            if namespace:
+                logger.debug("KUBE_CLIENT: Calling patch_namespaced_custom_object...")
+                result = _call_sdk(
+                    lambda: self.custom_api.patch_namespaced_custom_object(
                         group=group,
                         version=version,
                         namespace=namespace,
@@ -1453,43 +1875,37 @@ class KubeClient:
                         name=name,
                         body=patch,
                         **self._request_timeout_kwargs(),
-                    )
-                    logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
-                else:
-                    logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
-                    result = self.custom_api.patch_cluster_custom_object(
+                    ),
+                    malformed_body=True,
+                )
+                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+            else:
+                logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
+                result = _call_sdk(
+                    lambda: self.custom_api.patch_cluster_custom_object(
                         group=group,
                         version=version,
                         plural=plural,
                         name=name,
                         body=patch,
                         **self._request_timeout_kwargs(),
-                    )
-                    logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+                    ),
+                    malformed_body=True,
+                )
+                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
             result = _json_object(result)
-            logger.debug(
-                "KUBE_CLIENT: Patch result keys: %s",
-                list(result.keys()) if result else "None",
-            )
+            # A count only: the keys are the response's own text (#283).
+            logger.debug("KUBE_CLIENT: Patch result has %d top-level keys", len(result))
             return result
         except ApiException as e:
-            logger.error(
-                "KUBE_CLIENT: ApiException during patch: status=%s, reason=%s, body=%s",
-                e.status,
-                e.reason,
-                e.body[:500] if e.body else "None",
-            )
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to patch %s/%s: %s", plural, name, e)
+            logger.error("Failed to patch %s/%s: HTTP %s", plural, name, e.status)
             raise
         except Exception as e:
-            logger.error(
-                "KUBE_CLIENT: Unexpected exception during patch: %s: %s",
-                type(e).__name__,
-                e,
-            )
+            # Type only: a response failure's message can quote the body or a header (#283).
+            logger.error("KUBE_CLIENT: Unexpected exception during patch: %s", type(e).__name__)
             raise
 
     def json_patch_custom_resource_guarded(
@@ -1585,14 +2001,21 @@ class KubeClient:
             elif exc.status == 404:
                 result["reason"] = "not_found"
             else:
-                logger.error("Guarded JSON Patch of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Guarded JSON Patch of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Guarded JSON Patch of %s/%s did not complete (%s); it is not accepted",
+                "Guarded JSON Patch of %s/%s did not complete (%s: %s); it is not accepted",
                 RESTORE_PLURAL,
                 name,
                 type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -1700,14 +2123,21 @@ class KubeClient:
             elif exc.status == 404:
                 result["reason"] = "not_found"
             else:
-                logger.error("Guarded delete of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Guarded delete of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Guarded delete of %s/%s did not complete (%s); it is not accepted",
+                "Guarded delete of %s/%s did not complete (%s: %s); it is not accepted",
                 RESTORE_PLURAL,
                 name,
                 type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -1789,11 +2219,21 @@ class KubeClient:
                 logger.warning("Create of %s/%s rejected: the name is already taken", RESTORE_PLURAL, name)
                 result.update(conflict=True, reason="already_exists")
             else:
-                logger.error("Create of %s/%s failed with HTTP %s", RESTORE_PLURAL, name, exc.status)
+                logger.error(
+                    "Create of %s/%s failed with HTTP %s (%s)",
+                    RESTORE_PLURAL,
+                    name,
+                    exc.status,
+                    _failure_category_of(exc),
+                )
             return result
         except Exception as exc:
             logger.error(
-                "Create of %s/%s did not complete (%s); it is not accepted", RESTORE_PLURAL, name, type(exc).__name__
+                "Create of %s/%s did not complete (%s: %s); it is not accepted",
+                RESTORE_PLURAL,
+                name,
+                type(exc).__name__,
+                _failure_category_of(exc),
             )
             return result
 
@@ -1876,24 +2316,29 @@ class KubeClient:
     ) -> Dict:
         """Create a custom resource once, reconciling named 409 conflicts."""
         try:
-            with _undecodable_body_is_malformed():
-                if namespace:
-                    result = self.custom_api.create_namespaced_custom_object(
+            if namespace:
+                result = _call_sdk(
+                    lambda: self.custom_api.create_namespaced_custom_object(
                         group=group,
                         version=version,
                         namespace=namespace,
                         plural=plural,
                         body=body,
                         **self._request_timeout_kwargs(),
-                    )
-                else:
-                    result = self.custom_api.create_cluster_custom_object(
+                    ),
+                    malformed_body=True,
+                )
+            else:
+                result = _call_sdk(
+                    lambda: self.custom_api.create_cluster_custom_object(
                         group=group,
                         version=version,
                         plural=plural,
                         body=body,
                         **self._request_timeout_kwargs(),
-                    )
+                    ),
+                    malformed_body=True,
+                )
             return _json_object(result)
         except ApiException as e:
             if e.status == 409:
@@ -1935,7 +2380,7 @@ class KubeClient:
                 raise
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to create %s: %s", plural, e)
+            logger.error("Failed to create %s: HTTP %s", plural, e.status)
             raise
 
     def delete_custom_resource_preconditioned(
@@ -1999,17 +2444,21 @@ class KubeClient:
 
         try:
             if namespace:
-                self.custom_api.delete_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                    **kwargs,
+                _call_sdk(
+                    lambda: self.custom_api.delete_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                        **kwargs,
+                    )
                 )
             else:
-                self.custom_api.delete_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name, **kwargs
+                _call_sdk(
+                    lambda: self.custom_api.delete_cluster_custom_object(
+                        group=group, version=version, plural=plural, name=name, **kwargs
+                    )
                 )
         except ApiException as exc:
             if exc.status in (409, 412):
@@ -2063,17 +2512,21 @@ class KubeClient:
             kwargs["_request_timeout"] = timeout_seconds
 
         if namespace:
-            self.custom_api.delete_namespaced_custom_object(
-                group=group,
-                version=version,
-                namespace=namespace,
-                plural=plural,
-                name=name,
-                **kwargs,
+            _call_sdk(
+                lambda: self.custom_api.delete_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                    **kwargs,
+                )
             )
         else:
-            self.custom_api.delete_cluster_custom_object(
-                group=group, version=version, plural=plural, name=name, **kwargs
+            _call_sdk(
+                lambda: self.custom_api.delete_cluster_custom_object(
+                    group=group, version=version, plural=plural, name=name, **kwargs
+                )
             )
         return True
 
@@ -2124,12 +2577,13 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "deployment")
 
-        deployment = self.apps_v1.read_namespaced_deployment(
-            name=name,
-            namespace=namespace,
-            **self._request_timeout_kwargs(),
+        return _call_sdk(
+            lambda: self.apps_v1.read_namespaced_deployment(
+                name=name,
+                namespace=namespace,
+                **self._request_timeout_kwargs(),
+            ).to_dict()
         )
-        return deployment.to_dict()
 
     @api_call(not_found_value=None, resource_desc="get statefulset")
     def get_statefulset(self, name: str, namespace: str) -> Optional[Dict]:
@@ -2147,12 +2601,13 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "statefulset")
 
-        statefulset = self.apps_v1.read_namespaced_stateful_set(
-            name=name,
-            namespace=namespace,
-            **self._request_timeout_kwargs(),
+        return _call_sdk(
+            lambda: self.apps_v1.read_namespaced_stateful_set(
+                name=name,
+                namespace=namespace,
+                **self._request_timeout_kwargs(),
+            ).to_dict()
         )
-        return statefulset.to_dict()
 
     @retry_api_call
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
@@ -2182,17 +2637,18 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(
-                name=name,
-                namespace=namespace,
-                body=body,
-                **self._request_timeout_kwargs(),
+            return _call_sdk(
+                lambda: self.apps_v1.patch_namespaced_deployment_scale(
+                    name=name,
+                    namespace=namespace,
+                    body=body,
+                    **self._request_timeout_kwargs(),
+                ).to_dict()
             )
-            return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to scale deployment %s/%s: %s", namespace, name, e)
+            logger.error("Failed to scale deployment %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @retry_api_call
@@ -2223,17 +2679,18 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(
-                name=name,
-                namespace=namespace,
-                body=body,
-                **self._request_timeout_kwargs(),
+            return _call_sdk(
+                lambda: self.apps_v1.patch_namespaced_stateful_set_scale(
+                    name=name,
+                    namespace=namespace,
+                    body=body,
+                    **self._request_timeout_kwargs(),
+                ).to_dict()
             )
-            return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to scale statefulset %s/%s: %s", namespace, name, e)
+            logger.error("Failed to scale statefulset %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     @retry_api_call
@@ -2259,17 +2716,18 @@ class KubeClient:
         try:
             now = time.strftime("%Y%m%d%H%M%S")
             body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
-            result = self.apps_v1.patch_namespaced_deployment(
-                name=name,
-                namespace=namespace,
-                body=body,
-                **self._request_timeout_kwargs(),
+            return _call_sdk(
+                lambda: self.apps_v1.patch_namespaced_deployment(
+                    name=name,
+                    namespace=namespace,
+                    body=body,
+                    **self._request_timeout_kwargs(),
+                ).to_dict()
             )
-            return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
+            logger.error("Failed to restart deployment %s/%s: HTTP %s", namespace, name, e.status)
             raise
 
     def _list_pods_once(
@@ -2298,8 +2756,11 @@ class KubeClient:
             **self._request_timeout_kwargs(request_timeout),
         }
 
-        result = self.core_v1.list_namespaced_pod(**kwargs)
-        return [pod.to_dict() for pod in (result.items or [])]
+        def list_pods() -> List[Dict]:
+            result = self.core_v1.list_namespaced_pod(**kwargs)
+            return [pod.to_dict() for pod in (result.items or [])]
+
+        return _call_sdk(list_pods)
 
     @api_call(not_found_value=[], log_on_error=False)
     def get_pods(
@@ -2370,7 +2831,7 @@ class KubeClient:
             kwargs["tail_lines"] = tail_lines_int
 
         kwargs.update(self._request_timeout_kwargs())
-        return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
+        return _call_sdk(lambda: self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs)) or ""
 
     def wait_for_pods_ready(
         self,
@@ -2415,14 +2876,19 @@ class KubeClient:
                 if exc.status == 404:
                     pods = []
                 elif is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug("Transient error while listing pods in %s: HTTP %s", namespace, exc.status)
                     sleep_remaining_budget()
                     continue
                 else:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
-                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    logger.debug(
+                        "Transient error while listing pods in %s: %s (%s)",
+                        namespace,
+                        type(exc).__name__,
+                        _failure_category_of(exc),
+                    )
                     sleep_remaining_budget()
                     continue
                 raise

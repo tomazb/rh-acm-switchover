@@ -747,3 +747,61 @@ def test_an_interrupted_state_write_is_saved_or_reported_indeterminate_never_ass
     assert saved is retry_succeeds
     if not retry_succeeds:
         assert "indeterminate" in " ".join(str(c) for c in logger.error.call_args_list)
+
+
+def test_api_error_from_a_real_kube_client_reaches_state_and_report_by_status_only(tmp_path, caplog):
+    """#283: `add_error(str(exc))` and the verbose traceback carry no API body, header, data or reason."""
+    import json
+    import logging
+
+    from lib.kube_client import KubeClient
+    from lib.utils import StateManager
+    from tests.api_error_canary import assert_no_canary, canary_api_exception, real_kube_client_apis
+
+    state_path = tmp_path / "state.json"
+    report_dir = tmp_path / "reports"
+    logger = logging.getLogger("acm_switchover")
+    with real_kube_client_apis() as apis:
+        client = KubeClient(context="primary", dry_run=False)
+        apis["apps_api"].patch_namespaced_stateful_set_scale.side_effect = canary_api_exception(403)
+        state = StateManager(str(state_path))
+        args = SimpleNamespace(
+            argocd_resume_only=False,
+            verbose=True,
+            state_file=str(state_path),
+            report_dir=str(report_dir),
+            validate_only=False,
+            decommission=False,
+            restore_only=False,
+        )
+        hooks = CliOperationHooks(
+            bind_runtime_hub_identities=Mock(),
+            run_argocd_resume_only=Mock(),
+            execute_operation=lambda *_args: client.scale_statefulset("compactor", "observability", 0),
+            write_python_report=write_python_report,
+            gitops_reporter_factory=Mock,
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            exit_code = run_operation_mode(
+                args,
+                state,
+                client,
+                None,
+                logger,
+                should_bind_state=False,
+                should_record_state_errors=True,
+                hooks=hooks,
+                exit_success=0,
+                exit_failure=1,
+                exit_interrupt=130,
+            )
+
+    assert exit_code == 1
+    state_text = state_path.read_text(encoding="utf-8")
+    report_text = next(report_dir.iterdir()).read_text(encoding="utf-8")
+    errors = json.loads(state_text)["errors"]
+    assert [entry["error"] for entry in errors] == ["(403)\nReason: Forbidden\n"]
+    assert json.loads(report_text)["errors"] == errors
+    assert "Traceback" in caplog.text, "the verbose traceback route is exercised"
+    assert_no_canary(state_text, report_text, caplog.text)

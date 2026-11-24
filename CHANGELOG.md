@@ -311,6 +311,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
+  exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request
+  `KubeClient` makes through the Kubernetes client (generated Core, Apps and Custom Objects calls,
+  raw guarded requests including their body read, discovery and strict reads) now runs inside one
+  boundary that replaces any failure with a fresh exception built from safe facts only: an API
+  error keeps its HTTP status and the client's own exception class, with the standard HTTP phrase as
+  its reason; a failure without a usable status (TLS, a timeout, a dropped connection, a malformed
+  status line or chunk, an undecodable or unknown-charset response) keeps its exception family and
+  errno and carries a fixed diagnostic such as `Kubernetes API request failed: TLS error`. Python
+  `warnings` raised by the client libraries are not covered (#385). Retry decisions, attempt counts, and
+  404/409/410/412/422 handling are unchanged. While a request runs, the Kubernetes client's and
+  urllib3's own log records (response bodies at DEBUG, connection-failure warnings) are dropped, and
+  retry log lines name only the HTTP status or the fixed category. Visible changes: some transport
+  failures surface as a less specific class of the same family (for example urllib3 `HTTPError`
+  for `MaxRetryError`, `ValueError` for a pydantic validation error, `UnicodeError` for
+  `UnicodeDecodeError`); an unknown response charset on a custom-resource read is reported as a
+  malformed response; a retryable `patch_custom_resource` failure no longer logs an ERROR line
+  before it retries, its unexpected-exception log names only the exception type, and its success
+  debug log gives a key count instead of the response's keys. A failed strict read or discovery
+  check now logs a WARNING naming the HTTP status or a fixed failure category. Python CLI only; the Ansible
+  Collection, direct spoke-client paths and the direct RBAC permission check are not changed.
 - Python finalization Backup continuity now requires a positively complete strict inventory
   before recording or reusing a Backup name. Failed polls retain the existing baseline
   and retry within the existing wait; the integrity fallback also uses strict inventory.
