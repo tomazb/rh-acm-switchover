@@ -77,7 +77,7 @@ class FakeRBACAPI:
 
     def _handler(self):
         api = self
-        static = {
+        static: dict[str, dict] = {
             "/version": {"major": "1", "minor": "28", "gitVersion": "v1.28.0"},
             "/api": {"kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": []},
             "/api/v1": _resource_list("v1", _CORE),
