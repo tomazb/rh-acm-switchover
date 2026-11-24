@@ -632,13 +632,13 @@ class PostActivationVerification:
                 spec = deployment.get("spec", {})
                 status = deployment.get("status", {})
                 generation = int(metadata.get("generation", 0) or 0)
-                observed_generation = int(status.get("observedGeneration", 0) or 0)
+                observed_generation = int(status.get("observed_generation", 0) or 0)
                 desired_replicas = int(spec.get("replicas", 1) or 0)
                 current_replicas = int(status.get("replicas", desired_replicas) or 0)
-                updated_replicas = int(status.get("updatedReplicas", 0) or 0)
-                available_replicas = int(status.get("availableReplicas", 0) or 0)
-                ready_replicas = int(status.get("readyReplicas", 0) or 0)
-                unavailable_replicas = int(status.get("unavailableReplicas", 0) or 0)
+                updated_replicas = int(status.get("updated_replicas", 0) or 0)
+                available_replicas = int(status.get("available_replicas", 0) or 0)
+                ready_replicas = int(status.get("ready_replicas", 0) or 0)
+                unavailable_replicas = int(status.get("unavailable_replicas", 0) or 0)
 
                 if (
                     observed_generation >= generation

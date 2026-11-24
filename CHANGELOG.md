@@ -311,6 +311,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Post-activation verifies the observatorium-api rollout in both the Python CLI and Ansible
+  Collection. Python reads the SDK's Deployment status fields and Ansible evaluates both rollout
+  conditions successfully (#388, #392).
 - Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
   exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request
   `KubeClient` makes through the Kubernetes client (generated Core, Apps and Custom Objects calls,
