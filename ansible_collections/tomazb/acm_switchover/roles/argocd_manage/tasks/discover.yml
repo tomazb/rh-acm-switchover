@@ -51,11 +51,6 @@
 - name: Discover Argo CD Applications from cluster
   when: acm_switchover_argocd_mock_apps is not defined
   block:
-    - name: Initialize protected Argo CD discovery failure detail
-      ansible.builtin.set_fact:
-        _argocd_discovery_error: ""
-      no_log: true
-
     - name: Resolve raw trusted Argo CD discovery namespaces for current hub
       ansible.builtin.set_fact:
         _argocd_raw_trusted_discovery_namespaces: >-
@@ -170,16 +165,44 @@
       failed_when: false
       when: not (_argocd_use_scoped_discovery | default(false) | bool)
 
-    - name: Capture protected cluster-wide discovery failure
+    - name: Classify unscoped Argo CD discovery
       ansible.builtin.set_fact:
-        _argocd_discovery_error: "{{ _argocd_cluster_live_query.msg | default('') }}"
+        _argocd_unscoped_status: >-
+          {{
+            'ok'
+            if (_argocd_unscoped_result_valid and _argocd_cluster_live_query.api_found is sameas true
+                and _argocd_unscoped_msg == '')
+            else (
+              'absent'
+              if (_argocd_unscoped_result_valid and _argocd_cluster_live_query.api_found is sameas false
+                  and (_argocd_cluster_live_query.resources | length) == 0
+                  and _argocd_unscoped_msg in ['', _argocd_missing_application_api_msg])
+              else 'error'
+            )
+          }}
+      vars:
+        _argocd_unscoped_result_valid: >-
+          {{
+            _argocd_cluster_live_query is mapping
+            and (_argocd_cluster_live_query.failed | default(false)) is sameas false
+            and (_argocd_cluster_live_query.skipped | default(false)) is sameas false
+            and (_argocd_cluster_live_query.unreachable | default(false)) is sameas false
+            and _argocd_cluster_live_query.api_found is defined
+            and (_argocd_cluster_live_query.resources | default(none) | type_debug) == 'list'
+          }}
+        _argocd_unscoped_msg: "{{ _argocd_cluster_live_query.msg | default('') }}"
+        # k8s_info may attach this diagnostic to its successful api_found=false result.
+        _argocd_missing_application_api_msg: >-
+          Failed to find API for resource with apiVersion "argoproj.io/v1alpha1" and kind "Application"
       no_log: true
       when: not (_argocd_use_scoped_discovery | default(false) | bool)
 
     - name: Enter sanitized discovery failure handling for cluster-wide discovery
       ansible.builtin.fail:
         msg: "Argo CD discovery boundary reported a failure."
-      when: (_argocd_discovery_error | default('') | length) > 0
+      when:
+        - not (_argocd_use_scoped_discovery | default(false) | bool)
+        - _argocd_unscoped_status == 'error'
 
     - name: Publish validated Argo CD discovery
       ansible.builtin.set_fact:
@@ -188,8 +211,8 @@
             _argocd_scoped_validation
             if (_argocd_use_scoped_discovery | default(false) | bool)
             else {
-              'status': 'ok',
-              'resources': (_argocd_cluster_live_query.resources | default([]))
+              'status': _argocd_unscoped_status,
+              'resources': _argocd_cluster_live_query.resources
             }
           }}
       no_log: true
@@ -226,7 +249,7 @@
       no_log: true
       when: _argocd_published_discovery.status == 'ok'
 
-    - name: Record absent scoped Argo CD discovery
+    - name: Record absent Argo CD discovery
       ansible.builtin.set_fact:
         acm_switchover_argocd_installed: false
         acm_switchover_argocd_acm_apps: []
@@ -280,29 +303,6 @@
         - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
 
   rescue:
-    - name: Check if failure is due to missing Argo CD CRD
-      ansible.builtin.set_fact:
-        _argocd_discovery_error: >-
-          {{
-            _argocd_discovery_error
-            if (_argocd_discovery_error | default('') | length) > 0
-            else (ansible_failed_result.msg | default(ansible_failed_result | string) | default(''))
-          }}
-      no_log: true
-
-    - name: Mark Argo CD as not installed (CRD absent)
-      ansible.builtin.set_fact:
-        acm_switchover_argocd_installed: false
-        acm_switchover_argocd_acm_apps: []
-        acm_switchover_argocd_blocked_apps: []
-        acm_switchover_argocd_all_apps: []
-        acm_switchover_argocd_discovery_status:
-          status: absent
-      when: >-
-        'the server doesn\'t have a resource type' in (_argocd_discovery_error | lower)
-        or 'could not find the requested resource' in (_argocd_discovery_error | lower)
-        or 'no matches for kind "application" in group "argoproj.io"' in (_argocd_discovery_error | lower)
-
     - name: Record sanitized advisory Argo CD discovery failure
       ansible.builtin.set_fact:
         acm_switchover_argocd_installed: false
@@ -312,22 +312,12 @@
         acm_switchover_argocd_discovery_status:
           status: error
           category: api-discovery
-      when:
-        - acm_switchover_argocd_advisory | default(false) | bool
-        - >-
-          'the server doesn\'t have a resource type' not in (_argocd_discovery_error | lower)
-          and 'could not find the requested resource' not in (_argocd_discovery_error | lower)
-          and 'no matches for kind "application" in group "argoproj.io"' not in (_argocd_discovery_error | lower)
+      when: acm_switchover_argocd_advisory | default(false) | bool
 
     - name: Fail on unexpected Argo CD discovery error
       ansible.builtin.fail:
         msg: "Argo CD discovery failed; verify controller access and input, then retry."
-      when:
-        - not (acm_switchover_argocd_advisory | default(false) | bool)
-        - >-
-          'the server doesn\'t have a resource type' not in (_argocd_discovery_error | lower)
-          and 'could not find the requested resource' not in (_argocd_discovery_error | lower)
-          and 'no matches for kind "application" in group "argoproj.io"' not in (_argocd_discovery_error | lower)
+      when: not (acm_switchover_argocd_advisory | default(false) | bool)
 
 - name: Report when Argo CD is not installed
   ansible.builtin.debug:

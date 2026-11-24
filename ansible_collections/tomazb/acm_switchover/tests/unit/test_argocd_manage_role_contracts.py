@@ -114,56 +114,7 @@ class TestArgoCDDiscover:
         live_path = [t for t in block_tasks if "is not defined" in _when_text(t) and "mock_apps" in _when_text(t)]
         assert live_path, "Live path block must exist (see test_live_path_guarded_by_mock_apps_not_defined)"
         for task in live_path:
-            assert "rescue" in task, (
-                "Live Argo CD discovery block must have a rescue block to handle "
-                "cases where Argo CD is not installed (missing CRD)"
-            )
-
-    def test_rescue_marks_not_installed_for_missing_crd(self):
-        """Rescue block must handle missing Argo CD CRD by marking installed=false (not by failing).
-
-        Argo CD is an optional component. If it is not installed, the rescue block must
-        set acm_switchover_argocd_installed=false so downstream tasks cleanly skip,
-        rather than aborting the switchover with an unexpected API error.
-        """
-        block_tasks = [t for t in self.tasks if "block" in t and "rescue" in t]
-        assert block_tasks, "Live path block with rescue must exist"
-        for block_task in block_tasks:
-            rescue_tasks = block_task["rescue"]
-            set_fact_in_rescue = [t for t in rescue_tasks if "ansible.builtin.set_fact" in t]
-            not_installed_facts = [
-                t
-                for t in set_fact_in_rescue
-                if t.get("ansible.builtin.set_fact", {}).get("acm_switchover_argocd_installed") is False
-            ]
-            assert not_installed_facts, (
-                "Rescue block must have a set_fact task that sets "
-                "acm_switchover_argocd_installed: false when Argo CD CRD is missing"
-            )
-            # Must be conditional — only for CRD-missing, not for all errors
-            for task in not_installed_facts:
-                when = _when_text(task)
-                assert when, (
-                    "The 'not installed' set_fact in rescue must have a when condition — "
-                    "it should only trigger for CRD-missing errors, not all API failures"
-                )
-
-    def test_rescue_fails_on_non_crd_errors(self):
-        """Rescue block must re-fail when the error is not a missing CRD.
-
-        Silently swallowing unexpected API errors would give false confidence that
-        Argo CD is simply absent when it may actually be unavailable due to an outage
-        or connectivity issue, leading to an incomplete switchover.
-        """
-        block_tasks = [t for t in self.tasks if "block" in t and "rescue" in t]
-        assert block_tasks
-        for block_task in block_tasks:
-            rescue_tasks = block_task["rescue"]
-            fail_tasks = [t for t in rescue_tasks if "ansible.builtin.fail" in t]
-            assert fail_tasks, (
-                "Rescue block must have a fail task that re-raises unexpected errors "
-                "that are not caused by a missing Argo CD CRD"
-            )
+            assert "rescue" in task, "Live Argo CD discovery must have sanitized failure handling"
 
     def test_blocked_apps_fail_gate_is_pause_mode_only(self):
         """Blocked apps fail gate must only trigger in pause mode.

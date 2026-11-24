@@ -1,8 +1,9 @@
-"""Executable scoped Argo CD discovery-result contract tests."""
+"""Executable Argo CD discovery-result contract tests."""
 
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,110 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.argocd_fake_api
     application,
     write_kubeconfig,
 )
+
+_DISCOVERY_PLAYBOOK = "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/argocd_discovery_role.yml"
+_DISCOVERY_FAILURE = "Argo CD discovery failed; verify controller access and input, then retry."
+
+
+def _run_unscoped_role(tmp_path, server, *, advisory):
+    kubeconfig = tmp_path / "protected-discovery-kubeconfig"
+    write_kubeconfig(kubeconfig, context="primary-hub", server=server)
+    return _run_playbook(
+        tmp_path,
+        _DISCOVERY_PLAYBOOK,
+        {
+            "acm_switchover_hubs": {"primary": {"kubeconfig": str(kubeconfig), "context": "primary-hub"}},
+            "acm_switchover_execution": {"mode": "execute"},
+            "acm_switchover_argocd_mode_override": "discover" if advisory else "pause",
+            "acm_switchover_argocd_advisory": advisory,
+        },
+    )
+
+
+@pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
+def test_unscoped_missing_application_api_is_absent(tmp_path, advisory):
+    hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=[], application_api_available=False)
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 0, output
+        assert "DISCOVERY_STATUS=absent INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
+        assert {"method": "GET", "path": "/apis"} in hub.requests
+        assert all(request["method"] == "GET" for request in hub.requests)
+        assert not any(request["path"].endswith("/applications") for request in hub.requests)
+        assert "protected-discovery-kubeconfig" not in output
+    finally:
+        hub.close()
+
+
+def test_unscoped_empty_application_list_is_present(tmp_path):
+    hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=[])
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=False)
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 0, output
+        assert "DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED=0 HAS_RUN_ID=True" in output
+        assert {
+            "method": "GET",
+            "path": "/apis/argoproj.io/v1alpha1/applications",
+        } in hub.requests
+        assert all(request["method"] == "GET" for request in hub.requests)
+    finally:
+        hub.close()
+
+
+@pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
+@pytest.mark.parametrize("failure", ["authorization", "transport", "malformed"])
+def test_unscoped_discovery_errors_remain_sanitized(tmp_path, advisory, failure):
+    protected_detail = "seeded-secret-token: could not find the requested resource"
+    if failure == "transport":
+        # A bound, non-listening loopback port fails the connection without a race
+        # or reaching a real cluster.
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            server = f"http://127.0.0.1:{listener.getsockname()[1]}"
+            completed = _run_unscoped_role(tmp_path, server, advisory=advisory)
+    else:
+        response = (
+            (
+                403,
+                {
+                    "apiVersion": "v1",
+                    "kind": "Status",
+                    "reason": "Forbidden",
+                    "message": protected_detail,
+                },
+            )
+            if failure == "authorization"
+            else (200, {"unexpected": protected_detail})
+        )
+        hub = FakeArgoCDHub(
+            cluster_uid="primary-uid",
+            applications=[],
+            cluster_application_list_response=response,
+        )
+        try:
+            completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
+            assert {
+                "method": "GET",
+                "path": "/apis/argoproj.io/v1alpha1/applications",
+            } in hub.requests
+            assert all(request["method"] == "GET" for request in hub.requests)
+        finally:
+            hub.close()
+
+    output = completed.stdout + completed.stderr
+    assert "protected-discovery-kubeconfig" not in output
+    assert "seeded-secret-token" not in output
+    if advisory:
+        assert completed.returncode == 0, output
+        assert "DISCOVERY_STATUS=error INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
+    else:
+        assert completed.returncode == 2, output
+        assert _DISCOVERY_FAILURE in output
+    assert "Argo CD not detected" not in output
 
 
 def _present(namespace: str, *, resources: object | None = None, **extra) -> dict:
@@ -200,7 +305,7 @@ def test_mixed_live_namespace_result_never_reaches_pause_or_resume_and_stays_san
         hubs = _write_hub_inputs(tmp_path, primary, secondary)
         completed = _run_playbook(
             tmp_path,
-            ("ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "argocd_scoped_role.yml"),
+            _DISCOVERY_PLAYBOOK,
             {
                 "acm_switchover_hubs": hubs,
                 "acm_switchover_execution": {"mode": "execute"},
@@ -243,7 +348,7 @@ def test_explicit_empty_namespace_fails_before_discovery_or_patch(tmp_path):
         hubs = _write_hub_inputs(tmp_path, primary, secondary)
         completed = _run_playbook(
             tmp_path,
-            ("ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/" "argocd_scoped_role.yml"),
+            _DISCOVERY_PLAYBOOK,
             {
                 "acm_switchover_hubs": hubs,
                 "acm_switchover_execution": {"mode": "execute"},

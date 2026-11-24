@@ -1,10 +1,4 @@
-"""Tests to verify ArgoCD discover.yml rescue block handles errors safely.
-
-The rescue block must distinguish between 'CRD absent' (Argo CD not installed)
-and unexpected errors (RBAC denial, network timeout, transient API errors).
-Only a missing CRD should set acm_switchover_argocd_installed=false; all
-other errors must fail the run.
-"""
+"""Static contracts for the Argo CD discovery safety boundaries."""
 
 import pathlib
 
@@ -42,120 +36,23 @@ def _walk_tasks(tasks):
                 yield from _walk_tasks([nested])
 
 
-class TestDiscoverRescueBlockExists:
-    """The discovery block must have a rescue section."""
-
-    def test_rescue_block_present(self):
-        tasks = _load_discover_tasks()
-        block = _get_discovery_block(tasks)
-        assert "rescue" in block, "Discovery block must have a rescue section"
-
-    def test_rescue_has_multiple_tasks(self):
-        """Rescue must have more than one task (not just a blanket set_fact)."""
+class TestDiscoveryFailureHandling:
+    def test_rescue_only_publishes_advisory_error(self):
         rescue = _get_rescue_tasks(_load_discover_tasks())
-        assert len(rescue) > 1, (
-            "Rescue block must have more than one task to distinguish " "CRD-absent from unexpected errors"
-        )
-
-
-class TestMarkNotInstalledIsConditional:
-    """The 'mark not installed' task must be conditional, not a catch-all."""
-
-    def _find_mark_not_installed_task(self, rescue):
-        for task in rescue:
-            sf = task.get("ansible.builtin.set_fact", {})
-            if isinstance(sf, dict) and "acm_switchover_argocd_installed" in sf:
-                return task
-        raise AssertionError("Rescue block must contain a set_fact task for " "acm_switchover_argocd_installed")
-
-    def test_mark_not_installed_has_when(self):
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-        task = self._find_mark_not_installed_task(rescue)
-        assert "when" in task, (
-            "The 'mark not installed' task must have a 'when' condition "
-            "so it only fires for CRD-absent errors, not all failures"
-        )
-
-    def test_mark_not_installed_when_references_error(self):
-        """The when condition must reference the captured error variable."""
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-        task = self._find_mark_not_installed_task(rescue)
-        when_text = str(task["when"])
-        assert "_argocd_discovery_error" in when_text, (
-            "The 'mark not installed' when condition must reference "
-            "_argocd_discovery_error to inspect the actual failure"
-        )
-
-
-class TestFailOnUnexpectedError:
-    """The rescue must fail on non-CRD errors (RBAC, network, etc.)."""
-
-    def _find_fail_task(self, rescue):
-        for task in rescue:
-            if "ansible.builtin.fail" in task:
-                return task
-        raise AssertionError(
-            "Rescue block must contain an ansible.builtin.fail task " "for unexpected (non-CRD) errors"
-        )
-
-    def test_fail_task_exists(self):
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-        self._find_fail_task(rescue)
-
-    def test_fail_task_has_when(self):
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-        task = self._find_fail_task(rescue)
-        assert "when" in task, (
-            "The fail task must have a 'when' condition " "(inverse of the mark-not-installed condition)"
-        )
-
-    def test_fail_task_when_is_inverse_of_mark_not_installed(self):
-        """Fail-when must use 'not in' where mark-not-installed uses 'in'."""
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-
-        mark_task = None
-        fail_task = None
-        for task in rescue:
-            sf = task.get("ansible.builtin.set_fact", {})
-            if isinstance(sf, dict) and sf.get("acm_switchover_argocd_discovery_status", {}).get("status") == "absent":
-                mark_task = task
-            if "ansible.builtin.fail" in task:
-                fail_task = task
-
-        assert mark_task is not None and fail_task is not None
-
-        mark_when = str(mark_task["when"]).lower()
-        fail_when = str(fail_task["when"]).lower()
-
-        # mark-not-installed uses ' in ' (substring match); fail uses ' not in '
-        assert (
-            " in " in mark_when and " or " in mark_when
-        ), f"mark-not-installed 'when' should use 'in' with 'or': {mark_when}"
-        assert (
-            "not in" in fail_when and " and " in fail_when
-        ), f"fail 'when' should use 'not in' with 'and': {fail_when}"
+        published_statuses = [
+            task["ansible.builtin.set_fact"]["acm_switchover_argocd_discovery_status"]["status"]
+            for task in rescue
+            if "acm_switchover_argocd_discovery_status" in task.get("ansible.builtin.set_fact", {})
+        ]
+        assert published_statuses == ["error"]
 
     def test_fail_task_message_is_stable_and_omits_raw_error(self):
-        """Strict discovery must fail with stable public text while raw evidence stays protected."""
         rescue = _get_rescue_tasks(_load_discover_tasks())
-        task = self._find_fail_task(rescue)
-        msg = str(task["ansible.builtin.fail"].get("msg", ""))
-        assert msg.strip() == "Argo CD discovery failed; verify controller access and input, then retry."
-        assert "_argocd_discovery_error" not in msg
-
-
-class TestErrorCapture:
-    """The rescue must capture the error before inspecting it."""
-
-    def test_error_capture_is_first_rescue_task(self):
-        """First rescue task should capture the error into a variable."""
-        rescue = _get_rescue_tasks(_load_discover_tasks())
-        first = rescue[0]
-        sf = first.get("ansible.builtin.set_fact", {})
-        assert isinstance(sf, dict) and "_argocd_discovery_error" in sf, (
-            "First rescue task must capture the error into " "_argocd_discovery_error via set_fact"
-        )
-        assert first.get("no_log") is True
+        fail_tasks = [task for task in rescue if "ansible.builtin.fail" in task]
+        assert len(fail_tasks) == 1
+        assert fail_tasks[0]["ansible.builtin.fail"] == {
+            "msg": "Argo CD discovery failed; verify controller access and input, then retry."
+        }
 
 
 class TestApiFailureBoundary:
