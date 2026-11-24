@@ -301,7 +301,8 @@ Standalone decommission requires non-empty
 implicit or default kube context before any Kubernetes operation runs.
 The standalone playbook defaults to `dry_run` when the execution mode is omitted.
 It rejects unrecognized mode values before checkpoint entry or Kubernetes access.
-The decommission role refuses `validate`. Live `execute` requires checkpointing.
+The decommission role refuses `validate` outside native Ansible check mode.
+Live `execute` requires checkpointing.
 
 After the UID-guarded `MultiClusterHub` delete, decommission drains the remaining
 ACM Pods in `open-cluster-management`, deciding ownership by owner chain against
