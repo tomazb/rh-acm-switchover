@@ -21,10 +21,16 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 import acm_switchover as cli
+import lib.workflow as wf
 import modules.post_activation as post
 from lib.migration_journal import validate_migration_journal
 from lib.migration_post_activation import require_completed_restore
-from lib.operation_runners import SwitchoverRunnerHooks, run_switchover_impl
+from lib.operation_runners import (
+    RestoreOnlyRunnerHooks,
+    SwitchoverRunnerHooks,
+    run_restore_only_impl,
+    run_switchover_impl,
+)
 from lib.strict_read import StrictReadOutcome
 from lib.utils import Phase, StateManager
 
@@ -740,6 +746,84 @@ def test_no_warning_when_versioned_marker_present(tmp_path, monkeypatch, caplog,
     retry.path.write_text(json.dumps(raw), encoding="utf-8")
     caplog.set_level(logging.INFO, logger="acm_switchover")
     retry.run()
+    assert _provenance_records(caplog) == []
+
+
+def _run_completed(retry, *, validate_only, restore):
+    """Drive the real runner (not Retry.run) so validate_only/restore_only reach the dispatch."""
+    state = StateManager(str(retry.path))
+    args = SimpleNamespace(
+        dry_run=False,
+        validate_only=validate_only,
+        force=False,
+        min_managed_clusters=None,
+        restore_only=restore,
+        decommission=False,
+        argocd_resume_only=False,
+    )
+    refuse = cli._fail_phase
+    common = dict(
+        preflight_handler=retry.no_prior_phase,
+        activation_handler=retry.no_prior_phase,
+        post_activation_handler=retry.no_prior_phase,
+        finalization_handler=retry.no_prior_phase,
+        fail_phase=refuse,
+        fail_unexpected_phase_state=cli._fail_unexpected_phase_state,
+        on_phase_failure=lambda *_a: None,
+        backup_continuity_guard=lambda *_a, **_k: True,
+    )
+    try:
+        if restore:
+            hooks = RestoreOnlyRunnerHooks(restore_only_pause_handler=retry.no_prior_phase, **common)
+            return run_restore_only_impl(args, state, retry.hub, LOGGER, hooks=hooks)
+        hooks = SwitchoverRunnerHooks(primary_prep_handler=retry.no_prior_phase, **common)
+        return run_switchover_impl(args, state, SyntheticHub("primary-ctx"), retry.hub, LOGGER, hooks=hooks)
+    finally:
+        state._release_run_lock()
+
+
+@pytest.mark.parametrize("restore", [False, True], ids=["switchover", "restore-only"])
+@pytest.mark.parametrize("validate_only", [False, True], ids=["resume", "validate-only"])
+def test_completed_warns_on_resume_but_never_on_validate_only(tmp_path, monkeypatch, caplog, restore, validate_only):
+    retry = Retry(tmp_path, monkeypatch)
+    _out_of_phase(retry, Phase.COMPLETED)
+    before = retry.path.read_bytes()
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    assert _run_completed(retry, validate_only=validate_only, restore=restore) is True
+    assert len(_provenance_records(caplog)) == (0 if validate_only else 1)
+    assert retry.path.read_bytes() == before
+
+
+def test_completed_without_completed_steps_is_unchanged_and_silent(tmp_path, monkeypatch, caplog):
+    retry = Retry(tmp_path, monkeypatch)
+    raw = _out_of_phase(retry, Phase.COMPLETED)
+    del raw["completed_steps"]
+    retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    before = retry.path.read_bytes()
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    assert _run_completed(retry, validate_only=False, restore=False) is True
+    assert "unavailable" not in caplog.text
+    assert _provenance_records(caplog) == []
+    assert retry.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("bad", [None, "x", 7, [None, "x"]], ids=["none", "str", "int", "non-dict-entries"])
+def test_malformed_completed_steps_never_raise_from_the_warning(bad, caplog):
+    state = SimpleNamespace(state={"completed_steps": bad})
+    wf.warn_legacy_klusterlet_provenance(state, LOGGER)
+    assert _provenance_records(caplog) == []
+
+
+def test_finalization_without_completed_steps_is_not_changed_by_the_warning(tmp_path, monkeypatch, caplog):
+    retry = Retry(tmp_path, monkeypatch)
+    raw = _out_of_phase(retry, Phase.FINALIZATION)
+    del raw["completed_steps"]
+    retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    try:
+        retry.run()
+    except KeyError:
+        pytest.fail("the provenance warning must not raise")
     assert _provenance_records(caplog) == []
 
 

@@ -398,7 +398,8 @@ operator decision.
 last error was in finalization) or reaches the `completed` no-op banner, and
 `completed_steps` has the unversioned `verify_klusterlet_connections` entry without
 `verify_klusterlet_connections_v2`, the tool logs one warning that the marker is of unknown
-provenance and points to this section. The warning is informational only. The run then
+provenance and points to this section. `--validate-only` is not a resume and does not warn. The
+warning is informational only. The run then
 proceeds exactly as before: the tool does not refuse, rewind, or re-verify the marker, and
 there is no automatic re-verification at these phases. The hold above stays in force.
 Tracking: [#352](https://github.com/tomazb/rh-acm-switchover/issues/352). The separate [#362 endpoint freshness issue](https://github.com/tomazb/rh-acm-switchover/issues/362)
