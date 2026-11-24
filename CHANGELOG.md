@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Python now logs one warning when a run resumes at `finalization` (including a failed state
+  whose last error was in finalization) or reaches the completed no-op banner with only the
+  pre-fix `verify_klusterlet_connections` marker and no `verify_klusterlet_connections_v2`.
+  The warning says the marker is of unknown provenance and names the operator hold in
+  `docs/operations/usage.md`. The run proceeds unchanged: no refusal, rewind, flag, automatic
+  re-verification, or state/journal schema change. The hold documentation now links from the
+  resume and state-management sections, adds the pre-fix log line as a provenance clue, and
+  describes how to recognise an affected Collection checkpoint. Refs
+  [#352](https://github.com/tomazb/rh-acm-switchover/issues/352).
+
 - **R4-04 migration evidence workflow (Python + Collection, PR C).** Activation durably journals the
   Backups the restore controller will use (`migration_backups`, schema 2) before any Restore mutation.
   Restore PATCH and DELETE requests use UID/resourceVersion guards. CREATE sends one POST, never adopts
