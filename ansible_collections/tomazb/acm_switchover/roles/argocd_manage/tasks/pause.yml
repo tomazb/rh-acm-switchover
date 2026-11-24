@@ -28,7 +28,9 @@
                 }
               })
           }}
-      when: acm_switchover_argocd_mock_apps is defined
+      when:
+        - acm_switchover_argocd_mock_apps is defined
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
     # Discovery mints a run_id in pause mode when Argo CD is installed; a pause
     # marker written without one could never be matched by any resume run.
@@ -104,9 +106,13 @@
       register: acm_argocd_pause_results
       when:
         - acm_switchover_argocd_mock_apps is not defined
-        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
         - "(item.spec.syncPolicy | default({})).automated | default(none) is not none"
 
+    # Under native check mode the patch above is a server-side dry run that stores
+    # nothing, so a re-read always still shows auto-sync and the check below would fail
+    # every --check run (#284 decision 5, reproduced on the fake API). It verifies only a
+    # pause that really landed.
     - name: Re-read Applications after Argo CD pause
       kubernetes.core.k8s_info:
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
@@ -121,7 +127,8 @@
       register: acm_argocd_post_pause_apps
       when:
         - acm_switchover_argocd_mock_apps is not defined
-        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
+        - not ansible_check_mode
         - "(item.spec.syncPolicy | default({})).automated | default(none) is not none"
 
     - name: Fail when auto-sync remains enabled after pause
@@ -135,6 +142,7 @@
         label: "{{ item.item.metadata.namespace }}/{{ item.item.metadata.name }}"
       when:
         - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
         - not (item.skipped | default(false))
         - (item.resources | default([]) | length) > 0
         - ((item.resources[0].spec.syncPolicy | default({})).automated | default(none)) is not none
@@ -179,4 +187,51 @@
                 }
               })
           }}
-      when: acm_switchover_argocd_mock_apps is not defined
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+    # dry_run and validate patch nothing: applied counts stay as they are and
+    # `planned_pause` counts what execute would pause, from this discovery's read (mock
+    # mode counts every mock Application, as its execute summary does).
+    - name: Count the Applications execute would pause
+      ansible.builtin.set_fact:
+        _argocd_planned_pause: >-
+          {%- set ns = namespace(count=0) -%}
+          {%- for item in acm_switchover_argocd_acm_apps | default([]) -%}
+          {%- if acm_switchover_argocd_mock_apps is defined
+                or ((item.spec.syncPolicy | default({})).automated | default(none) is not none) -%}
+          {%- set ns.count = ns.count + 1 -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ ns.count }}
+      when: acm_switchover_execution.mode | default('dry_run') != 'execute'
+
+    - name: Record pause preview summary
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_summary: >-
+          {%- set existing = acm_switchover_argocd_summary | default({}) -%}
+          {{
+            existing
+            | combine({
+                'paused': (existing.get('paused', 0) | int),
+                'restored': (existing.get('restored', 0) | int),
+                'planned_pause': (existing.get('planned_pause', 0) | int) + (_argocd_planned_pause | int),
+                'planned_resume': (existing.get('planned_resume', 0) | int)
+              })
+          }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('primary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int),
+                  'restored': (existing.get('restored', 0) | int),
+                  'planned_pause': (existing.get('planned_pause', 0) | int) + (_argocd_planned_pause | int),
+                  'planned_resume': (existing.get('planned_resume', 0) | int)
+                }
+              })
+          }}
+      when: acm_switchover_execution.mode | default('dry_run') != 'execute'
