@@ -681,6 +681,77 @@ def test_versioned_marker_does_not_rewind_out_of_phase_legacy_checkpoints(tmp_pa
     assert retry.stored()["current_phase"] == (Phase.FINALIZATION.value if phase == Phase.FAILED else phase.value)
 
 
+def _provenance_records(caplog):
+    return [r for r in caplog.records if r.levelno == logging.WARNING and "unknown provenance" in r.getMessage()]
+
+
+def _out_of_phase(retry, phase):
+    raw = retry.stored()
+    raw["current_phase"] = phase.value
+    raw["last_updated"] = datetime.now(timezone.utc).isoformat()
+    raw["config"]["migration_backups"]["post_activation"]["completed_at"] = "2026-10-16T13:27:00+00:00"
+    if phase == Phase.FAILED:
+        raw["errors"][-1]["phase"] = Phase.FINALIZATION.value
+    retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    return raw
+
+
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.COMPLETED, Phase.FAILED])
+def test_legacy_only_marker_warns_once_and_still_proceeds(tmp_path, monkeypatch, caplog, phase):
+    retry = Retry(tmp_path, monkeypatch)
+    raw = _out_of_phase(retry, phase)
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    assert retry.run() is True
+    records = _provenance_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert LEGACY in message and "not re-verif" in message
+    assert "docs/operations/usage.md" in message and "Legacy Python klusterlet checkpoint hold" in message
+    assert retry.finalization is (phase != Phase.COMPLETED)
+    assert CURRENT not in _names(retry.stored())
+    assert retry.stored()["config"]["migration_backups"] == raw["config"]["migration_backups"]
+
+
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.COMPLETED, Phase.FAILED])
+def test_dry_run_warns_without_writing(tmp_path, monkeypatch, caplog, phase):
+    retry = Retry(tmp_path, monkeypatch)
+    _out_of_phase(retry, phase)
+    before = retry.path.read_bytes()
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    retry.run(dry_run=True)
+    assert len(_provenance_records(caplog)) == 1
+    assert retry.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.COMPLETED, Phase.FAILED])
+def test_no_warning_without_legacy_marker(tmp_path, monkeypatch, caplog, phase):
+    retry = Retry(tmp_path, monkeypatch, marker=False)
+    _out_of_phase(retry, phase)
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    retry.run()
+    assert _provenance_records(caplog) == []
+
+
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.COMPLETED, Phase.FAILED])
+def test_no_warning_when_versioned_marker_present(tmp_path, monkeypatch, caplog, phase):
+    retry = Retry(tmp_path, monkeypatch)
+    raw = _out_of_phase(retry, phase)
+    raw["completed_steps"].append({"name": CURRENT, "completed_at": "2026-10-17T10:00:00+00:00"})
+    retry.path.write_text(json.dumps(raw), encoding="utf-8")
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    retry.run()
+    assert _provenance_records(caplog) == []
+
+
+def test_no_warning_on_phase_that_runs_the_gate(tmp_path, monkeypatch, caplog):
+    retry = Retry(tmp_path, monkeypatch)
+    retry.hub_state = "correct"
+    caplog.set_level(logging.INFO, logger="acm_switchover")
+    assert retry.run() is True
+    assert CURRENT in _names(retry.stored())
+    assert _provenance_records(caplog) == []
+
+
 def test_finalization_without_journal_completion_still_refuses_without_rewind(tmp_path, monkeypatch):
     retry = Retry(tmp_path, monkeypatch)
     raw = retry.stored()
