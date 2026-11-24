@@ -20,8 +20,8 @@
 | `--cleanup-repair-run-id` | `acm_switchover_operation.migration_cleanup_repair.run_id` |
 | `--cleanup-repair-operation-id` | `acm_switchover_operation.migration_cleanup_repair.operation_id` |
 | `--manage-auto-import-strategy` | `acm_switchover_features.manage_auto_import_strategy` |
-| `--validate-only` | `acm_switchover_execution.mode=validate` |
-| `--dry-run` | `acm_switchover_execution.mode=dry_run` |
+| `--validate-only` | `acm_switchover_execution.mode=validate`. Non-mutating in every role. As in Python, it cannot be combined with RBAC setup or standalone Argo CD resume: `playbooks/rbac_bootstrap.yml` and `playbooks/argocd_resume.yml` refuse it before any read |
+| `--dry-run` | `acm_switchover_execution.mode=dry_run`. Results report what was planned, not applied (see the variable reference, Preview results) |
 | `--verbose` / `-v` | `acm_switchover_execution.verbose` |
 | `--force` | `acm_switchover_execution.force` |
 | `--log-format` | No direct collection variable; Ansible output formatting is controlled by the selected callback/output plugin |

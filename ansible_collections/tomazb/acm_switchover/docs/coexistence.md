@@ -80,6 +80,19 @@ pass/fail/reset checkpoint transitions, so they cannot make a later live run
 skip phases. Check mode remains non-mutating even when
 `acm_switchover_execution.mode: execute` is set.
 
+In `validate` and `dry_run` no collection role writes to a cluster or writes durable
+local state (#284): every such write runs only in `execute`, and the results a preview
+publishes report what was planned rather than what was applied (see the
+[variable reference](variable-reference.md#preview-results-validate-and-dry_run)). The
+Python CLI never enters primary preparation, Argo CD pause or resume, or RBAC setup under
+`--validate-only`; the collection previews `primary_prep` and `argocd_manage` when they are
+entered directly in `validate`, as it does `activation`, `post_activation` and
+`finalization`. `rbac_bootstrap` and `playbooks/argocd_resume.yml` refuse `validate`
+before any read, matching Python, where `--validate-only` cannot be combined with
+`--setup` or `--argocd-resume-only`. A direct `primary_prep` entry refuses an unknown mode
+before its first checkpoint action, so a misspelled mode can no longer record the phase
+as passed with nothing paused.
+
 Live execute-mode runs bind resumable state to the current hub identities. The
 Python CLI persists each hub context with the Kubernetes `kube-system` namespace
 UID in its state file and rejects a resumed run if the same stored context now

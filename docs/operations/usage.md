@@ -1226,8 +1226,9 @@ role's delete guards fire in any mode other than `dry_run`, so a validate run wo
 really delete while recording no durable identity. Preview with `mode: dry_run`, or
 use native check mode (`--check`). Neither establishes authoritative teardown
 identity, neither writes checkpoint state, and neither publishes destructive
-completion authority. Collection-wide `validate` behaviour outside this role is
-tracked separately in issue #284.
+completion authority. Elsewhere in the collection `validate` is a non-mutating preview,
+except for RBAC bootstrap and the standalone Argo CD resume playbook, which refuse it
+(#284; see the collection variable reference).
 
 **Reset flags are refused on the standalone path.** `checkpoint.reset: true` and a
 non-empty `checkpoint.reset_from` are rejected on every standalone decommission

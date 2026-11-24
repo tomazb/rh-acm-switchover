@@ -104,7 +104,7 @@ managed-cluster client is built. See `docs/operations/usage.md`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. Native Ansible check mode is non-mutating even when this is `execute`; published role results (`acm_switchover_pause_backups_result.changed`, `acm_switchover_restore_activation_result.changed`) report the would-change verdict under `--check`. The `old_hub_action: secondary` finalization adapter (`disable_old_hub_observability.yml`) refuses `mode: validate` explicitly, before any read or delete: its shared MultiClusterObservability teardown has no non-mutating validate path. |
+| `mode` | `execute`, `validate`, `dry_run` | `execute` (unset in a direct `argocd_manage` or `rbac_bootstrap` invocation: `dry_run`, because those roles define no default mode) | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. In `validate` and `dry_run` no role writes to a cluster or writes durable local state: the writes run only in `execute`, or the role refuses the mode before any of them (decommission and the finalization old-hub Observability adapter refuse `validate`). Access reviews (never persisted) and report artifacts are the only objects and files a preview still creates. `validate` and `dry_run` results report what was planned, never a skipped write as applied (see [Preview results](#preview-results-validate-and-dry_run)). A direct `primary_prep` entry refuses any other mode before its first checkpoint action. `rbac_bootstrap` and `playbooks/argocd_resume.yml` refuse `validate` and any unknown mode before any read, as the Python CLI refuses `--validate-only` with `--setup` or `--argocd-resume-only`. Native Ansible check mode is non-mutating even when this is `execute`: it runs the execute branch, writes go to the API server as server-side dry runs (`kubernetes.core.k8s_scale` sends none), and published role results (`acm_switchover_pause_backups_result.changed`, `acm_switchover_restore_activation_result.changed`, the Argo CD `paused`/`restored` counts) report the would-change verdict under `--check`. The `old_hub_action: secondary` finalization adapter (`disable_old_hub_observability.yml`) refuses `mode: validate` explicitly, before any read or delete: its shared MultiClusterObservability teardown has no non-mutating validate path. |
 | `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
 | `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
 | `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |
@@ -147,7 +147,7 @@ retain their existing checkpoint semantics; neither changes this identity rule.
 
 When `acm_switchover_features.argocd.manage` is `true`, the collection refuses to patch unsafe Applications. Auto-sync Applications owned by an ApplicationSet block the run when they touch ACM resources because the parent controller can revert child changes. Remediate by pausing or updating the parent ApplicationSet, generator, or template before retrying.
 
-Auto-sync Applications also block when `status.resources` is empty or stale because the role cannot rule out ACM impact. Refresh or sync the Application until Argo CD reports current resources, or inspect and pause it manually. After patching, the role re-reads each Application and fails if `spec.syncPolicy.automated` remains enabled.
+Auto-sync Applications also block when `status.resources` is empty or stale because the role cannot rule out ACM impact. Refresh or sync the Application until Argo CD reports current resources, or inspect and pause it manually. After patching in `execute` mode, the role re-reads each Application and fails if `spec.syncPolicy.automated` remains enabled. Under native check mode the patch is a server-side dry run that stores nothing, so the re-read is skipped. In `validate` and `dry_run` nothing is patched; the summary counts the plan instead (see [Preview results](#preview-results-validate-and-dry_run)).
 
 Resume is fail-closed on unresolved obligations (ADR-0001; see `coexistence.md`):
 
@@ -188,10 +188,31 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 
 | Variable | Phase | Key Fields |
 |----------|-------|------------|
-| `acm_switchover_primary_prep_result` | primary_prep | `status`, `changed`, `pause_backups`, `auto_import`, `observability` |
+| `acm_switchover_primary_prep_result` | primary_prep | `phase`, `status`, `changed`; a preview adds `preview: true` and `reason` (the mode). The step results are separate facts: `acm_switchover_pause_backups_result` (`changed`, `operation`), `acm_switchover_auto_import_result` (`changed`, `disabled_clusters`, `status`, `target_strategy`), `acm_switchover_observability_scale_result` (`changed`, `scaled`; set only when Observability is present) |
 | `acm_switchover_activation_result` | activation | `status`, `changed`, `method`, `restore`, `patch` |
 | `acm_switchover_post_activation_result` | post_activation | `status`, `changed`, `summary.passed`, `summary.total`, `summary.pending`, `klusterlet_probe`, `klusterlet_remediation` |
 | `acm_switchover_finalization_result` | finalization | `status`, `changed`, `old_hub_action` |
+
+### Preview results (validate and dry_run)
+
+Outside `execute`, a role writes nothing, and every result it publishes reports what was
+planned rather than what was applied. `execute` output is unchanged: the preview keys below
+appear only in `validate` and `dry_run`. Where a preview reads nothing, `planned` says only
+that execute would run the step.
+
+| Fact | Preview values |
+|------|----------------|
+| `acm_switchover_primary_prep_result` | `status: pass`, `changed` (would-change, as below), `preview: true`, `reason: <mode>` |
+| `acm_switchover_pause_backups_result` | `changed` = would-change (an action other than `none` is planned), `operation` (the plan), `applied: false`, `reason: <mode>` |
+| `acm_switchover_auto_import_result` | `changed: false`, `disabled_clusters: []`, `status: skipped`, `reason: <mode>`, `planned: true` (execute would read ManagedClusters and annotate every non-local one that lacks the marker; the preview does not read them), `target_strategy` |
+| `acm_switchover_observability_scale_result` | `changed: false`, `scaled: false`, `planned` (a compactor StatefulSet was discovered and would be scaled to 0), `reason: <mode>` |
+| `acm_switchover_argocd_summary`, `acm_switchover_argocd_summary_by_hub.<hub>` | `paused` and `restored` stay applied counts (0), plus `planned_pause` and `planned_resume`: the Applications discovery found that execute would pause (auto-sync on) or restore (paused by the current run_id with a recoverable policy). A preview pause changes nothing, so a later preview resume counts only Applications already paused by that run_id. Mock mode counts every mock Application, as its execute summary does |
+| `acm_switchover_rbac_bootstrap_result` (`dry_run`; validate is refused) | `assets_applied: []`, `planned_assets`, `generated_kubeconfig: ""`, `generated_kubeconfigs: {}`, `planned_kubeconfigs` (role to path; `{}` unless `generate_kubeconfigs`) |
+
+In `dry_run` this changes values the collection published before #284: the compactor result
+reported `scaled: true` and the RBAC result listed the plan as `assets_applied` with the
+kubeconfig paths it would write, although nothing was scaled, applied or written. The
+switchover report's `argocd.summary` aggregates the applied `paused`/`restored` counts only.
 
 ### post_activation summary fields
 
@@ -334,4 +355,4 @@ the role — in execute mode an inconsistent identity is first written as
 |----------|----------|------------|
 | `acm_switchover_discovery_result` | discovery | `playbook`, `hub_role`, `status` |
 | `acm_switchover_decommission_result` | decommission | `phase`, `mode`, `status` |
-| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `generated_kubeconfig`, `generated_kubeconfigs`, `status` |
+| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `generated_kubeconfig`, `generated_kubeconfigs`, `status`; `dry_run` adds `planned_assets` and `planned_kubeconfigs` (see [Preview results](#preview-results-validate-and-dry_run)); `validate` is refused |
