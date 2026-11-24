@@ -8,9 +8,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 SENTINEL = "R302-SENTINEL-HTTP-BODY"
+_BACKUP_SCHEDULE_PREFIX = (
+    "/apis/cluster.open-cluster-management.io/v1beta1/namespaces/open-cluster-management-backup/backupschedules/"
+)
 
 
 def status_payload(status: int, *, message: str = "fixture request failed") -> dict:
@@ -46,7 +49,18 @@ class FakeR302API:
         core_resources: list[dict[str, Any]] | None = None,
         managed_clusters: list[dict[str, Any]] | None = None,
         managed_cluster_discovery_status: int = 200,
+        backup_schedules: list[dict[str, Any]] | None = None,
+        pods_follow_replicas: bool = False,
+        honor_dry_run: bool = False,
     ):
+        # Served BackupSchedules (cluster.open-cluster-management.io/v1beta1); None serves
+        # no v1beta1 group at all, exactly as before.
+        self.backup_schedules: list[dict[str, Any]] | None = copy.deepcopy(backup_schedules)
+        # When set, the compactor pod list holds one running pod while the StatefulSet has
+        # replicas and none once it is scaled to 0, as a real controller converges.
+        self.pods_follow_replicas = pods_follow_replicas
+        # When set, a write carrying dryRun=All changes nothing, as on a real API server.
+        self.honor_dry_run = honor_dry_run
         self.pod_list_status = pod_list_status
         self.pod_list_body = copy.deepcopy(pod_list_body)
         self.pod_transport_error = pod_transport_error
@@ -77,6 +91,7 @@ class FakeR302API:
         self._scaled_statefulset_reads = 0
         self._shutdown_scheduled = False
         self._requests: list[dict[str, str]] = []
+        self._queries: list[dict[str, str]] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = Thread(target=self._server.serve_forever, daemon=True)
@@ -95,14 +110,21 @@ class FakeR302API:
     def writes(self) -> list[dict[str, str]]:
         return [request for request in self.requests if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}]
 
+    @property
+    def queries(self) -> list[dict[str, str]]:
+        """Every request with its raw query string, which `requests` deliberately omits."""
+        with self._lock:
+            return copy.deepcopy(self._queries)
+
     def close(self) -> None:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
 
-    def _record(self, method: str, path: str) -> None:
+    def _record(self, method: str, path: str, query: str = "") -> None:
         with self._lock:
             self._requests.append({"method": method, "path": path})
+            self._queries.append({"method": method, "path": path, "query": query})
 
     def _handler(self):
         api = self
@@ -113,7 +135,7 @@ class FakeR302API:
 
             def do_GET(self):
                 path = unquote(urlsplit(self.path).path)
-                api._record("GET", path)
+                api._record("GET", path, urlsplit(self.path).query)
                 if path == "/version":
                     self._write_json({"major": "1", "minor": "28", "gitVersion": "v1.28.0"})
                     return
@@ -179,7 +201,17 @@ class FakeR302API:
                                             "groupVersion": "cluster.open-cluster-management.io/v1",
                                             "version": "v1",
                                         }
-                                    ],
+                                    ]
+                                    + (
+                                        [
+                                            {
+                                                "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+                                                "version": "v1beta1",
+                                            }
+                                        ]
+                                        if api.backup_schedules is not None
+                                        else []
+                                    ),
                                     "preferredVersion": {
                                         "groupVersion": "cluster.open-cluster-management.io/v1",
                                         "version": "v1",
@@ -209,6 +241,30 @@ class FakeR302API:
                             ],
                         }
                     )
+                    return
+                if path == "/apis/cluster.open-cluster-management.io/v1beta1" and api.backup_schedules is not None:
+                    self._write_json(
+                        {
+                            "kind": "APIResourceList",
+                            "groupVersion": "cluster.open-cluster-management.io/v1beta1",
+                            "resources": [
+                                {
+                                    "name": "backupschedules",
+                                    "singularName": "backupschedule",
+                                    "namespaced": True,
+                                    "kind": "BackupSchedule",
+                                    "verbs": ["get", "list", "patch"],
+                                }
+                            ],
+                        }
+                    )
+                    return
+                if path.startswith(_BACKUP_SCHEDULE_PREFIX) and api.backup_schedules is not None:
+                    schedule = self._backup_schedule(path.removeprefix(_BACKUP_SCHEDULE_PREFIX))
+                    if schedule is None:
+                        self._write_json(status_payload(404), status=404)
+                    else:
+                        self._write_json(schedule)
                     return
                 if path == "/apis/apps/v1":
                     self._write_json(
@@ -258,6 +314,28 @@ class FakeR302API:
                         )
                         return
                     payload = api.pod_list_body
+                    if payload is None and api.pods_follow_replicas:
+                        with api._lock:
+                            running = api.statefulset_replicas > 0
+                        payload = {
+                            "apiVersion": "v1",
+                            "kind": "PodList",
+                            "metadata": {"resourceVersion": "1"},
+                            "items": (
+                                [
+                                    {
+                                        "apiVersion": "v1",
+                                        "kind": "Pod",
+                                        "metadata": {
+                                            "name": "thanos-compactor-0",
+                                            "namespace": "open-cluster-management-observability",
+                                        },
+                                    }
+                                ]
+                                if running
+                                else []
+                            ),
+                        }
                     if payload is None:
                         payload = {
                             "apiVersion": "v1",
@@ -345,9 +423,21 @@ class FakeR302API:
 
             def do_PATCH(self):
                 path = unquote(urlsplit(self.path).path)
-                api._record("PATCH", path)
+                query = urlsplit(self.path).query
+                api._record("PATCH", path, query)
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                if api.honor_dry_run and "All" in parse_qs(query).get("dryRun", []):
+                    # A server-side dry run: answer, store nothing.
+                    self._write_json(body or {"kind": "Status", "status": "Success"})
+                    return
+                if path.startswith(_BACKUP_SCHEDULE_PREFIX) and api.backup_schedules is not None:
+                    schedule = self._backup_schedule(path.removeprefix(_BACKUP_SCHEDULE_PREFIX), patch=body)
+                    if schedule is None:
+                        self._write_json(status_payload(404), status=404)
+                    else:
+                        self._write_json(schedule)
+                    return
                 if path == (
                     "/apis/apps/v1/namespaces/"
                     "open-cluster-management-observability/statefulsets/"
@@ -411,7 +501,7 @@ class FakeR302API:
 
             def _unsupported_write(self, method: str) -> None:
                 path = unquote(urlsplit(self.path).path)
-                api._record(method, path)
+                api._record(method, path, urlsplit(self.path).query)
                 length = int(self.headers.get("Content-Length", "0"))
                 if length:
                     self.rfile.read(length)
@@ -424,6 +514,19 @@ class FakeR302API:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            @staticmethod
+            def _backup_schedule(name: str, patch: dict | None = None) -> dict | None:
+                with api._lock:
+                    for schedule in api.backup_schedules or []:
+                        if schedule.get("metadata", {}).get("name") != name:
+                            continue
+                        if patch:
+                            schedule.setdefault("spec", {}).update((patch.get("spec") or {}))
+                            metadata = schedule.setdefault("metadata", {})
+                            metadata["resourceVersion"] = str(int(metadata.get("resourceVersion", "1")) + 1)
+                        return copy.deepcopy(schedule)
+                return None
 
             @staticmethod
             def _close_server() -> None:
