@@ -139,7 +139,9 @@ def test_cluster_wide_application_discovery(tmp_path, monkeypatch, caplog, hub_o
 
 
 @pytest.mark.parametrize("advisory", [False, True], ids=["managed-pause", "automatic-preflight"])
-@pytest.mark.parametrize("case", ["discovery-503", "verified-absence", "empty", "missing-name", "blank-namespace"])
+@pytest.mark.parametrize(
+    "case", ["discovery-503", "verified-absence", "empty", "digit-namespace", "missing-name", "blank-namespace"]
+)
 def test_unscoped_application_inventory_at_python_entrypoints(tmp_path, monkeypatch, caplog, advisory, case):
     hub_options = {}
     expected_paths = [_DISCOVERY, _LIST]
@@ -151,6 +153,9 @@ def test_unscoped_application_inventory_at_python_entrypoints(tmp_path, monkeypa
     elif case == "verified-absence":
         hub_options["application_api_available"] = False
         expected_paths = [_DISCOVERY, "/apis"]
+    elif case == "digit-namespace":
+        app = application("9-team", "acm-app.example", automated=False)
+        hub_options["cluster_application_list_response"] = (200, _inventory(items=[app]))
     elif case in ("missing-name", "blank-namespace"):
         valid = application("argocd", "acm-app", automated=True)
         malformed = application("argocd", "other-app", automated=True)
@@ -194,6 +199,7 @@ def test_unscoped_application_inventory_at_python_entrypoints(tmp_path, monkeypa
                 expected_message = {
                     "verified-absence": "Application API not served; check skipped",
                     "empty": "0 ACM-touching Application(s) detected",
+                    "digit-namespace": "1 ACM-touching Application(s) detected",
                 }.get(case, "Unable to complete Argo CD check")
                 assert expected_message in caplog.text
                 assert ("Unable to complete Argo CD check" in caplog.text) is error
@@ -203,13 +209,13 @@ def test_unscoped_application_inventory_at_python_entrypoints(tmp_path, monkeypa
                 assert _SECRET not in str(exc.value)
             else:
                 summary = ArgocdPauseRegister(state).pause_hubs([(client, "secondary")])
-                assert summary.applications_crd_visible is (case == "empty")
+                assert summary.applications_crd_visible is (case in ("empty", "digit-namespace"))
                 assert summary.newly_paused == 0
-                assert bool(summary.run_id) is (case == "empty")
+                assert bool(summary.run_id) is (case in ("empty", "digit-namespace"))
 
         assert hub.requests == [{"method": "GET", "path": path} for path in expected_paths]
         assert _SECRET not in caplog.text
-        if advisory or case != "empty":
+        if advisory or case not in ("empty", "digit-namespace"):
             run_id_or_new.assert_not_called()
             assert state._get_config(STATE_KEY_ARGOCD_RUN_ID) is None
         if error:

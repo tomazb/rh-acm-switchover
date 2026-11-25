@@ -110,9 +110,9 @@ def test_unscoped_missing_application_api_is_absent(tmp_path, advisory, group_ve
 
 
 @pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
-@pytest.mark.parametrize("populated", [False, True], ids=["empty", "populated"])
-def test_unscoped_application_list_is_present(tmp_path, advisory, populated):
-    apps = [application("team-gitops", "acm-app.example", automated=False)] if populated else []
+@pytest.mark.parametrize("namespace", [None, "team-gitops", "9-team"], ids=["empty", "populated", "digit-namespace"])
+def test_unscoped_application_list_is_present(tmp_path, advisory, namespace):
+    apps = [application(namespace, "acm-app.example", automated=False)] if namespace is not None else []
     hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=apps)
     try:
         completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
