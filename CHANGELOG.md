@@ -321,6 +321,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ansible preflight preserves discovered Velero Backups when no backup needs to finish
+  before validation, on the primary hub during switchover and on the target hub during restore-only (#389).
 - Standalone Ansible decommission rejects unrecognized execution modes before
   checkpoint entry or Kubernetes access, including when checkpointing is disabled (#391).
 - Post-activation verifies the observatorium-api rollout in both the Python CLI and Ansible
