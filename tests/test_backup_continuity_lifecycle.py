@@ -12,6 +12,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -31,6 +32,7 @@ from tests.test_finalization_backup_strict import BackupTransport, Clock
 from tests.test_finalization_backup_strict import backup as velero_backup
 from tests.test_finalization_backup_strict import page
 
+_ARGOCD_DISCOVERY_PATH = "/apis/argoproj.io/v1alpha1"
 HISTORY = Path(__file__).parent / "fixtures/backup_continuity_history"
 MANIFEST = json.loads((HISTORY / "manifest.json").read_text())
 
@@ -103,9 +105,15 @@ class LifecycleTransport(BackupTransport):
         raise ApiException(status=404)
 
     def call_api(self, path, method, **kwargs):
+        if path == _ARGOCD_DISCOVERY_PATH:
+            assert method == "GET"
+            self.requests.append(("argocd_discovery", path))
+            return SimpleNamespace(
+                data=json.dumps(
+                    {"kind": "APIResourceList", "groupVersion": "argoproj.io/v1alpha1", "resources": []}
+                ).encode()
+            )
         if path.startswith("/apis/cluster.open-cluster-management.io/"):
-            from types import SimpleNamespace
-
             return SimpleNamespace(
                 data=json.dumps(
                     {
@@ -662,9 +670,9 @@ def test_real_failed_retry_disposes_repause_obligation_before_backup_proof(attem
 
     def prove(*a, **k):
         assert record.argocd_repause_required() is None
-        assert len([r for r in st.requests if r[0] == "argocd_crd"]) == 2
+        assert st.requests.count(("argocd_discovery", _ARGOCD_DISCOVERY_PATH)) == 1
         if not restore:
-            assert len([r for r in pt.requests if r[0] == "argocd_crd"]) == 2
+            assert pt.requests.count(("argocd_discovery", _ARGOCD_DISCOVERY_PATH)) == 1
         return original(*a, **k)
 
     monkeypatch.setattr(cli, "_verify_backup_continuity_entry", prove)

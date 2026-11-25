@@ -592,8 +592,8 @@ class TestDryRunRecordsNothing:
         client.dry_run = True
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             register = ArgocdPauseRegister(state, dry_run=True)
             summary = register.pause_hubs([(client, "secondary")])

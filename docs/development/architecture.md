@@ -109,12 +109,12 @@ flowchart TD
     RG --> RP{--argocd-manage?}
     RP -->|yes| RQ[Pause ACM-touching<br/>Argo CD Applications<br/>on secondary]
     RP -->|no| RI[ACTIVATION full restore]
-    RQ --> RI
+    RQ -->|Discovery and pause succeed or skip| RI
     RI --> RJ[POST_ACTIVATION]
     RJ --> RM[FINALIZATION backups-only]
     RM --> RK[COMPLETED]
     RG --> RL[FAILED]
-    RQ --> RL
+    RQ -->|Discovery or pause fails| RL
     RI --> RL
     RJ --> RL
     RM --> RL
@@ -738,7 +738,9 @@ sequenceDiagram
     CLI->>State: ensure_hub_identities
     CLI->>Mods: run preflight coordinator
     Mods->>Argo: detect Argo CD CRDs for RBAC scoping
-    CLI->>Argo: report Argo CD ACM impact (optional, after preflight)
+    opt GitOps checks enabled
+        CLI->>Argo: verify Application API, then report ACM impact
+    end
     CLI->>Mods: run primary preparation
     Mods->>Argo: optionally pause ACM-touching Applications
     CLI->>Mods: run activation
@@ -791,7 +793,9 @@ GitOps support is intentionally layered:
 Key design properties:
 
 - Marker detection can be disabled with `--skip-gitops-check`
-- ArgoCD detection runs automatically (read-only) when Applications CRD is detected
+- Read-only Argo CD discovery runs automatically during preflight when GitOps checks are enabled.
+  Cluster-wide discovery requires fresh proof that the Application API is unserved or a complete
+  inventory with usable Application names and namespaces.
 - `--argocd-manage` is mutating, so `--validate-only` downgrades it to read-only rather than
   rejecting it: the CLI accepts the combination and warns that management has no effect
   (`acm_switchover.py:379`), then preflight computes effective management as off

@@ -63,6 +63,10 @@ class FakeArgoCDHub:
         cluster_uid: str,
         applications: list[dict],
         namespace_list_failures: dict[str, str] | None = None,
+        application_api_available: bool = True,
+        application_crd_present: bool = False,
+        application_discovery_response: tuple[int, dict] | None = None,
+        cluster_application_list_response: tuple[int, dict] | None = None,
         kube_system_status: int = 200,
         kube_system_body: dict | None = None,
         patch_failure_status: int | None = None,
@@ -78,6 +82,10 @@ class FakeArgoCDHub:
             (item["metadata"]["namespace"], item["metadata"]["name"]): copy.deepcopy(item) for item in applications
         }
         self._namespace_list_failures = dict(namespace_list_failures or {})
+        self._application_api_available = application_api_available
+        self._application_crd_present = application_crd_present
+        self._application_discovery_response = copy.deepcopy(application_discovery_response)
+        self._cluster_application_list_response = copy.deepcopy(cluster_application_list_response)
         self._kube_system_status = kube_system_status
         self._kube_system_body = copy.deepcopy(kube_system_body)
         self._requests: list[dict[str, str]] = []
@@ -161,6 +169,14 @@ class FakeArgoCDHub:
                 kube_system_response = hub._configured_kube_system_response(path)
                 if kube_system_response is not None:
                     status, payload = kube_system_response
+                    self._write_json(payload, status=status)
+                    return
+                if path == "/apis/argoproj.io/v1alpha1" and hub._application_discovery_response is not None:
+                    status, payload = hub._application_discovery_response
+                    self._write_json(payload, status=status)
+                    return
+                if path == "/apis/argoproj.io/v1alpha1/applications" and hub._cluster_application_list_response:
+                    status, payload = hub._cluster_application_list_response
                     self._write_json(payload, status=status)
                     return
                 parts = path.strip("/").split("/")
@@ -260,7 +276,7 @@ class FakeArgoCDHub:
                 )
 
             def _get_payload(self, path: str):
-                static = {
+                static: dict[str, dict] = {
                     "/version": {"major": "1", "minor": "28", "gitVersion": "v1.28.0"},
                     "/api": {
                         "kind": "APIVersions",
@@ -353,6 +369,22 @@ class FakeArgoCDHub:
                         "items": [],
                     },
                 }
+                if (
+                    hub._application_crd_present
+                    and path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/applications.argoproj.io"
+                ):
+                    return {
+                        "apiVersion": "apiextensions.k8s.io/v1",
+                        "kind": "CustomResourceDefinition",
+                        "metadata": {"name": "applications.argoproj.io"},
+                    }
+                if not hub._application_api_available:
+                    static["/apis"]["groups"] = [
+                        group for group in static["/apis"]["groups"] if group["name"] != "argoproj.io"
+                    ]
+                    static.pop("/apis/argoproj.io/v1alpha1")
+                    if path.startswith("/apis/argoproj.io/"):
+                        return None
                 if path in static:
                     return static[path]
 

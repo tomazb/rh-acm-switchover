@@ -808,6 +808,35 @@ class KubeClient:
 
         return _call_sdk(exchange)
 
+    def _api_version_omitted(self, api_version: str) -> bool:
+        """Prove omission from the live API group index after a discovery 404."""
+        try:
+            index = json.loads(self._request_bytes("GET", "/apis", timeout=self.request_timeout).decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(index, dict) or index.get("kind") != "APIGroupList":
+            return False
+        groups = index.get("groups")
+        if not isinstance(groups, list):
+            return False
+
+        advertised = set()
+        for entry in groups:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"]:
+                return False
+            versions = entry.get("versions")
+            if not isinstance(versions, list) or not versions:
+                return False
+            for api in versions:
+                version = api.get("version") if isinstance(api, dict) else None
+                if not isinstance(version, str) or not version or "/" in version:
+                    return False
+                group_version = f"{entry['name']}/{version}"
+                if api.get("groupVersion") != group_version:
+                    return False
+                advertised.add(group_version)
+        return api_version not in advertised
+
     def _discovery_serves(self, group: str, version: str, resource_name: str) -> StrictReadOutcome:
         """Positively determine whether one kind is served, or fail closed.
 
@@ -821,12 +850,10 @@ class KubeClient:
         distinguishable by exception type, and the client library's own
         discovery cache swallows some failures into an empty resource list.
         """
-        path = f"/apis/{group}/{version}" if group else f"/api/{version}"
-        # Every failure mode is unverifiable discovery: an API error, a timeout, a TLS or
-        # transport failure, and an undecodable body are all indistinguishable from an
-        # unserved kind, so none of them may be reported as absence. The log names which.
+        requested_group_version = f"{group}/{version}" if group else version
+        path = f"/apis/{requested_group_version}" if group else f"/api/{version}"
         try:
-            data = self._request_bytes("GET", path, timeout=self.request_timeout)
+            resources = self._read_discovery_resources(path, requested_group_version)
         except ApiException as exc:
             logger.warning(
                 "Discovery of %s could not be verified: HTTP %s (%s)", path, exc.status, _failure_category_of(exc)
@@ -837,31 +864,32 @@ class KubeClient:
                 "Discovery of %s could not be verified (%s: %s)", path, type(exc).__name__, _failure_category_of(exc)
             )
             return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        if resources is None:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        if any(entry["name"] == resource_name for entry in resources):
+            return StrictReadOutcome.from_items([])
+        return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+
+    def _read_discovery_resources(self, path: str, requested_group_version: str) -> Optional[List[Dict]]:
+        """Read a fresh, validated APIResourceList. API and transport failures propagate."""
+        data = self._request_bytes("GET", path, timeout=self.request_timeout)
         try:
-            # The raw body is decoded here rather than by the client: client-side
-            # deserialization differs across the supported dependency range, which would make
-            # this prover version-dependent — the exact failure mode it exists to avoid.
+            # Decode locally for consistent validation across SDK versions.
             response = json.loads(data.decode("utf-8"))
         except Exception:
             logger.warning("Discovery of %s could not be verified (%s)", path, _CATEGORY_MALFORMED)
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+            return None
 
-        if not isinstance(response, dict):
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
-        if response.get("kind") != "APIResourceList":
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
-        # A document that does not declare the requested group/version says nothing about it:
-        # it can prove neither that the resource is served nor that it is absent (#321).
-        requested_group_version = f"{group}/{version}" if group else version
+        if not isinstance(response, dict) or response.get("kind") != "APIResourceList":
+            return None
+        # A document for another group/version proves neither presence nor absence (#321).
         group_version = response.get("groupVersion")
         if not isinstance(group_version, str) or not group_version or group_version != requested_group_version:
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+            return None
         resources = response.get("resources")
         if not isinstance(resources, list):
-            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
-        # The whole document is validated before any verdict. Deciding on the first matching
-        # entry would let one response mean `ITEMS` or `ERROR` purely by server entry order.
-        # Absence was never order-sensitive: it already required the full list to validate.
+            return None
+        # Validate the whole document before drawing a conclusion from any entry.
         for entry in resources:
             if (
                 not isinstance(entry, dict)
@@ -870,10 +898,8 @@ class KubeClient:
                 or not isinstance(entry.get("kind"), str)
                 or not entry["kind"]
             ):
-                return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
-        if any(entry["name"] == resource_name for entry in resources):
-            return StrictReadOutcome.from_items([])
-        return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+                return None
+        return resources
 
     def _validate_resource_inputs(
         self,
@@ -1473,14 +1499,44 @@ class KubeClient:
         if served.status is not StrictReadStatus.ITEMS:
             return served
 
+        return self._list_discovered_custom_resources(group, version, plural, namespace, label_selector)
+
+    def list_optional_namespaced_resources_strict(
+        self, group: str, version: str, plural: str, *, kind: str
+    ) -> StrictReadOutcome:
+        """List an optional namespaced custom kind across the cluster after proving its route."""
+        api_version = f"{group}/{version}"
+        try:
+            resources = self._read_discovery_resources(f"/apis/{api_version}", api_version)
+        except ApiException as exc:
+            if exc.status == 404:
+                if self._api_version_omitted(api_version):
+                    return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        except Exception:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+
+        if resources is None:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+        matches = [entry for entry in resources if entry["name"] == plural]
+        if not matches:
+            return StrictReadOutcome.crd_absent(STRICT_READ_REASON_KIND_NOT_SERVED)
+        if len(matches) != 1 or matches[0]["kind"] != kind or matches[0].get("namespaced") is not True:
+            return StrictReadOutcome.error(STRICT_READ_REASON_DISCOVERY_UNVERIFIABLE)
+
+        return self._list_discovered_custom_resources(group, version, plural, None, None, expected_kind=kind)
+
+    def _list_discovered_custom_resources(
+        self, group, version, plural, namespace, label_selector, *, expected_kind=None
+    ) -> StrictReadOutcome:
         for _ in range(STRICT_READ_MAX_RESTARTS + 1):
-            outcome = self._drain_strict_list(group, version, plural, namespace, label_selector)
+            outcome = self._drain_strict_list(group, version, plural, namespace, label_selector, expected_kind)
             if outcome is not _RESTART_READ:
                 return outcome
         # The restart budget is spent and the continuation is still expiring.
         return StrictReadOutcome.error(STRICT_READ_REASON_INVENTORY_INCOMPLETE)
 
-    def _drain_strict_list(self, group, version, plural, namespace, label_selector):
+    def _drain_strict_list(self, group, version, plural, namespace, label_selector, expected_kind):
         """One whole-read attempt. Items accumulate here and escape only on success.
 
         `snapshot_revision` is captured from page 1 and describes the whole read (A3.0 rule 8).
@@ -1533,6 +1589,10 @@ class KubeClient:
                 return StrictReadOutcome.error(STRICT_READ_REASON_READ_FAILED)
 
             if not isinstance(page, dict):
+                return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
+            if expected_kind and (
+                page.get("apiVersion") != f"{group}/{version}" or page.get("kind") != f"{expected_kind}List"
+            ):
                 return StrictReadOutcome.error(STRICT_READ_REASON_MALFORMED_RESPONSE)
             page_items = page.get("items")
             if not isinstance(page_items, list):

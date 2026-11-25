@@ -14,7 +14,6 @@ from lib import argocd as argocd_lib
 from lib.argocd_register import ArgocdPauseRegister
 from tests.argocd_register_helpers import (
     _discovery_with_crd,
-    _discovery_without_crd,
     _make_app,
     _make_impact,
     _make_state_manager,
@@ -74,8 +73,8 @@ class TestPauseHubsSingleHub:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
             summary = coordinator.pause_hubs([(client, "secondary")])
@@ -179,26 +178,20 @@ class TestPauseHubsTwoHubs:
         assert len(entries) == 2
         assert {e["hub"] for e in entries} == {"primary", "secondary"}
 
-    def test_skips_hub_without_crd(self):
-        """When one hub lacks the CRD, only the other hub is processed."""
+    def test_skips_hub_without_application_api(self):
+        """When one hub has an unserved Application API, only the other hub is processed."""
         state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
         primary_client = Mock()
         secondary_client = Mock()
         app = _make_app("argocd", "app-1")
 
-        def detect_side_effect(client):
-            if client is primary_client:
-                return _discovery_with_crd()
-            return _discovery_without_crd()
+        def list_for_hub(client, *, namespaces):
+            return [app] if client is primary_client else None
 
         with (
             patch(
-                "lib.argocd_register.argocd_lib.detect_argocd_installation",
-                side_effect=detect_side_effect,
-            ),
-            patch(
                 "lib.argocd_register.argocd_lib.list_argocd_applications",
-                return_value=[app],
+                side_effect=list_for_hub,
             ),
             patch(
                 "lib.argocd_register.argocd_lib.find_acm_touching_apps",
@@ -592,9 +585,11 @@ class TestErrorHandling:
             }
         ]
 
-    def test_detection_failure_propagates(self):
-        """ArgoCD detection errors should propagate to the caller."""
-        state = _make_state_manager({})
+    def test_scoped_detection_failure_propagates(self):
+        """Argo CD CRD detection errors on a scoped retry should propagate to the caller."""
+        state = _make_state_manager(
+            {"argocd_run_id": "run-1", "argocd_discovery_namespaces": {"secondary": ["argocd"]}}
+        )
         client = Mock()
 
         with patch(

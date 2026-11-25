@@ -17,6 +17,7 @@ validation and client construction stay with the calling module.
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import Any
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
@@ -117,7 +118,47 @@ def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
     return members, token, revision
 
 
-def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None:
+def _read_json(
+    dynamic_client,
+    path: str,
+    *,
+    _request_timeout: int = STRICT_READ_REQUEST_TIMEOUT,
+    **params,
+) -> Any:
+    response = dynamic_client.request("GET", path, serialize=False, _request_timeout=_request_timeout, **params)
+    return json.loads(response.data.decode("utf8"))
+
+
+def _api_version_omitted(api_client, api_version: str) -> bool:
+    """Prove omission from the live index after group/version discovery returned 404."""
+    try:
+        body = _read_json(api_client.client, "/apis")
+    except Exception:
+        return False
+    if not isinstance(body, dict) or body.get("kind") != "APIGroupList" or not isinstance(body.get("groups"), list):
+        return False
+
+    advertised = set()
+    for group in body["groups"]:
+        if not isinstance(group, dict) or not isinstance(group.get("name"), str) or not group["name"]:
+            return False
+        versions = group.get("versions")
+        if not isinstance(versions, list) or not versions:
+            return False
+        for entry in versions:
+            version = entry.get("version") if isinstance(entry, dict) else None
+            if not isinstance(version, str) or not version or "/" in version:
+                return False
+            group_version = f"{group['name']}/{version}"
+            if entry.get("groupVersion") != group_version:
+                return False
+            advertised.add(group_version)
+    return api_version not in advertised
+
+
+def _live_discovery_resources(
+    api_client, api_version: str, *, allow_absent_api_version: bool = False
+) -> list[dict] | None:
     """The group/version's live APIResourceList entries, or None if unverifiable.
 
     Every request goes to the API server: the dynamic client's discovery cache substitutes an
@@ -127,9 +168,11 @@ def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None
     """
     path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
     try:
-        response = api_client.client.request("GET", path, serialize=False, _request_timeout=STRICT_READ_REQUEST_TIMEOUT)
-        body = json.loads(response.data.decode("utf8"))
-    except Exception:
+        body = _read_json(api_client.client, path)
+    except Exception as exc:
+        if allow_absent_api_version and "/" in api_version and getattr(exc, "status", None) == 404:
+            if _api_version_omitted(api_client, api_version):
+                return []
         return None
     if not isinstance(body, dict) or body.get("kind") != "APIResourceList":
         return None
@@ -244,16 +287,16 @@ def _named_404_status(
     return "not_found"
 
 
-def _drain_list(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
+def _drain_list(get_page, params) -> tuple[list[dict] | None, str, str | None]:
     """Drain every page of one list, or fail closed. Never returns a partial prefix."""
     for _ in range(STRICT_READ_MAX_RESTARTS + 1):
-        collected, status, revision = _drain_list_once(api_client, resource, params)
+        collected, status, revision = _drain_list_once(get_page, params)
         if status != "restart":
             return collected, status, revision
     return None, "error", None
 
 
-def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, str, str | None]:
+def _drain_list_once(get_page, params) -> tuple[list[dict] | None, str, str | None]:
     collected: list[dict] = []
     continue_token = None
     # Page 1 owns the snapshot revision, every later page must be served at that same value, and
@@ -268,7 +311,7 @@ def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, s
         else:
             page_params["_continue"] = None
         try:
-            raw = api_client.get(resource, **page_params)
+            raw = get_page(**page_params)
         except Exception as exc:
             if getattr(exc, "status", None) == 410 and continue_token:
                 # Expired continuation: discard everything, including this read's revision.
@@ -287,6 +330,49 @@ def _drain_list_once(api_client, resource, params) -> tuple[list[dict] | None, s
         if not continue_token:
             return collected, "ok", snapshot_revision
     return None, "error", None
+
+
+def strict_optional_namespaced_list(
+    api_client,
+    *,
+    api_version: str,
+    kind: str,
+    resource_name: str,
+    namespace: str | None = None,
+    label_selectors: list[str] | None = None,
+) -> tuple[str, list[dict], str | None]:
+    """List a namespaced custom resource whose API may legitimately be absent."""
+    if "/" not in api_version:
+        return "error", [], None
+    discovered = _live_discovery_resources(api_client, api_version, allow_absent_api_version=True)
+    if discovered is None:
+        return "error", [], None
+    entries = [entry for entry in discovered if entry["name"] == resource_name]
+    if not entries:
+        return "kind_not_served", [], None
+    if len(entries) != 1 or entries[0]["kind"] != kind or entries[0].get("namespaced") is not True:
+        return "error", [], None
+
+    # The exact group/version, plural, kind and scope come from the live proof.
+    # A namespace selects the namespaced route; otherwise list across namespaces.
+    path = f"/apis/{api_version}"
+    if namespace:
+        path += "/namespaces/{namespace}"
+    path += f"/{resource_name}"
+
+    def get_page(**params):
+        body = _read_json(api_client.client, path, **params)
+        if isinstance(body, dict) and body.get("apiVersion") == api_version and body.get("kind") == f"{kind}List":
+            return body
+        return None
+
+    params: dict[str, Any] = {}
+    if namespace:
+        params["path_params"] = {"namespace": namespace}
+    if label_selectors:
+        params["label_selector"] = ",".join(label_selectors)
+    resources, status, revision = _drain_list(get_page, params)
+    return status, resources or [], revision
 
 
 def _object_revision(resources: list[dict]) -> str | None:
@@ -354,7 +440,7 @@ def strict_read(
             params["label_selector"] = ",".join(label_selectors)
 
     if read_mode == "list":
-        resources, status, revision = _drain_list(api_client, resource, params)
+        resources, status, revision = _drain_list(partial(api_client.get, resource), params)
         if status != "ok":
             return "error", [], None
         return "ok", list(resources or []), revision

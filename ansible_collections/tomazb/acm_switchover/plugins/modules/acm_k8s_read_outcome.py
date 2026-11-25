@@ -10,7 +10,7 @@ DOCUMENTATION = r"""
 module: acm_k8s_read_outcome
 short_description: Perform one Kubernetes read and classify the outcome
 description:
-  - Performs exactly one Kubernetes GET or LIST via kubernetes.core client
+  - Performs a Kubernetes GET, LIST, or discovery check via kubernetes.core client
     construction and returns a sanitized outcome.
   - Distinguishes successful empty results, named NotFound, and unverifiable
     errors without returning raw exception or response body content.
@@ -55,6 +55,14 @@ options:
         name, so a wrong name makes that 404 C(error) or C(kind_not_served).
     type: str
     required: true
+  allow_absent_api_version:
+    description:
+      - In list mode, allow a grouped API version to be reported as unserved when its endpoint
+        returns HTTP 404 and the live grouped API index omits that version.
+      - Use live discovery to verify the namespaced custom resource's kind and
+        plural before listing directly on the confirmed route.
+    type: bool
+    default: false
   request_timeout:
     description:
       - Seconds that bound a named get instead of the default strict-read request timeout,
@@ -115,12 +123,14 @@ read_status:
       and scope the request was routed by. A 404 for a kind that live discovery positively
       omits is C(kind_not_served); one whose discovery cannot be read or does not declare the
       requested group/version, or whose route live discovery does not confirm, is C(error).
-    - C(kind_not_served) when the API group/version was read successfully and
-      positively does not serve this kind.
+    - C(kind_not_served) when live discovery proves that the API does not serve the
+      requested resource. A failed list on a route that discovery confirmed is C(error).
     - C(error) for every other unverifiable outcome.
     - For C(read_mode=discover), C(ok) when the readable discovery document of the
       requested group/version lists C(resource_name), C(kind_not_served) when it omits it,
       and C(error) when discovery cannot be verified.
+    - For C(read_mode=list) with C(allow_absent_api_version=true), HTTP 404 plus verified
+      omission of the grouped API version also gives C(kind_not_served).
   type: str
   returned: always
   choices: [ok, not_found, kind_not_served, error]
@@ -151,6 +161,7 @@ from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import 
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.k8s_read import (  # noqa: E402,F401
     _discovery_serves,
+    strict_optional_namespaced_list,
     strict_read,
 )
 
@@ -174,6 +185,7 @@ def _argument_spec() -> dict[str, Any]:
                 "default": [],
             },
             "resource_name": {"type": "str", "required": True},
+            "allow_absent_api_version": {"type": "bool", "default": False},
             "request_timeout": {"type": "float", "required": False},
         }
     )
@@ -194,6 +206,26 @@ def _exit_outcome(
     )
 
 
+def _client_without_discovery(params: dict[str, Any]):
+    from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import (
+        K8SClient,
+        _create_auth_spec,
+        _create_configuration,
+        _create_headers,
+        _set_header,
+    )
+    from kubernetes.client import ApiClient
+    from kubernetes.dynamic import DynamicClient
+
+    # Keep kubernetes.core's authentication and headers. Its default discoverer can
+    # send unbounded bootstrap and lookup requests before the explicit live proof.
+    configuration = _create_configuration(_create_auth_spec(**params))
+    client = ApiClient(configuration)
+    for header, value in _create_headers(**params).items():
+        _set_header(client, header, value)
+    return K8SClient(configuration, DynamicClient(client, discoverer=lambda *_: None))
+
+
 def run_module(module: AnsibleModule) -> None:
     read_mode = module.params["read_mode"]
     name = module.params.get("name")
@@ -204,6 +236,18 @@ def run_module(module: AnsibleModule) -> None:
     resource_name = module.params.get("resource_name")
     if not isinstance(resource_name, str) or not resource_name.strip():
         _exit_outcome(module, "error")
+        return
+
+    if read_mode == "list" and module.params.get("allow_absent_api_version", False):
+        outcome = strict_optional_namespaced_list(
+            _client_without_discovery(module.params),
+            api_version=module.params["api_version"],
+            kind=module.params["kind"],
+            resource_name=resource_name,
+            namespace=module.params.get("namespace"),
+            label_selectors=module.params.get("label_selectors"),
+        )
+        _exit_outcome(module, *outcome)
         return
 
     try:

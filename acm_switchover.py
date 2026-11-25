@@ -851,14 +851,13 @@ def _report_argocd_acm_impact(
     hub_pairs.append((HUB_ROLE_SECONDARY, secondary))
     for label, client in hub_pairs:
         try:
-            discovery = argocd_lib.detect_argocd_installation(client, public_advisory=True)
-            if not discovery.has_applications_crd:
+            apps = argocd_lib.list_argocd_applications(client, public_advisory=True)
+            if apps is None:
                 logger.info(
-                    "[%s] Argo CD advisory: Applications CRD not found; check skipped",
+                    "[%s] Argo CD advisory: Application API not served; check skipped",
                     label,
                 )
                 continue
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None, public_advisory=True)
             acm_apps = argocd_lib.find_acm_touching_apps(apps, public_advisory=True)
             if not acm_apps:
                 logger.info(

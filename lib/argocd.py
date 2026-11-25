@@ -23,7 +23,9 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
 )
 from lib.kube_client import KubeClient
+from lib.strict_read import StrictReadStatus
 from lib.utils import dry_run_skip
+from lib.validation import K8S_NAME_MAX_LENGTH, K8S_NAME_PATTERN, K8S_NAMESPACE_MAX_LENGTH
 
 logger = logging.getLogger("acm_switchover")
 
@@ -32,6 +34,9 @@ ARGOCD_APP_GROUP = "argoproj.io"
 ARGOCD_APP_VERSION = "v1alpha1"
 ARGOCD_APP_PLURAL = "applications"
 ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
+
+# Namespace names returned by the API use DNS-1123 labels.
+_ARGOCD_APPLICATION_NAMESPACE_PATTERN = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 # Annotation key for our pause marker (must match the Ansible argocd_manage role)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
@@ -362,7 +367,7 @@ def list_argocd_applications(
     namespaces: Optional[List[str]] = None,
     *,
     public_advisory: bool = False,
-) -> List[Dict[str, Any]]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     List Argo CD Application resources.
 
@@ -371,10 +376,11 @@ def list_argocd_applications(
         namespaces: If set, list only from these namespaces; else list cluster-wide.
 
     Returns:
-        List of Application resource dicts.
+        Application resource dicts, or None when cluster-wide discovery proves the API is unserved.
 
     Raises:
-        ApiException: When Argo CD discovery fails for reasons other than 404/not-installed.
+        RuntimeError: When cluster-wide discovery or listing cannot be verified.
+        ApiException: When a scoped LIST fails with an API error other than 404.
     """
     if namespaces is not None:
         result: List[Dict[str, Any]] = []
@@ -389,10 +395,33 @@ def list_argocd_applications(
                 )
             )
         return result
-    return _list_argocd_applications_once(
-        client,
-        namespace=None,
-        public_advisory=public_advisory,
+    outcome = client.list_optional_namespaced_resources_strict(
+        group=ARGOCD_APP_GROUP,
+        version=ARGOCD_APP_VERSION,
+        plural=ARGOCD_APP_PLURAL,
+        kind="Application",
+    )
+    if outcome.status is StrictReadStatus.CRD_ABSENT:
+        return None
+    if not outcome.is_success:
+        raise RuntimeError(f"Argo CD Application discovery failed ({outcome.reason}). Verify hub API access and retry.")
+    if not all(_has_usable_application_identity(app) for app in outcome.items):
+        raise RuntimeError("Argo CD Application discovery failed (malformed Application identity).")
+    return outcome.items
+
+
+def _has_usable_application_identity(app: Dict[str, Any]) -> bool:
+    metadata = app.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    namespace, name = _app_identity(app)
+    return (
+        isinstance(name, str)
+        and len(name) <= K8S_NAME_MAX_LENGTH
+        and K8S_NAME_PATTERN.fullmatch(name) is not None
+        and isinstance(namespace, str)
+        and len(namespace) <= K8S_NAMESPACE_MAX_LENGTH
+        and _ARGOCD_APPLICATION_NAMESPACE_PATTERN.fullmatch(namespace) is not None
     )
 
 

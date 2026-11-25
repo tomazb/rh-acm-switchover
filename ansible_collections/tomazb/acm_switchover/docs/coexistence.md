@@ -540,6 +540,12 @@ same kind of pause/scope recommendation as the Python CLI when Argo CD managemen
 is not enabled. Discovery failures remain non-blocking and are reported as
 warnings.
 
+For cluster-wide discovery, a served Application API must return a complete LIST.
+A successful empty list is valid. Each member must have a usable name and namespace.
+When fresh discovery confirms the Application resource is unserved, both runtimes can skip
+the hub. When discovery or listing fails, including a LIST 404 on a verified route,
+managed discovery stops and read-only advisory discovery warns.
+
 Argo CD auto-sync pause/resume is the **only supported mutating GitOps integration**
 in the collection. It is managed by the `argocd_manage` role:
 

@@ -3264,16 +3264,8 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         logger = Mock()
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=True,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
 
         with patch(
-            "acm_switchover.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
-        ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             side_effect=ApiException(status=403, reason="Forbidden"),
         ):
@@ -3294,16 +3286,8 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         logger = Mock()
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=True,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
 
         with patch(
-            "acm_switchover.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
-        ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             side_effect=side_effect,
         ):
@@ -3328,9 +3312,9 @@ class TestPreflightPhase:
         sensitive_app = {
             "metadata": {
                 "namespace": "sensitive-app-namespace",
-                "name": "sensitive-app-name\nINJECTED-APPLICATION-LINE\x1b[31m",
+                "name": "sensitive-app-name.example",
                 "annotations": {
-                    "argocd.argoproj.io/tracking-id": "sensitive-tracking-identifier",
+                    "argocd.argoproj.io/tracking-id": "sensitive-tracking-identifier\nINJECTED-APPLICATION-LINE\x1b[31m",
                 },
             },
             "spec": {"syncPolicy": {"automated": {"prune": True}}},
@@ -3344,18 +3328,14 @@ class TestPreflightPhase:
             },
         }
 
-        def list_resources(*_args, **kwargs):
-            if kwargs["plural"] == "argocds":
-                return []
-            if kwargs["plural"] == "applications":
-                return [sensitive_app]
-            raise AssertionError(f"Unexpected plural: {kwargs['plural']}")
+        from lib.strict_read import StrictReadOutcome
 
         primary = Mock()
         secondary = Mock()
         for client in (primary, secondary):
-            client.get_custom_resource_advisory.return_value = {"metadata": {"name": "crd"}}
-            client.list_custom_resources_advisory.side_effect = list_resources
+            client.list_optional_namespaced_resources_strict.return_value = StrictReadOutcome.from_items(
+                [sensitive_app]
+            )
 
         config = {
             "primary_version": "2.14.0",
@@ -3406,7 +3386,9 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         for client in (primary, secondary):
-            client.get_custom_resource_advisory.side_effect = ApiException(status=401, reason=private_reason)
+            client.list_optional_namespaced_resources_strict.side_effect = ApiException(
+                status=401, reason=private_reason
+            )
 
         config = {
             "primary_version": "2.14.0",
@@ -3506,11 +3488,6 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         logger = Mock()
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=True,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
         acm_app = argocd_lib.AppImpact(
             namespace="openshift-gitops",
             name="acm-config",
@@ -3519,9 +3496,6 @@ class TestPreflightPhase:
         )
 
         with patch(
-            "acm_switchover.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
-        ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             return_value=[{"metadata": {"name": "acm-config"}}],
         ), patch(
@@ -3543,11 +3517,6 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         logger = Mock()
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=True,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
         acm_app = argocd_lib.AppImpact(
             namespace="openshift-gitops",
             name="acm-config",
@@ -3556,9 +3525,6 @@ class TestPreflightPhase:
         )
 
         with patch(
-            "acm_switchover.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
-        ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             return_value=[{"metadata": {"name": "acm-config"}}],
         ), patch(
@@ -3580,11 +3546,6 @@ class TestPreflightPhase:
         primary = Mock()
         secondary = Mock()
         logger = Mock()
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=True,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
         acm_app_no_sync = argocd_lib.AppImpact(
             namespace="openshift-gitops",
             name="acm-config",
@@ -3593,9 +3554,6 @@ class TestPreflightPhase:
         )
 
         with patch(
-            "acm_switchover.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
-        ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             return_value=[{"metadata": {"name": "acm-config"}}],
         ), patch(
