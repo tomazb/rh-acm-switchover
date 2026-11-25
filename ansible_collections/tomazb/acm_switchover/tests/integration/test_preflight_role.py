@@ -81,6 +81,21 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
                 }
             self._write_json(payload, status=status)
             return
+        api_groups = [
+            {
+                "name": "authorization.k8s.io",
+                "versions": [
+                    {
+                        "groupVersion": "authorization.k8s.io/v1",
+                        "version": "v1",
+                    }
+                ],
+                "preferredVersion": {
+                    "groupVersion": "authorization.k8s.io/v1",
+                    "version": "v1",
+                },
+            }
+        ]
         responses = {
             "/version": {
                 "major": "1",
@@ -94,21 +109,7 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
             },
             "/apis": {
                 "kind": "APIGroupList",
-                "groups": [
-                    {
-                        "name": "authorization.k8s.io",
-                        "versions": [
-                            {
-                                "groupVersion": "authorization.k8s.io/v1",
-                                "version": "v1",
-                            }
-                        ],
-                        "preferredVersion": {
-                            "groupVersion": "authorization.k8s.io/v1",
-                            "version": "v1",
-                        },
-                    }
-                ],
+                "groups": api_groups,
             },
             "/apis/authorization.k8s.io/v1": {
                 "kind": "APIResourceList",
@@ -126,7 +127,7 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
         }
         backup_lists = getattr(self.server, "fixture_backup_lists", None)
         if backup_lists is not None:
-            responses["/apis"]["groups"].append(
+            api_groups.append(
                 {
                     "name": "velero.io",
                     "versions": [{"groupVersion": "velero.io/v1", "version": "v1"}],
