@@ -73,6 +73,13 @@ cluster are a different property from proving the initial target was the
 intended old hub; the operator contract is in the repository
 `docs/operations/usage.md` Decommission Old Hub section.
 
+## Preflight backup validation
+
+Preflight checks the latest Velero Backup on the primary hub during switchover
+and on the target hub during restore-only. If any Backup is `InProgress`,
+preflight waits and uses a new inventory read for its checks. Otherwise, it
+uses the inventory it already discovered.
+
 ## Explicit Non-Scope
 
 - additional functionality beyond the playbooks, roles, plugins, and modules currently shipped in this collection
