@@ -117,7 +117,41 @@ def _strict_list_page(raw) -> tuple[list[dict] | None, str | None, str | None]:
     return members, token, revision
 
 
-def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None:
+def _read_discovery_document(api_client, path: str) -> Any:
+    response = api_client.client.request("GET", path, serialize=False, _request_timeout=STRICT_READ_REQUEST_TIMEOUT)
+    return json.loads(response.data.decode("utf8"))
+
+
+def _api_version_omitted(api_client, api_version: str) -> bool:
+    """Prove omission from the live index after group/version discovery returned 404."""
+    try:
+        body = _read_discovery_document(api_client, "/apis")
+    except Exception:
+        return False
+    if not isinstance(body, dict) or body.get("kind") != "APIGroupList" or not isinstance(body.get("groups"), list):
+        return False
+
+    advertised = set()
+    for group in body["groups"]:
+        if not isinstance(group, dict) or not isinstance(group.get("name"), str) or not group["name"]:
+            return False
+        versions = group.get("versions")
+        if not isinstance(versions, list) or not versions:
+            return False
+        for entry in versions:
+            version = entry.get("version") if isinstance(entry, dict) else None
+            if not isinstance(version, str) or not version or "/" in version:
+                return False
+            group_version = f"{group['name']}/{version}"
+            if entry.get("groupVersion") != group_version:
+                return False
+            advertised.add(group_version)
+    return api_version not in advertised
+
+
+def _live_discovery_resources(
+    api_client, api_version: str, *, allow_absent_api_version: bool = False
+) -> list[dict] | None:
     """The group/version's live APIResourceList entries, or None if unverifiable.
 
     Every request goes to the API server: the dynamic client's discovery cache substitutes an
@@ -127,9 +161,11 @@ def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None
     """
     path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
     try:
-        response = api_client.client.request("GET", path, serialize=False, _request_timeout=STRICT_READ_REQUEST_TIMEOUT)
-        body = json.loads(response.data.decode("utf8"))
-    except Exception:
+        body = _read_discovery_document(api_client, path)
+    except Exception as exc:
+        if allow_absent_api_version and "/" in api_version and getattr(exc, "status", None) == 404:
+            if _api_version_omitted(api_client, api_version):
+                return []
         return None
     if not isinstance(body, dict) or body.get("kind") != "APIResourceList":
         return None
@@ -154,9 +190,11 @@ def _live_discovery_resources(api_client, api_version: str) -> list[dict] | None
     return resources
 
 
-def _discovery_serves(api_client, api_version: str, resource_name: str) -> bool | None:
+def _discovery_serves(
+    api_client, api_version: str, resource_name: str, *, allow_absent_api_version: bool = False
+) -> bool | None:
     """True if served, False if positively absent, None if unverifiable."""
-    resources = _live_discovery_resources(api_client, api_version)
+    resources = _live_discovery_resources(api_client, api_version, allow_absent_api_version=allow_absent_api_version)
     if resources is None:
         return None
     return any(entry["name"] == resource_name for entry in resources)

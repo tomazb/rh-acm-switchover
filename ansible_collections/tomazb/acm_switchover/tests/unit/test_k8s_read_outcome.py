@@ -1150,6 +1150,64 @@ def test_unverifiable_discovery_is_error_not_kind_not_served(monkeypatch, dynami
 
 
 @pytest.mark.parametrize(
+    ("allow_absent", "index", "expected"),
+    [
+        (False, {"kind": "APIGroupList", "groups": []}, "error"),
+        (True, {"kind": "APIGroupList", "groups": []}, "kind_not_served"),
+        (
+            True,
+            {
+                "kind": "APIGroupList",
+                "groups": [{"name": "g", "versions": [{"version": "v2", "groupVersion": "g/v2"}]}],
+            },
+            "kind_not_served",
+        ),
+        (
+            True,
+            {
+                "kind": "APIGroupList",
+                "groups": [{"name": "g", "versions": [{"version": "v2", "groupVersion": "wrong/v2"}]}],
+            },
+            "error",
+        ),
+        (True, _api_error(ForbiddenError, 403), "error"),
+    ],
+    ids=["default-refuses-404", "missing-group", "missing-version", "malformed-index", "forbidden-index"],
+)
+def test_discover_can_prove_api_version_absence_after_a_404(monkeypatch, allow_absent, index, expected):
+    requested_paths = []
+
+    def request(method, path, **params):
+        requested_paths.append(path)
+        assert method == "GET"
+        assert params == {"serialize": False, "_request_timeout": constants.STRICT_READ_REQUEST_TIMEOUT}
+        if path == "/apis/g/v1":
+            raise _api_error(NotFoundError, 404)
+        assert path == "/apis"
+        if isinstance(index, Exception):
+            raise index
+        return _RawResponse(index)
+
+    dynamic = _FakeDynamicClient()
+    monkeypatch.setattr(dynamic, "request", request)
+    client = _FakeClient(dynamic=dynamic)
+    result = _run_module(
+        monkeypatch,
+        params={
+            "read_mode": "discover",
+            "api_version": "g/v1",
+            "kind": "Widget",
+            "resource_name": "widgets",
+            "allow_absent_api_version": allow_absent,
+        },
+        client=client,
+    )
+    assert result == {"changed": False, "read_status": expected, "resources": [], "resource_version": None}
+    assert requested_paths == (["/apis/g/v1", "/apis"] if allow_absent else ["/apis/g/v1"])
+    assert client.get_calls == client.resource_calls == 0
+
+
+@pytest.mark.parametrize(
     "resources",
     [
         [{"name": "widgets", "kind": "Widget"}, {"name": 7}],

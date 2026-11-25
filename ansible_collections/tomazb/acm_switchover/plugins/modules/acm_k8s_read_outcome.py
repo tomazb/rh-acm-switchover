@@ -10,14 +10,15 @@ DOCUMENTATION = r"""
 module: acm_k8s_read_outcome
 short_description: Perform one Kubernetes read and classify the outcome
 description:
-  - Performs exactly one Kubernetes GET or LIST via kubernetes.core client
+  - Performs a Kubernetes GET, LIST, or discovery check via kubernetes.core client
     construction and returns a sanitized outcome.
   - Distinguishes successful empty results, named NotFound, and unverifiable
     errors without returning raw exception or response body content.
   - Read-only; always reports C(changed=false). Owns no retry or phase policy.
   - C(read_mode=discover) sends no object request at all; it reports whether one live
     discovery document of C(api_version) lists C(resource_name), such as a
-    C(<plural>/status) subresource.
+    C(<plural>/status) subresource. It can also verify omission of an optional
+    group/version via the live grouped API index.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
@@ -55,6 +56,12 @@ options:
         name, so a wrong name makes that 404 C(error) or C(kind_not_served).
     type: str
     required: true
+  allow_absent_api_version:
+    description:
+      - For C(read_mode=discover), allow a grouped API version to be reported as unserved
+        when its endpoint returns HTTP 404 and the live grouped API index omits that version.
+    type: bool
+    default: false
   request_timeout:
     description:
       - Seconds that bound a named get instead of the default strict-read request timeout,
@@ -120,7 +127,8 @@ read_status:
     - C(error) for every other unverifiable outcome.
     - For C(read_mode=discover), C(ok) when the readable discovery document of the
       requested group/version lists C(resource_name), C(kind_not_served) when it omits it,
-      and C(error) when discovery cannot be verified.
+      and C(error) when discovery cannot be verified. With C(allow_absent_api_version=true),
+      HTTP 404 plus verified omission of the grouped API version also gives C(kind_not_served).
   type: str
   returned: always
   choices: [ok, not_found, kind_not_served, error]
@@ -174,6 +182,7 @@ def _argument_spec() -> dict[str, Any]:
                 "default": [],
             },
             "resource_name": {"type": "str", "required": True},
+            "allow_absent_api_version": {"type": "bool", "default": False},
             "request_timeout": {"type": "float", "required": False},
         }
     )
@@ -213,7 +222,12 @@ def run_module(module: AnsibleModule) -> None:
         return
 
     if read_mode == "discover":
-        served = _discovery_serves(api_client, module.params["api_version"], resource_name)
+        served = _discovery_serves(
+            api_client,
+            module.params["api_version"],
+            resource_name,
+            allow_absent_api_version=module.params.get("allow_absent_api_version", False),
+        )
         _exit_outcome(module, {True: "ok", False: "kind_not_served"}.get(served, "error"))
         return
 

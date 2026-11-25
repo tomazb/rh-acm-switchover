@@ -153,6 +153,21 @@
         - _argocd_use_scoped_discovery | default(false) | bool
         - (_argocd_scoped_validation | default({})).get('status', 'error') == 'error'
 
+    # The dynamic client's lookup can translate a discovery failure into api_found=false.
+    - name: Check live discovery for the Application API
+      tomazb.acm_switchover.acm_k8s_read_outcome:
+        read_mode: discover
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        resource_name: applications
+        allow_absent_api_version: true
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+      register: _argocd_application_api
+      no_log: true
+      failed_when: false
+      when: not (_argocd_use_scoped_discovery | default(false) | bool)
+
     - name: List Applications cluster-wide
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1
@@ -163,37 +178,27 @@
       register: _argocd_cluster_live_query
       no_log: true
       failed_when: false
-      when: not (_argocd_use_scoped_discovery | default(false) | bool)
+      when:
+        - not (_argocd_use_scoped_discovery | default(false) | bool)
+        - (_argocd_application_api.read_status | default('error')) == 'ok'
 
     - name: Classify unscoped Argo CD discovery
       ansible.builtin.set_fact:
         _argocd_unscoped_status: >-
           {{
-            'ok'
-            if (_argocd_unscoped_result_valid and _argocd_cluster_live_query.api_found is sameas true
-                and _argocd_unscoped_msg == '')
-            else (
-              'absent'
-              if (_argocd_unscoped_result_valid and _argocd_cluster_live_query.api_found is sameas false
-                  and (_argocd_cluster_live_query.resources | length) == 0
-                  and _argocd_unscoped_msg in ['', _argocd_missing_application_api_msg])
-              else 'error'
+            'absent' if (_argocd_application_api.read_status | default('error')) == 'kind_not_served'
+            else 'ok' if (
+              (_argocd_application_api.read_status | default('error')) == 'ok'
+              and _argocd_cluster_live_query is mapping
+              and (_argocd_cluster_live_query.failed | default(false)) is sameas false
+              and (_argocd_cluster_live_query.skipped | default(false)) is sameas false
+              and (_argocd_cluster_live_query.unreachable | default(false)) is sameas false
+              and (_argocd_cluster_live_query.api_found | default(false)) is sameas true
+              and (_argocd_cluster_live_query.resources | default(none) | type_debug) == 'list'
+              and (_argocd_cluster_live_query.msg | default('')) == ''
             )
+            else 'error'
           }}
-      vars:
-        _argocd_unscoped_result_valid: >-
-          {{
-            _argocd_cluster_live_query is mapping
-            and (_argocd_cluster_live_query.failed | default(false)) is sameas false
-            and (_argocd_cluster_live_query.skipped | default(false)) is sameas false
-            and (_argocd_cluster_live_query.unreachable | default(false)) is sameas false
-            and _argocd_cluster_live_query.api_found is defined
-            and (_argocd_cluster_live_query.resources | default(none) | type_debug) == 'list'
-          }}
-        _argocd_unscoped_msg: "{{ _argocd_cluster_live_query.msg | default('') }}"
-        # k8s_info may attach this diagnostic to its successful api_found=false result.
-        _argocd_missing_application_api_msg: >-
-          Failed to find API for resource with apiVersion "argoproj.io/v1alpha1" and kind "Application"
       no_log: true
       when: not (_argocd_use_scoped_discovery | default(false) | bool)
 
@@ -212,7 +217,7 @@
             if (_argocd_use_scoped_discovery | default(false) | bool)
             else {
               'status': _argocd_unscoped_status,
-              'resources': _argocd_cluster_live_query.resources
+              'resources': _argocd_cluster_live_query.resources if _argocd_unscoped_status == 'ok' else []
             }
           }}
       no_log: true

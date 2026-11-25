@@ -64,6 +64,7 @@ class FakeArgoCDHub:
         applications: list[dict],
         namespace_list_failures: dict[str, str] | None = None,
         application_api_available: bool = True,
+        application_discovery_response: tuple[int, dict] | None = None,
         cluster_application_list_response: tuple[int, dict] | None = None,
         kube_system_status: int = 200,
         kube_system_body: dict | None = None,
@@ -81,6 +82,7 @@ class FakeArgoCDHub:
         }
         self._namespace_list_failures = dict(namespace_list_failures or {})
         self._application_api_available = application_api_available
+        self._application_discovery_response = copy.deepcopy(application_discovery_response)
         self._cluster_application_list_response = copy.deepcopy(cluster_application_list_response)
         self._kube_system_status = kube_system_status
         self._kube_system_body = copy.deepcopy(kube_system_body)
@@ -165,6 +167,10 @@ class FakeArgoCDHub:
                 kube_system_response = hub._configured_kube_system_response(path)
                 if kube_system_response is not None:
                     status, payload = kube_system_response
+                    self._write_json(payload, status=status)
+                    return
+                if path == "/apis/argoproj.io/v1alpha1" and hub._application_discovery_response is not None:
+                    status, payload = hub._application_discovery_response
                     self._write_json(payload, status=status)
                     return
                 if path == "/apis/argoproj.io/v1alpha1/applications" and hub._cluster_application_list_response:

@@ -60,8 +60,9 @@ class TestApiFailureBoundary:
 
     def test_application_api_tasks_are_non_failing_and_protected(self):
         tasks = _get_discovery_block(_load_discover_tasks())["block"]
-        api_tasks = [task for task in tasks if "kubernetes.core.k8s_info" in task]
-        assert len(api_tasks) == 2
+        api_actions = {"kubernetes.core.k8s_info", "tomazb.acm_switchover.acm_k8s_read_outcome"}
+        api_tasks = [task for task in tasks if api_actions.intersection(task)]
+        assert len(api_tasks) == 3
         for task in api_tasks:
             assert task.get("no_log") is True
             assert task.get("failed_when") is False

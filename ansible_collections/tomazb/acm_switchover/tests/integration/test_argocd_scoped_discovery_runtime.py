@@ -37,15 +37,69 @@ def _run_unscoped_role(tmp_path, server, *, advisory):
 
 
 @pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
-def test_unscoped_missing_application_api_is_absent(tmp_path, advisory):
-    hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=[], application_api_available=False)
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [(503, "ServiceUnavailable"), (403, "Forbidden"), (404, "NotFound"), (200, None)],
+    ids=["unavailable", "forbidden", "advertised-version-404", "malformed"],
+)
+def test_unscoped_application_discovery_error_fails_closed(tmp_path, advisory, status, reason):
+    response = {"message": "seeded-secret-token"}
+    if reason is not None:
+        response.update({"apiVersion": "v1", "kind": "Status", "status": "Failure", "reason": reason, "code": status})
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[application("argocd", "acm-app", automated=True)],
+        application_discovery_response=(status, response),
+    )
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
+        output = completed.stdout + completed.stderr
+
+        assert {"method": "GET", "path": "/apis/argoproj.io/v1alpha1"} in hub.requests
+        assert all(request["method"] == "GET" for request in hub.requests)
+        assert not any(request["path"].endswith("/applications") for request in hub.requests)
+        assert "protected-discovery-kubeconfig" not in output
+        assert "seeded-secret-token" not in output
+        if advisory:
+            assert completed.returncode == 0, output
+            assert "DISCOVERY_STATUS=error INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
+        else:
+            assert completed.returncode == 2, output
+            assert _DISCOVERY_FAILURE in output
+        assert "Argo CD not detected" not in output
+    finally:
+        hub.close()
+
+
+@pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
+@pytest.mark.parametrize("group_version_available", [False, True], ids=["missing-version", "missing-kind"])
+def test_unscoped_missing_application_api_is_absent(tmp_path, advisory, group_version_available):
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[],
+        application_api_available=group_version_available,
+        application_discovery_response=(
+            (
+                200,
+                {
+                    "kind": "APIResourceList",
+                    "groupVersion": "argoproj.io/v1alpha1",
+                    "resources": [{"name": "appprojects", "kind": "AppProject", "namespaced": True}],
+                },
+            )
+            if group_version_available
+            else None
+        ),
+    )
     try:
         completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
         output = completed.stdout + completed.stderr
 
         assert completed.returncode == 0, output
         assert "DISCOVERY_STATUS=absent INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
-        assert {"method": "GET", "path": "/apis"} in hub.requests
+        assert {"method": "GET", "path": "/apis/argoproj.io/v1alpha1"} in hub.requests
+        if not group_version_available:
+            assert {"method": "GET", "path": "/apis"} in hub.requests
         assert all(request["method"] == "GET" for request in hub.requests)
         assert not any(request["path"].endswith("/applications") for request in hub.requests)
         assert "protected-discovery-kubeconfig" not in output
