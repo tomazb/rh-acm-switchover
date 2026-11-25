@@ -456,8 +456,10 @@ than a fresh observation on every invocation.
 The [approved #352 scope](https://github.com/tomazb/rh-acm-switchover/issues/352#issuecomment-6216683521)
 does not rewind finalization or completed checkpoints. Unknown legacy-marker provenance
 beyond post-activation requires the [operator hold](../operations/usage.md#legacy-python-klusterlet-checkpoint-hold);
-that unresolved population stays owned by open #352. Phase flow and runner eligibility
-are unchanged.
+that population stays under the hold. `lib/workflow.py` logs one warning when a run resumes at
+finalization or reaches the completed no-op with only the unversioned marker. The warning
+changes no return value, state or journal, and nothing re-verifies the marker automatically
+(#352). Phase flow and runner eligibility are unchanged.
 
 Klusterlet selection reads a fresh complete strict ManagedCluster inventory and
 retains immutable name/UID/API URL associations alongside classification's credential
