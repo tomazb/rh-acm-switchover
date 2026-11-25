@@ -1384,6 +1384,12 @@ python acm_switchover.py \
 
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
 
+With cluster-wide Application discovery, both the Python CLI and Ansible Collection
+skip a hub when they establish that the Application API is unserved. When the API is
+served, a complete empty inventory succeeds. Discovery or LIST failures, including
+authorization, transport, malformed responses, and HTTP 404 on a confirmed LIST route,
+stop managed discovery. Read-only advisory checks warn and continue.
+
 For collection retries and standalone resume, checkpoint-persisted namespace
 scope is fail-closed: every normalized namespace must return exactly one
 positively successful discovery result before any Application is aggregated,

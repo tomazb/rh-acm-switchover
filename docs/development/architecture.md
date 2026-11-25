@@ -109,12 +109,12 @@ flowchart TD
     RG --> RP{--argocd-manage?}
     RP -->|yes| RQ[Pause ACM-touching<br/>Argo CD Applications<br/>on secondary]
     RP -->|no| RI[ACTIVATION full restore]
-    RQ --> RI
+    RQ -->|Discovery and pause succeed or skip| RI
     RI --> RJ[POST_ACTIVATION]
     RJ --> RM[FINALIZATION backups-only]
     RM --> RK[COMPLETED]
     RG --> RL[FAILED]
-    RQ --> RL
+    RQ -->|Discovery or pause fails| RL
     RI --> RL
     RJ --> RL
     RM --> RL

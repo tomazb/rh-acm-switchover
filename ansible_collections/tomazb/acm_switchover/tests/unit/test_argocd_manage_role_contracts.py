@@ -134,13 +134,17 @@ class TestArgoCDDiscover:
 
     def test_live_k8s_info_uses_dynamic_hub_reference(self):
         """Live Application list must use dynamic hub reference to support secondary-hub testing."""
-        k8s_info_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s_info" in t]
-        app_list_tasks = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Application"
+        app_lists = [
+            params
+            for task in self.flat_tasks
+            for action in (
+                "kubernetes.core.k8s_info",
+                "tomazb.acm_switchover.acm_k8s_read_outcome",
+            )
+            if (params := task.get(action, {})).get("kind") == "Application"
         ]
-        assert app_list_tasks, "discover.yml must have a k8s_info task that lists Applications"
-        for task in app_list_tasks:
-            params = task["kubernetes.core.k8s_info"]
+        assert len(app_lists) == 2
+        for params in app_lists:
             kubeconfig = str(params.get("kubeconfig", ""))
             assert "_argocd_discover_hub" in kubeconfig, (
                 "Application list must use acm_switchover_hubs[_argocd_discover_hub | default('primary')] "
@@ -149,14 +153,15 @@ class TestArgoCDDiscover:
 
     def test_discover_keeps_cluster_wide_path_without_trusted_namespaces(self):
         """Default discovery must remain cluster-wide when no trusted namespace list exists."""
-        cluster_wide_tasks = [
-            t
-            for t in self.flat_tasks
-            if t.get("name") == "List Applications cluster-wide" and "kubernetes.core.k8s_info" in t
-        ]
-        assert cluster_wide_tasks, "discover.yml must keep a cluster-wide Application list path"
-        params = cluster_wide_tasks[0]["kubernetes.core.k8s_info"]
-        assert "default(omit)" in str(params.get("namespace", ""))
+        action = "tomazb.acm_switchover.acm_k8s_read_outcome"
+        lists = [task[action] for task in self.flat_tasks if action in task]
+        assert len(lists) == 1
+        params = lists[0]
+        assert params["read_mode"] == "list"
+        assert params["api_version"] == "argoproj.io/v1alpha1"
+        assert params["kind"] == "Application"
+        assert params["resource_name"] == "applications"
+        assert params["allow_absent_api_version"] is True
 
     def test_discover_uses_scoped_list_when_trusted_namespaces_present(self):
         """Trusted namespace hints must trigger per-namespace Application listing."""

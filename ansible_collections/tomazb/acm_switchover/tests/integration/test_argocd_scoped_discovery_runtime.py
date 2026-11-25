@@ -19,9 +19,11 @@ from ansible_collections.tomazb.acm_switchover.tests.integration.argocd_fake_api
 
 _DISCOVERY_PLAYBOOK = "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/argocd_discovery_role.yml"
 _DISCOVERY_FAILURE = "Argo CD discovery failed; verify controller access and input, then retry."
+_APPLICATION_DISCOVERY = {"method": "GET", "path": "/apis/argoproj.io/v1alpha1"}
+_APPLICATION_LIST = {"method": "GET", "path": "/apis/argoproj.io/v1alpha1/applications"}
 
 
-def _run_unscoped_role(tmp_path, server, *, advisory):
+def _run_unscoped_role(tmp_path, server, *, advisory, namespace=None):
     kubeconfig = tmp_path / "protected-discovery-kubeconfig"
     write_kubeconfig(kubeconfig, context="primary-hub", server=server)
     return _run_playbook(
@@ -32,6 +34,7 @@ def _run_unscoped_role(tmp_path, server, *, advisory):
             "acm_switchover_execution": {"mode": "execute"},
             "acm_switchover_argocd_mode_override": "discover" if advisory else "pause",
             "acm_switchover_argocd_advisory": advisory,
+            **({"acm_switchover_argocd": {"namespace": namespace}} if namespace else {}),
         },
     )
 
@@ -97,35 +100,67 @@ def test_unscoped_missing_application_api_is_absent(tmp_path, advisory, group_ve
 
         assert completed.returncode == 0, output
         assert "DISCOVERY_STATUS=absent INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
-        assert {"method": "GET", "path": "/apis/argoproj.io/v1alpha1"} in hub.requests
+        expected = [_APPLICATION_DISCOVERY]
         if not group_version_available:
-            assert {"method": "GET", "path": "/apis"} in hub.requests
-        assert all(request["method"] == "GET" for request in hub.requests)
-        assert not any(request["path"].endswith("/applications") for request in hub.requests)
+            expected.append({"method": "GET", "path": "/apis"})
+        assert hub.requests == expected
         assert "protected-discovery-kubeconfig" not in output
     finally:
         hub.close()
 
 
-def test_unscoped_empty_application_list_is_present(tmp_path):
+@pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
+def test_unscoped_empty_application_list_is_present(tmp_path, advisory):
     hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=[])
     try:
-        completed = _run_unscoped_role(tmp_path, hub.url, advisory=False)
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
         output = completed.stdout + completed.stderr
 
         assert completed.returncode == 0, output
-        assert "DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED=0 HAS_RUN_ID=True" in output
-        assert {
-            "method": "GET",
-            "path": "/apis/argoproj.io/v1alpha1/applications",
-        } in hub.requests
+        assert f"DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED=0 HAS_RUN_ID={not advisory}" in output
+        assert hub.requests.index(_APPLICATION_DISCOVERY) < hub.requests.index(_APPLICATION_LIST)
         assert all(request["method"] == "GET" for request in hub.requests)
     finally:
         hub.close()
 
 
+def test_advisory_discovery_preserves_explicit_namespace(tmp_path):
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[
+            application("argocd", "acm-app", automated=True),
+            application("other", "acm-app", automated=True),
+        ],
+    )
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=True, namespace="argocd")
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 0, output
+        assert "DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED=1 HAS_RUN_ID=False" in output
+        assert hub.requests == [
+            _APPLICATION_DISCOVERY,
+            {
+                "method": "GET",
+                "path": "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications",
+            },
+        ]
+    finally:
+        hub.close()
+
+
 @pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
-@pytest.mark.parametrize("failure", ["authorization", "transport", "malformed"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "authorization",
+        "transport",
+        "malformed",
+        "list_400",
+        "list_404",
+        "list_missing_items",
+    ],
+)
 def test_unscoped_discovery_errors_remain_sanitized(tmp_path, advisory, failure):
     protected_detail = "seeded-secret-token: could not find the requested resource"
     if failure == "transport":
@@ -136,19 +171,36 @@ def test_unscoped_discovery_errors_remain_sanitized(tmp_path, advisory, failure)
             server = f"http://127.0.0.1:{listener.getsockname()[1]}"
             completed = _run_unscoped_role(tmp_path, server, advisory=advisory)
     else:
-        response = (
-            (
-                403,
+        http_errors = {
+            "authorization": (403, "Forbidden"),
+            "list_400": (400, "BadRequest"),
+            "list_404": (404, "NotFound"),
+        }
+        if failure in http_errors:
+            status, reason = http_errors[failure]
+            response = (
+                status,
                 {
                     "apiVersion": "v1",
                     "kind": "Status",
-                    "reason": "Forbidden",
+                    "status": "Failure",
+                    "reason": reason,
                     "message": protected_detail,
+                    "code": status,
                 },
             )
-            if failure == "authorization"
-            else (200, {"unexpected": protected_detail})
-        )
+        elif failure == "list_missing_items":
+            response = (
+                200,
+                {
+                    "apiVersion": "argoproj.io/v1alpha1",
+                    "kind": "ApplicationList",
+                    "metadata": {"resourceVersion": "1"},
+                    "unexpected": protected_detail,
+                },
+            )
+        else:
+            response = (200, {"unexpected": protected_detail})
         hub = FakeArgoCDHub(
             cluster_uid="primary-uid",
             applications=[],
@@ -156,10 +208,7 @@ def test_unscoped_discovery_errors_remain_sanitized(tmp_path, advisory, failure)
         )
         try:
             completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
-            assert {
-                "method": "GET",
-                "path": "/apis/argoproj.io/v1alpha1/applications",
-            } in hub.requests
+            assert hub.requests.index(_APPLICATION_DISCOVERY) < hub.requests.index(_APPLICATION_LIST)
             assert all(request["method"] == "GET" for request in hub.requests)
         finally:
             hub.close()
@@ -174,6 +223,42 @@ def test_unscoped_discovery_errors_remain_sanitized(tmp_path, advisory, failure)
         assert completed.returncode == 2, output
         assert _DISCOVERY_FAILURE in output
     assert "Argo CD not detected" not in output
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"kind": "AppProject"}, {"namespaced": False}, {"namespaced": None}],
+    ids=["wrong-kind", "cluster-scoped", "missing-scope"],
+)
+def test_unscoped_discovery_refuses_inconsistent_application_route(tmp_path, overrides):
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[],
+        application_discovery_response=(
+            200,
+            {
+                "kind": "APIResourceList",
+                "groupVersion": "argoproj.io/v1alpha1",
+                "resources": [
+                    {
+                        "name": "applications",
+                        "kind": "Application",
+                        "namespaced": True,
+                        **overrides,
+                    }
+                ],
+            },
+        ),
+    )
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=False)
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 2, output
+        assert _DISCOVERY_FAILURE in output
+        assert hub.requests == [_APPLICATION_DISCOVERY]
+    finally:
+        hub.close()
 
 
 def _present(namespace: str, *, resources: object | None = None, **extra) -> dict:

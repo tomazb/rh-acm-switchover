@@ -23,6 +23,7 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
 )
 from lib.kube_client import KubeClient
+from lib.strict_read import StrictReadStatus
 from lib.utils import dry_run_skip
 
 logger = logging.getLogger("acm_switchover")
@@ -374,7 +375,8 @@ def list_argocd_applications(
         List of Application resource dicts.
 
     Raises:
-        ApiException: When Argo CD discovery fails for reasons other than 404/not-installed.
+        RuntimeError: When cluster-wide discovery or listing cannot be verified.
+        ApiException: When a scoped LIST fails with an API error other than 404.
     """
     if namespaces is not None:
         result: List[Dict[str, Any]] = []
@@ -389,11 +391,17 @@ def list_argocd_applications(
                 )
             )
         return result
-    return _list_argocd_applications_once(
-        client,
-        namespace=None,
-        public_advisory=public_advisory,
+    outcome = client.list_optional_namespaced_resources_strict(
+        group=ARGOCD_APP_GROUP,
+        version=ARGOCD_APP_VERSION,
+        plural=ARGOCD_APP_PLURAL,
+        kind="Application",
     )
+    if outcome.status is StrictReadStatus.CRD_ABSENT:
+        return []
+    if not outcome.is_success:
+        raise RuntimeError(f"Argo CD Application discovery failed ({outcome.reason}). Verify hub API access and retry.")
+    return outcome.items
 
 
 def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[str]:

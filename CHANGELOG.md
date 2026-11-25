@@ -347,9 +347,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or unresolvable actions, then requires an execute gate on everything outside a read-only
   allowlist. The `argocd_manage` fallback to the ambient kubeconfig on a direct entry is not
   changed here. Fake-backed and static evidence only; not live certification.
-- Unscoped Collection Argo CD discovery skips a hub when fresh API discovery confirms the
-  Application resource is unserved. Discovery outages, authorization and transport failures,
-  and malformed responses use sanitized strict or advisory error handling (#390).
+- The Python CLI and Ansible Collection distinguish an unserved Argo CD Application API
+  from a failed cluster-wide discovery or LIST. A valid empty inventory succeeds. Failed or
+  malformed responses, including a LIST 404 on a discovered route, stop managed discovery and
+  produce sanitized warnings during advisory discovery (#390).
 
 - Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
   exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request

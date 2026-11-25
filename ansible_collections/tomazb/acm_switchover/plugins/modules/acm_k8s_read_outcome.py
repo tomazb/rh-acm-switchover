@@ -17,8 +17,7 @@ description:
   - Read-only; always reports C(changed=false). Owns no retry or phase policy.
   - C(read_mode=discover) sends no object request at all; it reports whether one live
     discovery document of C(api_version) lists C(resource_name), such as a
-    C(<plural>/status) subresource. It can also verify omission of an optional
-    group/version via the live grouped API index.
+    C(<plural>/status) subresource.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
@@ -58,8 +57,10 @@ options:
     required: true
   allow_absent_api_version:
     description:
-      - For C(read_mode=discover), allow a grouped API version to be reported as unserved
-        when its endpoint returns HTTP 404 and the live grouped API index omits that version.
+      - In list mode, allow a grouped API version to be reported as unserved when its endpoint
+        returns HTTP 404 and the live grouped API index omits that version.
+      - Use live discovery to verify the namespaced custom resource's kind and
+        plural before listing directly on the confirmed route.
     type: bool
     default: false
   request_timeout:
@@ -122,13 +123,14 @@ read_status:
       and scope the request was routed by. A 404 for a kind that live discovery positively
       omits is C(kind_not_served); one whose discovery cannot be read or does not declare the
       requested group/version, or whose route live discovery does not confirm, is C(error).
-    - C(kind_not_served) when the API group/version was read successfully and
-      positively does not serve this kind.
+    - C(kind_not_served) when live discovery proves that the API does not serve the
+      requested resource. A failed list on a route that discovery confirmed is C(error).
     - C(error) for every other unverifiable outcome.
     - For C(read_mode=discover), C(ok) when the readable discovery document of the
       requested group/version lists C(resource_name), C(kind_not_served) when it omits it,
-      and C(error) when discovery cannot be verified. With C(allow_absent_api_version=true),
-      HTTP 404 plus verified omission of the grouped API version also gives C(kind_not_served).
+      and C(error) when discovery cannot be verified.
+    - For C(read_mode=list) with C(allow_absent_api_version=true), HTTP 404 plus verified
+      omission of the grouped API version also gives C(kind_not_served).
   type: str
   returned: always
   choices: [ok, not_found, kind_not_served, error]
@@ -159,6 +161,7 @@ from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import 
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.k8s_read import (  # noqa: E402,F401
     _discovery_serves,
+    strict_optional_namespaced_list,
     strict_read,
 )
 
@@ -203,6 +206,26 @@ def _exit_outcome(
     )
 
 
+def _client_without_discovery(params: dict[str, Any]):
+    from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import (
+        K8SClient,
+        _create_auth_spec,
+        _create_configuration,
+        _create_headers,
+        _set_header,
+    )
+    from kubernetes.client import ApiClient
+    from kubernetes.dynamic import DynamicClient
+
+    # Keep kubernetes.core's authentication and headers. Its default discoverer can
+    # send unbounded bootstrap and lookup requests before the explicit live proof.
+    configuration = _create_configuration(_create_auth_spec(**params))
+    client = ApiClient(configuration)
+    for header, value in _create_headers(**params).items():
+        _set_header(client, header, value)
+    return K8SClient(configuration, DynamicClient(client, discoverer=lambda *_: None))
+
+
 def run_module(module: AnsibleModule) -> None:
     read_mode = module.params["read_mode"]
     name = module.params.get("name")
@@ -215,6 +238,18 @@ def run_module(module: AnsibleModule) -> None:
         _exit_outcome(module, "error")
         return
 
+    if read_mode == "list" and module.params.get("allow_absent_api_version", False):
+        outcome = strict_optional_namespaced_list(
+            _client_without_discovery(module.params),
+            api_version=module.params["api_version"],
+            kind=module.params["kind"],
+            resource_name=resource_name,
+            namespace=module.params.get("namespace"),
+            label_selectors=module.params.get("label_selectors"),
+        )
+        _exit_outcome(module, *outcome)
+        return
+
     try:
         api_client = get_api_client(**module.params)
     except Exception:
@@ -222,12 +257,7 @@ def run_module(module: AnsibleModule) -> None:
         return
 
     if read_mode == "discover":
-        served = _discovery_serves(
-            api_client,
-            module.params["api_version"],
-            resource_name,
-            allow_absent_api_version=module.params.get("allow_absent_api_version", False),
-        )
+        served = _discovery_serves(api_client, module.params["api_version"], resource_name)
         _exit_outcome(module, {True: "ok", False: "kind_not_served"}.get(served, "error"))
         return
 

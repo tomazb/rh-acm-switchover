@@ -62,7 +62,7 @@ class TestApiFailureBoundary:
         tasks = _get_discovery_block(_load_discover_tasks())["block"]
         api_actions = {"kubernetes.core.k8s_info", "tomazb.acm_switchover.acm_k8s_read_outcome"}
         api_tasks = [task for task in tasks if api_actions.intersection(task)]
-        assert len(api_tasks) == 3
+        assert len(api_tasks) == 2
         for task in api_tasks:
             assert task.get("no_log") is True
             assert task.get("failed_when") is False
@@ -228,7 +228,9 @@ class TestTrustedNamespaceDiscovery:
         """A skipped cluster-wide register must not replace validated scoped resources."""
         block_tasks = _get_discovery_block(_load_discover_tasks())["block"]
         scoped = next(task for task in block_tasks if task.get("name") == "List Applications in trusted namespaces")
-        cluster = next(task for task in block_tasks if task.get("name") == "List Applications cluster-wide")
+        cluster = next(
+            task for task in block_tasks if task.get("name") == "List Applications with verified API discovery"
+        )
         text = (ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text()
 
         assert scoped["register"] == "_argocd_scoped_live_query"

@@ -1106,23 +1106,6 @@ class TestDetectArgocdInstallation:
 
 @pytest.mark.unit
 class TestListArgocdApplications:
-    def test_public_advisory_uses_non_logging_raw_application_list(self):
-        """Automatic advisory listing must bypass retry logging that can stringify API errors."""
-        client = MagicMock(spec=argocd_lib.KubeClient)
-        client.list_custom_resources_advisory.return_value = [{"metadata": {"name": "application"}}]
-
-        result = argocd_lib.list_argocd_applications(client, public_advisory=True)
-
-        assert result == [{"metadata": {"name": "application"}}]
-        client.list_custom_resources_advisory.assert_called_once()
-        client.list_custom_resources.assert_not_called()
-
-    def test_cluster_wide_404_returns_empty(self):
-        client = MagicMock()
-        client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")
-
-        assert argocd_lib.list_argocd_applications(client, namespaces=None) == []
-
     def test_namespaced_404_log_omits_scope_and_exception_detail(self, caplog):
         import logging
 
@@ -1134,13 +1117,6 @@ class TestListArgocdApplications:
 
         assert "private-gitops" not in caplog.text
         assert "secret namespace detail" not in caplog.text
-
-    def test_cluster_wide_non_404_raises(self):
-        client = MagicMock()
-        client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
-
-        with pytest.raises(ApiException):
-            argocd_lib.list_argocd_applications(client, namespaces=None)
 
     def test_namespaced_api_error_log_omits_scope(self, caplog):
         import logging

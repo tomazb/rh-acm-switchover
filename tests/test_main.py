@@ -3344,18 +3344,16 @@ class TestPreflightPhase:
             },
         }
 
-        def list_resources(*_args, **kwargs):
-            if kwargs["plural"] == "argocds":
-                return []
-            if kwargs["plural"] == "applications":
-                return [sensitive_app]
-            raise AssertionError(f"Unexpected plural: {kwargs['plural']}")
+        from lib.strict_read import StrictReadOutcome
 
         primary = Mock()
         secondary = Mock()
         for client in (primary, secondary):
             client.get_custom_resource_advisory.return_value = {"metadata": {"name": "crd"}}
-            client.list_custom_resources_advisory.side_effect = list_resources
+            client.list_custom_resources_advisory.return_value = []
+            client.list_optional_namespaced_resources_strict.return_value = StrictReadOutcome.from_items(
+                [sensitive_app]
+            )
 
         config = {
             "primary_version": "2.14.0",

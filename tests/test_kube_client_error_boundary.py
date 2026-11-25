@@ -2098,7 +2098,9 @@ def _inv_success(method, path, body):
         return _inv_object(parts[6], parts[4], spec=spec)
     group, version, rest = parts[1], parts[2], parts[3:]
     if not rest:
-        resources = [{"name": plural, "kind": "Kind"} for plural in (_INV_CUSTOM[2], "managedclusters")]
+        resources = [
+            {"name": plural, "kind": "Kind", "namespaced": True} for plural in (_INV_CUSTOM[2], "managedclusters")
+        ]
         return {"kind": "APIResourceList", "groupVersion": f"{group}/{version}", "resources": resources}
     namespace = rest[1] if rest[0] == "namespaces" else None
     rest = rest[2:] if namespace else rest
@@ -2107,7 +2109,8 @@ def _inv_success(method, path, body):
         created["metadata"].update(uid="uid-" + created["metadata"]["name"], resourceVersion="9")
         return created
     if len(rest) == 1:
-        return _inv_page([_inv_object("t1", namespace, apiVersion=f"{group}/{version}", kind="Thing")])
+        page = _inv_page([_inv_object("t1", namespace, apiVersion=f"{group}/{version}", kind="Thing")])
+        return {"apiVersion": f"{group}/{version}", "kind": "KindList", **page}
     if method == "DELETE":
         return {"kind": "Status", "apiVersion": "v1", "status": "Success"}
     return _inv_object(rest[1], namespace, apiVersion=f"{group}/{version}", kind="Thing", spec={"a": 1})
@@ -2247,6 +2250,7 @@ _INV_DRIVES = {
     "list_custom_resources": (_INV_CUSTOM, {"namespace": _INV_NS}, 1, 5, 5),
     "list_custom_resources_advisory": (_INV_CUSTOM, {"namespace": _INV_NS}, 1, 5, 5),
     "list_custom_resources_strict": (_INV_CUSTOM, {"namespace": _INV_NS}, 2, 1, 1),
+    "list_optional_namespaced_resources_strict": (_INV_CUSTOM, {"kind": "Kind"}, 2, 1, 1),
     "get_custom_resource_strict": ((*_INV_CUSTOM, "t1"), {"namespace": _INV_NS}, 2, 1, 1),
     "get_namespace_strict": ((_INV_NS,), {}, 1, 1, 1),
     "list_pods_strict": ((_INV_NS,), {}, 1, 1, 1),
@@ -2438,6 +2442,35 @@ _INV_BRANCHES = [
         None,
         None,
         4,
+    ),
+    (
+        "list_optional_namespaced_resources_strict",
+        "404",
+        "discovery-404-index-failure",
+        _answer_then_fail(_status(404)),
+        None,
+        None,
+        2,
+    ),
+    (
+        "list_optional_namespaced_resources_strict",
+        "410",
+        "expired-continuation",
+        _answer_then_fail(
+            "ok", (200, {"kind": "KindList", "apiVersion": "g.io/v1", **_INV_CONTINUED[1]}), _status(410)
+        ),
+        None,
+        None,
+        4,
+    ),
+    (
+        "list_optional_namespaced_resources_strict",
+        _OTHER,
+        "fails-after-discovery",
+        _answer_then_fail("ok"),
+        None,
+        None,
+        2,
     ),
     ("wait_for_pods_ready", "404", "pods-404", _answer_then_fail(_status(404)), None, None, 3),
 ]

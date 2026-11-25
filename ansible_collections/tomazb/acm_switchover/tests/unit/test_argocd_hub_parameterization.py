@@ -188,22 +188,19 @@ def test_discover_namespace_defaults_to_omit():
     """discover.yml must NOT hardcode a single default namespace like 'argocd'.
 
     When acm_switchover_argocd.namespace is not set and no trusted namespace
-    hints exist, discovery should search cluster-wide (default(omit)).
+    hints exist, discovery should search cluster-wide.
     """
     text = (ROLE_DIR / "discover.yml").read_text()
-    assert "default('argocd')" not in text, (
-        "discover.yml still hardcodes default('argocd'); " "should use default(omit) for cluster-wide discovery"
-    )
-    tasks = _load_yaml("discover.yml")
-    cluster_wide_tasks = [
-        block_task
-        for task in tasks
+    assert "default('argocd')" not in text
+    action = "tomazb.acm_switchover.acm_k8s_read_outcome"
+    lists = [
+        block_task[action]
+        for task in _load_yaml("discover.yml")
         for block_task in task.get("block", [])
-        if block_task.get("name") == "List Applications cluster-wide" and block_task.get("kubernetes.core.k8s_info")
+        if block_task.get(action, {}).get("read_mode") == "list"
     ]
-    assert cluster_wide_tasks, "discover.yml must keep an explicit cluster-wide Application list task"
-    ns = str(cluster_wide_tasks[0]["kubernetes.core.k8s_info"].get("namespace", ""))
-    assert "default(omit)" in ns, f"cluster-wide discover namespace should use default(omit), got: {ns}"
+    assert len(lists) == 1
+    assert ".get('namespace', omit)" in lists[0]["namespace"]
 
 
 def _find_generate_run_id_task():

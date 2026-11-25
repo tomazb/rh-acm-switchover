@@ -1150,12 +1150,10 @@ def test_unverifiable_discovery_is_error_not_kind_not_served(monkeypatch, dynami
 
 
 @pytest.mark.parametrize(
-    ("allow_absent", "index", "expected"),
+    ("index", "expected"),
     [
-        (False, {"kind": "APIGroupList", "groups": []}, "error"),
-        (True, {"kind": "APIGroupList", "groups": []}, "kind_not_served"),
+        ({"kind": "APIGroupList", "groups": []}, "kind_not_served"),
         (
-            True,
             {
                 "kind": "APIGroupList",
                 "groups": [{"name": "g", "versions": [{"version": "v2", "groupVersion": "g/v2"}]}],
@@ -1163,18 +1161,17 @@ def test_unverifiable_discovery_is_error_not_kind_not_served(monkeypatch, dynami
             "kind_not_served",
         ),
         (
-            True,
             {
                 "kind": "APIGroupList",
                 "groups": [{"name": "g", "versions": [{"version": "v2", "groupVersion": "wrong/v2"}]}],
             },
             "error",
         ),
-        (True, _api_error(ForbiddenError, 403), "error"),
+        (_api_error(ForbiddenError, 403), "error"),
     ],
-    ids=["default-refuses-404", "missing-group", "missing-version", "malformed-index", "forbidden-index"],
+    ids=["missing-group", "missing-version", "malformed-index", "forbidden-index"],
 )
-def test_discover_can_prove_api_version_absence_after_a_404(monkeypatch, allow_absent, index, expected):
+def test_optional_list_can_prove_api_version_absence_after_a_404(monkeypatch, index, expected):
     requested_paths = []
 
     def request(method, path, **params):
@@ -1191,20 +1188,93 @@ def test_discover_can_prove_api_version_absence_after_a_404(monkeypatch, allow_a
     dynamic = _FakeDynamicClient()
     monkeypatch.setattr(dynamic, "request", request)
     client = _FakeClient(dynamic=dynamic)
+    monkeypatch.setattr(acm_k8s_read_outcome, "_client_without_discovery", lambda _: client)
     result = _run_module(
         monkeypatch,
         params={
-            "read_mode": "discover",
+            "read_mode": "list",
             "api_version": "g/v1",
             "kind": "Widget",
             "resource_name": "widgets",
-            "allow_absent_api_version": allow_absent,
+            "allow_absent_api_version": True,
         },
-        client=client,
     )
     assert result == {"changed": False, "read_status": expected, "resources": [], "resource_version": None}
-    assert requested_paths == (["/apis/g/v1", "/apis"] if allow_absent else ["/apis/g/v1"])
+    assert requested_paths == ["/apis/g/v1", "/apis"]
     assert client.get_calls == client.resource_calls == 0
+
+
+@pytest.mark.parametrize("second_kind", ["WidgetList", "Status"])
+def test_optional_list_checks_every_page_on_the_exact_bounded_route(monkeypatch, second_kind):
+    dynamic = _FakeDynamicClient()
+    client = _FakeClient(dynamic=dynamic)
+    discovery = {
+        "kind": "APIResourceList",
+        "groupVersion": "test.example/v1",
+        "resources": [{"name": "widgets", "kind": "Widget", "namespaced": True}],
+    }
+    pages = iter(
+        [
+            {
+                "apiVersion": "test.example/v1",
+                "kind": "WidgetList",
+                "metadata": {"resourceVersion": "42", "continue": "next"},
+                "items": [{"metadata": {"name": "first"}}],
+            },
+            {
+                "apiVersion": "test.example/v1",
+                "kind": second_kind,
+                "metadata": {"resourceVersion": "42"},
+                "items": [{"metadata": {"name": "second"}}],
+            },
+        ]
+    )
+    calls = []
+
+    def request(method, path, *, serialize, _request_timeout, **params):
+        assert method == "GET"
+        assert serialize is False
+        assert _request_timeout == constants.STRICT_READ_REQUEST_TIMEOUT
+        calls.append((path, params))
+        return _RawResponse(discovery if len(calls) == 1 else next(pages))
+
+    monkeypatch.setattr(dynamic, "request", request)
+    monkeypatch.setattr(acm_k8s_read_outcome, "_client_without_discovery", lambda _: client)
+    result = _run_module(
+        monkeypatch,
+        params={
+            "read_mode": "list",
+            "api_version": "test.example/v1",
+            "kind": "Widget",
+            "resource_name": "widgets",
+            "namespace": "trusted",
+            "allow_absent_api_version": True,
+        },
+    )
+
+    assert calls[0] == ("/apis/test.example/v1", {})
+    for (path, params), expected_token in zip(calls[1:], (None, "next"), strict=True):
+        assert path == "/apis/test.example/v1/namespaces/{namespace}/widgets"
+        assert params == {
+            "path_params": {"namespace": "trusted"},
+            "_continue": expected_token,
+            "limit": constants.STRICT_READ_PAGE_LIMIT,
+        }
+    assert client.get_calls == client.resource_calls == 0
+    if second_kind == "WidgetList":
+        assert result["read_status"] == "ok"
+        assert result["resource_version"] == "42"
+        assert [item["metadata"]["name"] for item in result["resources"]] == [
+            "first",
+            "second",
+        ]
+    else:
+        assert result == {
+            "changed": False,
+            "read_status": "error",
+            "resources": [],
+            "resource_version": None,
+        }
 
 
 @pytest.mark.parametrize(

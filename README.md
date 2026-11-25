@@ -46,8 +46,8 @@ secondary-only, and standalone decommission remains outside this two-hub guard.
 
 ArgoCD integration is fully available and stable in the switchover workflow.
 
-- Automatic read-only ArgoCD discovery runs when the Applications CRD is present
-- Optional managed pause/resume is available through `--argocd-manage`
+- Automatic read-only Argo CD discovery runs when the Applications CRD is present. A discovery or LIST failure produces an advisory warning.
+- Managed pause with `--argocd-manage` skips an unserved Application API and stops if the cluster-wide inventory cannot be verified.
 - Resume-only mode is available through `--argocd-resume-only` (after updating Git for the new hub)
 - Managed pause blocks unsafe cases instead of patching child Applications that a parent ApplicationSet can revert, or Applications whose ACM impact cannot be determined from current Argo CD status
 
@@ -355,7 +355,8 @@ flowchart LR
     A[PREFLIGHT] --> P{--argocd-manage?}
     P -->|yes| Q[Pause ACM-touching<br/>Argo CD Applications]
     P -->|no| B[ACTIVATION]
-    Q --> B
+    Q -->|Discovery and pause succeed or skip| B
+    Q -->|Discovery or pause fails| F[Stop before activation]
     B --> C[POST_ACTIVATION]
     C --> H{Historical Backup evidence?}
     H -->|yes| V[Fresh Backup proof]
