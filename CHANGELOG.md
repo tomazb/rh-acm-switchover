@@ -321,6 +321,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Standalone Ansible decommission rejects unrecognized execution modes before
+  checkpoint entry or Kubernetes access, including when checkpointing is disabled (#391).
 - Post-activation verifies the observatorium-api rollout in both the Python CLI and Ansible
   Collection. Python reads the SDK's Deployment status fields and Ansible evaluates both rollout
   conditions successfully (#388, #392).
