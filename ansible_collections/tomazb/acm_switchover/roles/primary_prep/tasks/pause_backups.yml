@@ -46,12 +46,12 @@
   register: _backup_patch_results
   when:
     - acm_backup_schedule_operation.operation.action == 'patch'
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
 - name: Delete BackupSchedule for ACM 2.11 pause
   when:
     - acm_backup_schedule_operation.operation.action == 'delete'
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
   block:
     - name: Delete BackupSchedule resource for ACM 2.11 pause
       kubernetes.core.k8s:
@@ -111,3 +111,14 @@
               and acm_backup_schedule_operation.operation.action != 'none')
         }}
       operation: "{{ acm_backup_schedule_operation.operation }}"
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+# `changed` keeps its documented would-change meaning; `applied` says nothing was written.
+- name: Publish backup schedule preview result
+  ansible.builtin.set_fact:
+    acm_switchover_pause_backups_result:
+      changed: "{{ acm_backup_schedule_operation.operation.action != 'none' }}"
+      applied: false
+      operation: "{{ acm_backup_schedule_operation.operation }}"
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'

@@ -1,4 +1,17 @@
 ---
+# #284 decision 4: refuse a misspelled mode before the first checkpoint action. The
+# checkpoint action treats only dry_run and validate as non-mutating, and every write
+# below runs only in execute, so an unknown mode would otherwise record primary_prep as
+# passed with nothing paused. Fires in every mode, native check mode included.
+- name: Refuse an unknown execution mode before any checkpoint action
+  ansible.builtin.assert:
+    that:
+      - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'dry_run', 'validate']
+    fail_msg: >-
+      primary_prep refuses execution mode '{{ acm_switchover_execution.mode | default('dry_run') }}':
+      acm_switchover_execution.mode must be execute, dry_run or validate.
+    quiet: true
+
 - name: Enter checkpointed phase
   tomazb.acm_switchover.checkpoint_phase:
     phase: primary_prep
@@ -98,6 +111,16 @@
               or (acm_switchover_auto_import_result.changed | default(false))
               or (acm_switchover_observability_scale_result.changed | default(false))
             }}
+
+    # dry_run and validate apply nothing: the result says so instead of reading as done.
+    - name: Mark the primary_prep result as a preview
+      ansible.builtin.set_fact:
+        acm_switchover_primary_prep_result: >-
+          {{
+            acm_switchover_primary_prep_result
+            | combine({'preview': true, 'reason': acm_switchover_execution.mode | default('dry_run')})
+          }}
+      when: acm_switchover_execution.mode | default('dry_run') != 'execute'
   rescue:
     - name: Mark checkpoint failure
       tomazb.acm_switchover.checkpoint_phase:

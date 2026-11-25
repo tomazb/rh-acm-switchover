@@ -28,8 +28,11 @@
   register: acm_primary_compactor_scale
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
 
+# Under native check mode k8s_scale sends no scale request, so the pods keep running and
+# waiting for them to stop would poll for five minutes and then fail (#284 decision 5,
+# reproduced on the fake API). The verification only means something after a real scale.
 - name: Read thanos-compactor pods after scale-down
   tomazb.acm_switchover.acm_k8s_read_outcome:
     read_mode: list
@@ -54,7 +57,8 @@
   no_log: true
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
     - acm_primary_compactor_scale is defined
 
 - name: Fail when thanos-compactor pod termination could not be verified
@@ -64,7 +68,8 @@
       verify API access and retry.
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
     - acm_primary_compactor_scale is defined
     - acm_primary_compactor_pods_after_scale is defined
     - >-
@@ -81,7 +86,8 @@
       pod(s) running after scale-down
   when:
     - (acm_primary_compactor_info.resources | default([]) | length) > 0
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') == 'execute'
+    - not ansible_check_mode
     - acm_primary_compactor_scale is defined
     - acm_primary_compactor_pods_after_scale is defined
     - acm_primary_compactor_pods_after_scale.read_status is defined
@@ -95,3 +101,15 @@
     acm_switchover_observability_scale_result:
       changed: "{{ acm_primary_compactor_scale.changed | default(false) }}"
       scaled: "{{ (acm_primary_compactor_info.resources | default([]) | length) > 0 }}"
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+# Nothing is scaled in a preview: `planned` says whether execute would scale a discovered
+# compactor to 0 replicas.
+- name: Publish observability scale preview result
+  ansible.builtin.set_fact:
+    acm_switchover_observability_scale_result:
+      changed: false
+      scaled: false
+      planned: "{{ (acm_primary_compactor_info.resources | default([]) | length) > 0 }}"
+      reason: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'

@@ -491,12 +491,14 @@ def run_argocd_discovery_fixture(tmp_path):
 
 @pytest.fixture
 def run_argocd_fixture(tmp_path):
-    def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run(fixture_name: str, overrides: dict | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
+        if overrides:
+            _merge_test_vars(vars_payload, overrides)
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))

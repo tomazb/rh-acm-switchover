@@ -236,17 +236,24 @@ class TestArgoCDPause:
     def test_file_exists(self):
         assert ARGOCD_PAUSE.exists(), "argocd_manage/tasks/pause.yml must exist"
 
-    def test_patch_task_skipped_in_dry_run(self):
-        """k8s patch task must be guarded by execute mode — must not run in dry-run."""
+    def test_patch_task_runs_only_in_execute(self):
+        """k8s patch task must be guarded by execute mode — dry_run and validate must not patch (#284).
+
+        A `!= 'dry_run'` gate is not enough: validate passes it. The collection-wide guard is
+        test_validate_mode_preview_contract.py; this pins the task this file owns.
+        """
         k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         patch_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "patched"]
         assert patch_tasks, "pause.yml must have a k8s state:patched task to remove autosync"
         for task in patch_tasks:
-            when = _when_text(task)
-            assert "!= 'dry_run'" in when, (
-                "Argo CD patch task must be guarded by execute-mode check — "
-                "dry-run must not patch Application resources"
+            when = task.get("when")
+            assert "acm_switchover_execution.mode | default('dry_run') == 'execute'" in (
+                when if isinstance(when, list) else [when]
+            ), (
+                "Argo CD patch task must be guarded by the execute-mode check — "
+                "dry_run and validate must not patch Application resources"
             )
+            assert "!= 'dry_run'" not in _when_text(task)
 
     def test_patch_task_skipped_in_mock_mode(self):
         """k8s patch task must not run when mock apps are supplied (no live cluster available)."""

@@ -8,7 +8,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import yaml
 
@@ -66,8 +66,12 @@ class FakeArgoCDHub:
         kube_system_status: int = 200,
         kube_system_body: dict | None = None,
         patch_failure_status: int | None = None,
+        honor_dry_run: bool = False,
     ):
         self.cluster_uid = cluster_uid
+        # When set, a write carrying dryRun=All is answered as a real API server answers a
+        # server-side dry run: the would-be object is returned and nothing is stored.
+        self._honor_dry_run = honor_dry_run
         # Every Application PATCH fails with this status when set.
         self._patch_failure_status = patch_failure_status
         self._applications = {
@@ -77,6 +81,7 @@ class FakeArgoCDHub:
         self._kube_system_status = kube_system_status
         self._kube_system_body = copy.deepcopy(kube_system_body)
         self._requests: list[dict[str, str]] = []
+        self._queries: list[dict[str, str]] = []
         self.patches: list[dict] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -91,6 +96,16 @@ class FakeArgoCDHub:
     def requests(self) -> list[dict[str, str]]:
         with self._lock:
             return copy.deepcopy(self._requests)
+
+    @property
+    def writes(self) -> list[dict[str, str]]:
+        return [request for request in self.requests if request["method"] in {"POST", "PUT", "PATCH", "DELETE"}]
+
+    @property
+    def queries(self) -> list[dict[str, str]]:
+        """Every request with its raw query string, which `requests` deliberately omits."""
+        with self._lock:
+            return copy.deepcopy(self._queries)
 
     def close(self) -> None:
         self._server.shutdown()
@@ -111,9 +126,10 @@ class FakeArgoCDHub:
                 sync_policy.pop("automated", None)
             app["metadata"]["resourceVersion"] = str(int(app["metadata"]["resourceVersion"]) + 1)
 
-    def _record_request(self, method: str, path: str) -> None:
+    def _record_request(self, method: str, path: str, query: str = "") -> None:
         with self._lock:
             self._requests.append({"method": method, "path": path})
+            self._queries.append({"method": method, "path": path, "query": query})
 
     def _configured_kube_system_response(self, path: str) -> tuple[int, dict] | None:
         if path != "/api/v1/namespaces/kube-system":
@@ -141,7 +157,7 @@ class FakeArgoCDHub:
 
             def do_GET(self):
                 path = unquote(urlsplit(self.path).path)
-                hub._record_request("GET", path)
+                hub._record_request("GET", path, urlsplit(self.path).query)
                 kube_system_response = hub._configured_kube_system_response(path)
                 if kube_system_response is not None:
                     status, payload = kube_system_response
@@ -172,7 +188,9 @@ class FakeArgoCDHub:
 
             def do_PATCH(self):
                 path = unquote(urlsplit(self.path).path)
-                hub._record_request("PATCH", path)
+                query = urlsplit(self.path).query
+                hub._record_request("PATCH", path, query)
+                dry_run = hub._honor_dry_run and "All" in parse_qs(query).get("dryRun", [])
                 parts = path.strip("/").split("/")
                 if (
                     len(parts) == 7
@@ -201,8 +219,13 @@ class FakeArgoCDHub:
                         return
 
                     before = copy.deepcopy(current)
+                    if dry_run:
+                        current = copy.deepcopy(current)
                     self._apply_application_patch(current, body)
                     changed = before != current
+                    if dry_run:
+                        self._write_json(current)
+                        return
                     if changed:
                         current["metadata"]["resourceVersion"] = str(int(current["metadata"]["resourceVersion"]) + 1)
                     hub.patches.append(
@@ -227,7 +250,7 @@ class FakeArgoCDHub:
 
             def _unsupported_write(self, method: str) -> None:
                 path = unquote(urlsplit(self.path).path)
-                hub._record_request(method, path)
+                hub._record_request(method, path, urlsplit(self.path).query)
                 length = int(self.headers.get("Content-Length", "0"))
                 self.rfile.read(length)
                 self._status(

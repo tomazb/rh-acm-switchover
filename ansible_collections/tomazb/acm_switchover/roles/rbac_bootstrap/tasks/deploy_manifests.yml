@@ -13,4 +13,4 @@
   loop_control:
     loop_var: _rbac_manifest_file
     label: "{{ _rbac_manifest_file }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
