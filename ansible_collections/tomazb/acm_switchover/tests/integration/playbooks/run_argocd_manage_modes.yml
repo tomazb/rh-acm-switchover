@@ -1,0 +1,30 @@
+---
+# #284: run the shipped argocd_manage role for each requested (mode, hub) step and dump the
+# aggregated summaries. The dump is test output, written even under --check.
+- name: Exercise the shipped argocd_manage role in a selectable execution mode
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run each requested Argo CD step
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: "{{ harness_step.mode }}"
+        _argocd_discover_hub: "{{ harness_step.hub }}"
+      loop: "{{ harness_argocd_steps }}"
+      loop_control:
+        loop_var: harness_step
+
+    - name: Dump the published Argo CD summaries
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'argocd_summary': acm_switchover_argocd_summary | default(none),
+              'argocd_summary_by_hub': acm_switchover_argocd_summary_by_hub | default(none)
+            } | to_json
+          }}
+        dest: "{{ harness_result_path }}"
+        mode: "0600"
+      check_mode: false

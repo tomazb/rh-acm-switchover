@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import yaml
+from kubernetes.client import V1DeploymentStatus
 from kubernetes.client.rest import ApiException
 
 # Add parent to path to import modules directly
@@ -322,14 +323,14 @@ class TestPostActivationVerification:
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 2},
-            "status": {
-                "observedGeneration": 1,
-                "replicas": 2,
-                "updatedReplicas": 2,
-                "availableReplicas": 2,
-                "readyReplicas": 2,
-                "unavailableReplicas": 0,
-            },
+            "status": V1DeploymentStatus(
+                observed_generation=1,
+                replicas=2,
+                updated_replicas=2,
+                available_replicas=2,
+                ready_replicas=2,
+                unavailable_replicas=0,
+            ).to_dict(),
         }
         mock_secondary_client.get_statefulset.return_value = {
             "metadata": {"generation": 1},
@@ -625,39 +626,15 @@ class TestPostActivationVerification:
             {
                 "metadata": {"generation": 2},
                 "spec": {"replicas": 2},
-                "status": {
-                    "observedGeneration": 1,
-                    "replicas": 2,
-                    "updatedReplicas": 1,
-                    "availableReplicas": 1,
-                    "readyReplicas": 1,
-                    "unavailableReplicas": 1,
-                },
-            },
-            {
-                "metadata": {"generation": 2},
-                "spec": {"replicas": 2},
-                "status": {
-                    "observedGeneration": 2,
-                    "replicas": 2,
-                    "updatedReplicas": 0,
-                    "availableReplicas": 2,
-                    "readyReplicas": 2,
-                    "unavailableReplicas": 0,
-                },
-            },
-            {
-                "metadata": {"generation": 2},
-                "spec": {"replicas": 2},
-                "status": {
-                    "observedGeneration": 2,
-                    "replicas": 2,
-                    "updatedReplicas": 2,
-                    "availableReplicas": 2,
-                    "readyReplicas": 2,
-                    "unavailableReplicas": 0,
-                },
-            },
+                "status": V1DeploymentStatus(
+                    observed_generation=generation,
+                    replicas=2,
+                    updated_replicas=updated,
+                    available_replicas=2,
+                    ready_replicas=2,
+                ).to_dict(),
+            }
+            for generation, updated in [(1, 2), (2, 0), (2, 2)]
         ]
         mock_secondary_client.get_pods.return_value = [
             {
@@ -887,14 +864,14 @@ class TestPostActivationVerification:
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 2},
-            "status": {
-                "observedGeneration": 1,
-                "replicas": 2,
-                "updatedReplicas": 2,
-                "availableReplicas": 2,
-                "readyReplicas": 2,
-                "unavailableReplicas": 0,
-            },
+            "status": V1DeploymentStatus(
+                observed_generation=1,
+                replicas=2,
+                updated_replicas=2,
+                available_replicas=2,
+                ready_replicas=2,
+                unavailable_replicas=0,
+            ).to_dict(),
         }
         mock_secondary_client.get_statefulset.return_value = {
             "metadata": {"generation": 1},
@@ -1528,14 +1505,14 @@ class TestPostActivationVerificationIntegration:
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
-            "status": {
-                "observedGeneration": 1,
-                "replicas": 1,
-                "updatedReplicas": 1,
-                "availableReplicas": 1,
-                "readyReplicas": 1,
-                "unavailableReplicas": 0,
-            },
+            "status": V1DeploymentStatus(
+                observed_generation=1,
+                replicas=1,
+                updated_replicas=1,
+                available_replicas=1,
+                ready_replicas=1,
+                unavailable_replicas=0,
+            ).to_dict(),
         }
         mock_secondary_client.get_statefulset.return_value = {
             "metadata": {"generation": 1},

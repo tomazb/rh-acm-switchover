@@ -80,6 +80,19 @@ pass/fail/reset checkpoint transitions, so they cannot make a later live run
 skip phases. Check mode remains non-mutating even when
 `acm_switchover_execution.mode: execute` is set.
 
+In `validate` and `dry_run` no collection role writes to a cluster or writes durable
+local state (#284): every such write runs only in `execute`, and the results a preview
+publishes report what was planned rather than what was applied (see the
+[variable reference](variable-reference.md#preview-results-validate-and-dry_run)). The
+Python CLI never enters primary preparation, Argo CD pause or resume, or RBAC setup under
+`--validate-only`; the collection previews `primary_prep` and `argocd_manage` when they are
+entered directly in `validate`, as it does `activation`, `post_activation` and
+`finalization`. `rbac_bootstrap` and `playbooks/argocd_resume.yml` refuse `validate`
+before any read, matching Python, where `--validate-only` cannot be combined with
+`--setup` or `--argocd-resume-only`. A direct `primary_prep` entry refuses an unknown mode
+before its first checkpoint action, so a misspelled mode can no longer record the phase
+as passed with nothing paused.
+
 Live execute-mode runs bind resumable state to the current hub identities. The
 Python CLI persists each hub context with the Kubernetes `kube-system` namespace
 UID in its state file and rejects a resumed run if the same stored context now
@@ -279,7 +292,10 @@ contract; no parity status or checkpoint interchange is introduced.
 Neither behavior certifies unknown historical gate provenance beyond post-activation.
 Python finalization and COMPLETED checkpoints are not automatically rewound or reset.
 Follow the [operator hold](../../../../docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold)
-for the population still owned by open #352. Existing missing-completion rewind guidance
+for the remaining population. Python now logs a warning at finalization and at the completed
+no-op when only the unversioned marker is present, but does not re-verify it; the Collection
+emits no such warning. The hold also says how to recognise an affected Collection checkpoint.
+Tracking: [#352](https://github.com/tomazb/rh-acm-switchover/issues/352). Existing missing-completion rewind guidance
 is not a recovery procedure for unknown marker provenance.
 
 ## Auto-import reset obligation (issue #214, audit C3/C4)

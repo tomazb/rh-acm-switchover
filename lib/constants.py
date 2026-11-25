@@ -42,6 +42,14 @@ RESTORE_ONLY_NEXT_STEP_MESSAGES = (
     "  3. Provide new hub connection details",
 )
 WORKFLOW_BLANK_LINE = ""
+# Step names of the klusterlet wrong-hub gate (#352): an unversioned marker predates the fix.
+LEGACY_KLUSTERLET_STEP = "verify_klusterlet_connections"
+CURRENT_KLUSTERLET_STEP = "verify_klusterlet_connections_v2"
+LEGACY_KLUSTERLET_PROVENANCE_WARNING = (
+    "The klusterlet verification marker %s in this state file is of unknown provenance: it may predate the "
+    "wrong-hub verification fix and may not reflect a real verification. This tool is not re-verifying it on this "
+    "resume. See the operator hold in docs/operations/usage.md, section 'Legacy Python klusterlet checkpoint hold'."
+)
 WORKFLOW_BANNER = "=" * 60
 WORKFLOW_LEADING_BANNER = "\n" + WORKFLOW_BANNER
 WORKFLOW_ALREADY_COMPLETED_MESSAGE = "%s ALREADY COMPLETED"

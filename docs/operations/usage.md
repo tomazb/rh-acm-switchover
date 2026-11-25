@@ -194,6 +194,11 @@ Step already completed: scale_down_thanos
 Continuing with: verify_passive_sync
 ```
 
+A state file written by an affected pre-fix build can carry a klusterlet verification marker of
+unknown provenance. Before resuming such a state at or beyond finalization, read the
+[Legacy Python klusterlet checkpoint hold](#legacy-python-klusterlet-checkpoint-hold). The tool
+logs a warning when it detects the marker, but it does not stop the run.
+
 #### Hub identity binding on resume
 
 State files record each hub's **live cluster UID** (the UID of the
@@ -352,6 +357,11 @@ and the documented non-fatal skips below still apply.
 
 Before resuming a checkpoint across this change, preserve a copy and inspect its JSON:
 
+- The pre-fix build logged `Could not load kubeconfig, skipping klusterlet verification`
+  when it skipped the check. If the original run's logs are available, that line is the one
+  concrete clue that the unversioned marker was written without a real verification. Its
+  absence does not prove a genuine pass.
+
 - In `completed_steps`, identify entries whose `name` is
   `verify_klusterlet_connections` and whether `verify_klusterlet_connections_v2` is absent.
   An unversioned entry cannot distinguish a genuine pass from a historical silent skip.
@@ -382,10 +392,26 @@ Do not remove markers, rewind a phase, reset the state, synthesize evidence, or 
 as a generic remedy. Finalization may already have performed cleanup or old-hub actions.
 The missing-journal-completion guidance above does not authorize recovery of this
 unknown-provenance case. Any phase re-entry or recovery procedure needs a separate
-operator decision. [Open issue #352](https://github.com/tomazb/rh-acm-switchover/issues/352)
-owns this residual and requires an evidence-based disposition before full remediation or
-closure can be claimed. The separate [#362 endpoint freshness issue](https://github.com/tomazb/rh-acm-switchover/issues/362)
+operator decision.
+
+**Runtime warning.** When a run resumes at `finalization` (including a failed state whose
+last error was in finalization) or reaches the `completed` no-op banner, and
+`completed_steps` has the unversioned `verify_klusterlet_connections` entry without
+`verify_klusterlet_connections_v2`, the tool logs one warning that the marker is of unknown
+provenance and points to this section. `--validate-only` is not a resume and does not warn. The
+warning is informational only. The run then
+proceeds exactly as before: the tool does not refuse, rewind, or re-verify the marker, and
+there is no automatic re-verification at these phases. The hold above stays in force.
+Tracking: [#352](https://github.com/tomazb/rh-acm-switchover/issues/352). The separate [#362 endpoint freshness issue](https://github.com/tomazb/rh-acm-switchover/issues/362)
 is outside this change.
+
+**Recognising an affected Collection checkpoint.** The Collection has no per-check marker.
+A checkpoint is exposed if it was written by a Collection build earlier than commit
+`39e0700e` (R4-06 PR 2, merged 2026-10-15) and `post_activation` is in `completed_phases`.
+Before that commit the probe reported an undeterminable expected endpoint as a non-fatal
+`skipped` result (`expected_import_secret_missing`), so the phase could complete without a
+real wrong-hub check. A completed phase is skipped on resume with no new probe, and the
+Collection emits no runtime warning. Treat such a checkpoint under the same hold.
 
 **Post-activation klusterlet remediation:**
 After activation, the tool verifies that managed clusters are joined and
@@ -1226,8 +1252,9 @@ role's delete guards fire in any mode other than `dry_run`, so a validate run wo
 really delete while recording no durable identity. Preview with `mode: dry_run`, or
 use native check mode (`--check`). Neither establishes authoritative teardown
 identity, neither writes checkpoint state, and neither publishes destructive
-completion authority. Collection-wide `validate` behaviour outside this role is
-tracked separately in issue #284.
+completion authority. Elsewhere in the collection `validate` is a non-mutating preview,
+except for RBAC bootstrap and the standalone Argo CD resume playbook, which refuse it
+(#284; see the collection variable reference).
 
 **Reset flags are refused on the standalone path.** `checkpoint.reset: true` and a
 non-empty `checkpoint.reset_from` are rejected on every standalone decommission
@@ -1414,6 +1441,10 @@ oc describe restore restore-acm-passive-sync -n open-cluster-management-backup
 Look for specific errors and resolve before re-running.
 
 ## State Management
+
+A state file that carries only the unversioned `verify_klusterlet_connections` step may hold
+a marker of unknown provenance. See the
+[Legacy Python klusterlet checkpoint hold](#legacy-python-klusterlet-checkpoint-hold).
 
 ### View Current State
 

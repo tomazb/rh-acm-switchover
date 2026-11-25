@@ -1,0 +1,41 @@
+---
+# #284: run the shipped primary_prep role in the requested execution mode and dump every
+# result it publishes. The dump is test output, written even under --check.
+- name: Exercise the shipped primary_prep role in a selectable execution mode
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Establish trusted hub identity when the run is checkpointed
+      tomazb.acm_switchover.checkpoint_phase:
+        identity_barrier: true
+        phase: preflight
+        status: enter
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        hubs: "{{ acm_switchover_hubs | default({}) }}"
+        operation: "{{ acm_switchover_operation | default({}) }}"
+        execution: "{{ acm_switchover_execution | default({}) }}"
+        test_overrides: "{{ acm_switchover_test_overrides | default({}) }}"
+        collection_version: "{{ acm_switchover_collection_version | default('') }}"
+      when: harness_identity_barrier | default(false) | bool
+
+    - name: Run primary_prep role
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.primary_prep
+
+    - name: Dump the published primary_prep results
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'phase': acm_switchover_primary_prep_result | default(none),
+              'pause_backups': acm_switchover_pause_backups_result | default(none),
+              'auto_import': acm_switchover_auto_import_result | default(none),
+              'observability': acm_switchover_observability_scale_result | default(none),
+              'argocd_summary': acm_switchover_argocd_summary | default(none),
+              'argocd_summary_by_hub': acm_switchover_argocd_summary_by_hub | default(none)
+            } | to_json
+          }}
+        dest: "{{ harness_result_path }}"
+        mode: "0600"
+      check_mode: false

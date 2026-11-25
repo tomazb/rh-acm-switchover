@@ -2,7 +2,9 @@
 
 import pathlib
 
+import pytest
 import yaml
+from jinja2.nativetypes import NativeEnvironment
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
@@ -97,6 +99,38 @@ def test_observatorium_rollout_gate_requires_updated_replicas():
     assert "unavailableReplicas" in until
     assert ".get('status', {}).get('replicas'" in until
     assert ".get('spec', {}).get('replicas'" in until
+
+
+@pytest.mark.parametrize(
+    ("status_override", "expected"),
+    [
+        ({}, True),
+        ({"observedGeneration": 1}, False),
+        ({"updatedReplicas": 0}, False),
+        ({"replicas": 3}, False),
+    ],
+)
+def test_observatorium_rollout_expressions_evaluate_deployment_status(status_override, expected):
+    tasks = _load_yaml("verify_observability.yml")
+    wait = next(task for task in tasks if task["name"] == "Wait for observatorium-api Deployment rollout to stabilize")
+    fact = next(task for task in tasks if task["name"] == "Record observatorium-api rollout readiness")
+    deployment = {
+        "metadata": {"generation": 2},
+        "spec": {"replicas": 2},
+        "status": {
+            "observedGeneration": 2,
+            "updatedReplicas": 2,
+            "availableReplicas": 2,
+            "readyReplicas": 2,
+            **status_override,
+        },
+    }
+    env = NativeEnvironment()
+    for expression in (wait["until"], fact["ansible.builtin.set_fact"]["_acm_observatorium_rollout_ready"]):
+        actual = env.from_string(expression).render(
+            _acm_secondary_observatorium_api_ready_info={"resources": [deployment]}
+        )
+        assert actual is expected
 
 
 def test_observability_publish_and_failure_gates_default_readiness_to_failed():
