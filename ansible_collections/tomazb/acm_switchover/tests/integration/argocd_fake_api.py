@@ -64,6 +64,7 @@ class FakeArgoCDHub:
         applications: list[dict],
         namespace_list_failures: dict[str, str] | None = None,
         application_api_available: bool = True,
+        application_crd_present: bool = False,
         application_discovery_response: tuple[int, dict] | None = None,
         cluster_application_list_response: tuple[int, dict] | None = None,
         kube_system_status: int = 200,
@@ -82,6 +83,7 @@ class FakeArgoCDHub:
         }
         self._namespace_list_failures = dict(namespace_list_failures or {})
         self._application_api_available = application_api_available
+        self._application_crd_present = application_crd_present
         self._application_discovery_response = copy.deepcopy(application_discovery_response)
         self._cluster_application_list_response = copy.deepcopy(cluster_application_list_response)
         self._kube_system_status = kube_system_status
@@ -367,6 +369,15 @@ class FakeArgoCDHub:
                         "items": [],
                     },
                 }
+                if (
+                    hub._application_crd_present
+                    and path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/applications.argoproj.io"
+                ):
+                    return {
+                        "apiVersion": "apiextensions.k8s.io/v1",
+                        "kind": "CustomResourceDefinition",
+                        "metadata": {"name": "applications.argoproj.io"},
+                    }
                 if not hub._application_api_available:
                     static["/apis"]["groups"] = [
                         group for group in static["/apis"]["groups"] if group["name"] != "argoproj.io"

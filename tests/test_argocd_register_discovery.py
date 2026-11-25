@@ -39,8 +39,8 @@ class TestNoCrdRegisterPreservation:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
             with caplog.at_level("WARNING", logger="acm_switchover"):
@@ -68,8 +68,8 @@ class TestNoCrdRegisterPreservation:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
             with caplog.at_level("WARNING", logger="acm_switchover"):
@@ -133,8 +133,8 @@ class TestNoCrdRegisterPreservation:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
             with caplog.at_level("WARNING", logger="acm_switchover"):
@@ -183,8 +183,8 @@ class TestNoCrdRegisterPreservation:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             summary = ArgocdPauseRegister(state, dry_run=True).pause_hubs([(client, "secondary")])
 
@@ -214,8 +214,8 @@ class TestPauseSummaryReporting:
         client = Mock()
 
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             register = ArgocdPauseRegister(state, dry_run=False)
             summary = register.pause_hubs([(client, "secondary")])
@@ -347,8 +347,8 @@ class TestPauseSummaryReporting:
         """G2: the ADR-0001 short-circuit paths describe their mode too."""
         state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=_discovery_without_crd(),
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             summary = ArgocdPauseRegister(state, dry_run=True).pause_hubs([(Mock(), "primary")])
 

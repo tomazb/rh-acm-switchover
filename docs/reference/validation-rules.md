@@ -199,7 +199,7 @@ validates the path before writing `preflight-report.json`, `switchover-report.js
 - `--restore-only` cannot be used with `--decommission`
 - In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
-- ArgoCD detection runs automatically when CRD is detected; `--skip-gitops-check` disables all GitOps detection including ArgoCD deep dive
+- Preflight automatically checks whether the Argo CD Application API is served. `--skip-gitops-check` disables GitOps detection, including Argo CD discovery.
 - `--report-dir`, when set, must be a safe filesystem path for schema-versioned JSON report artifacts
 
 ### 6. Filesystem Path Validation

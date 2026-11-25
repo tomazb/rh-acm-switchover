@@ -110,16 +110,57 @@ def test_unscoped_missing_application_api_is_absent(tmp_path, advisory, group_ve
 
 
 @pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
-def test_unscoped_empty_application_list_is_present(tmp_path, advisory):
-    hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=[])
+@pytest.mark.parametrize("populated", [False, True], ids=["empty", "populated"])
+def test_unscoped_application_list_is_present(tmp_path, advisory, populated):
+    apps = [application("team-gitops", "acm-app.example", automated=False)] if populated else []
+    hub = FakeArgoCDHub(cluster_uid="primary-uid", applications=apps)
     try:
         completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
         output = completed.stdout + completed.stderr
 
         assert completed.returncode == 0, output
-        assert f"DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED=0 HAS_RUN_ID={not advisory}" in output
+        assert f"DISCOVERY_STATUS=ok INSTALLED=True DISCOVERED={len(apps)} HAS_RUN_ID={not advisory}" in output
         assert hub.requests.index(_APPLICATION_DISCOVERY) < hub.requests.index(_APPLICATION_LIST)
         assert all(request["method"] == "GET" for request in hub.requests)
+    finally:
+        hub.close()
+
+
+@pytest.mark.parametrize("advisory", [False, True], ids=["strict", "advisory"])
+@pytest.mark.parametrize("bad_identity", [{"namespace": "argocd"}, {"name": "app", "namespace": " "}])
+def test_unscoped_application_list_rejects_malformed_member(tmp_path, advisory, bad_identity):
+    valid = application("argocd", "acm-app", automated=True)
+    malformed = {
+        **application("argocd", "other-app", automated=True),
+        "metadata": {**bad_identity, "annotations": {"fixture": "seeded-secret-token"}},
+    }
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[valid],
+        cluster_application_list_response=(
+            200,
+            {
+                "apiVersion": "argoproj.io/v1alpha1",
+                "kind": "ApplicationList",
+                "metadata": {"resourceVersion": "1"},
+                "items": [valid, malformed],
+            },
+        ),
+    )
+    try:
+        completed = _run_unscoped_role(tmp_path, hub.url, advisory=advisory)
+        output = completed.stdout + completed.stderr
+
+        assert hub.requests[:2] == [_APPLICATION_DISCOVERY, _APPLICATION_LIST], output
+        assert hub.writes == []
+        assert "seeded-secret-token" not in output
+        if advisory:
+            assert completed.returncode == 0, output
+            assert "DISCOVERY_STATUS=error INSTALLED=False DISCOVERED=0 HAS_RUN_ID=False" in output
+        else:
+            assert completed.returncode == 2, output
+            assert _DISCOVERY_FAILURE in output
+            assert "Generate run_id if not provided" not in output
     finally:
         hub.close()
 

@@ -201,21 +201,19 @@ class ArgocdPauseRegister:
         Raises:
             Exception: Propagated from ArgoCD detection or application listing.
         """
-        discoveries = self._discover(hubs)
-        if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
+        existing_run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
+        discovery_namespaces_by_hub = self._store._get_discovery_namespaces_by_hub() if existing_run_id else {}
+        applications_by_hub, pause_blockers = self._collect_applications(hubs, discovery_namespaces_by_hub)
+        if not applications_by_hub:
             return self._handle_no_applications_crd()
 
-        existing_run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
         run_id = argocd_lib.run_id_or_new(existing_run_id)
         if not self.dry_run:
             self.state._set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+        self._store._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
         summary = PauseSummary(run_id=run_id, dry_run=self.dry_run)
         paused_apps: List[Dict[str, Any]] = self._load_entries()
 
-        applications_by_hub, pause_blockers = self._collect_applications(
-            discoveries,
-            reuse_recorded_namespaces=bool(existing_run_id),
-        )
         if pause_blockers:
             summary.blocked = len(pause_blockers)
             return summary
@@ -226,40 +224,27 @@ class ArgocdPauseRegister:
 
         return summary
 
-    @staticmethod
-    def _discover(
-        hubs: List[Tuple[KubeClient, str]],
-    ) -> List[Tuple[KubeClient, str, "argocd_lib.ArgocdDiscoveryResult"]]:
-        """Detect the Argo CD installation on every hub, preserving hub order."""
-        return [(client, hub_label, argocd_lib.detect_argocd_installation(client)) for client, hub_label in hubs]
-
     def _collect_applications(
         self,
-        discoveries: List[Tuple[KubeClient, str, "argocd_lib.ArgocdDiscoveryResult"]],
-        *,
-        reuse_recorded_namespaces: bool,
+        hubs: List[Tuple[KubeClient, str]],
+        discovery_namespaces_by_hub: Dict[str, List[str]],
     ) -> Tuple[List[Tuple[KubeClient, str, List[Dict[str, Any]]]], List[Any]]:
-        """List Applications per hub and collect every pause blocker found.
-
-        Records the discovered Application namespaces on the first pass so a
-        retry within the same run can list a trusted, scoped namespace set.
-        """
-        discovery_namespaces_by_hub = (
-            self._store._get_discovery_namespaces_by_hub() if reuse_recorded_namespaces else {}
-        )
+        """Read all inventories and blockers before recording pause state or patching."""
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers: List[Any] = []
 
-        for client, hub_label, discovery in discoveries:
-            if not discovery.has_applications_crd:
-                logger.info(
-                    "Argo CD Applications CRD not found on %s; skipping Argo CD pause",
-                    hub_label,
-                )
-                continue
-
+        for client, hub_label in hubs:
             trusted_namespaces = argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label))
+            if trusted_namespaces is not None:
+                discovery = argocd_lib.detect_argocd_installation(client)
+                if not discovery.has_applications_crd:
+                    logger.info("Argo CD Applications CRD not found on %s; skipping Argo CD pause", hub_label)
+                    continue
+
             apps = argocd_lib.list_argocd_applications(client, namespaces=trusted_namespaces)
+            if apps is None:
+                logger.info("Argo CD Application API not served on %s; skipping Argo CD pause", hub_label)
+                continue
             if trusted_namespaces is None:
                 discovery_namespaces_by_hub[hub_label] = argocd_lib.application_namespaces_from_discovery(apps)
             applications_by_hub.append((client, hub_label, apps))
@@ -268,7 +253,6 @@ class ArgocdPauseRegister:
                 logger.error("Argo CD pause blocked on %s: %s", hub_label, blocker.message)
             pause_blockers.extend(blockers)
 
-        self._store._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
         return applications_by_hub, pause_blockers
 
     def _pause_application(
@@ -442,7 +426,7 @@ class ArgocdPauseRegister:
         if entries:
             confirmed = len(self._store._applied_entries(entries))
             logger.warning(
-                "Argo CD Applications CRD not visible on any hub but %d unresolved app(s) in the "
+                "Argo CD Application API not detected on any hub but %d unresolved app(s) in the "
                 "register (%d confirmed paused); keeping pause register (see ADR-0001). Resume "
                 "with --argocd-resume-only, or clear the state file manually if Argo CD was "
                 "permanently removed.",
@@ -450,7 +434,7 @@ class ArgocdPauseRegister:
                 confirmed,
             )
             return PauseSummary(applications_crd_visible=False, run_id=run_id, dry_run=self.dry_run)
-        logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
+        logger.info("Argo CD Application API not detected on any hub; skipping Argo CD pause")
         self._clear()
         # This run paused nothing and cleared the register, so it produced no run id.
         # Reporting the stale persisted one would make dry-run announce a pause that

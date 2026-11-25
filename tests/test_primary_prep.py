@@ -458,15 +458,9 @@ class TestPrimaryPreparation:
             "argocd_paused_apps": [],
         }.get(key, default)
 
-        discovery = argocd_lib.ArgocdDiscoveryResult(
-            has_applications_crd=False,
-            has_argocds_crd=False,
-            install_type="vanilla",
-        )
-
         with patch(
-            "lib.argocd_register.argocd_lib.detect_argocd_installation",
-            return_value=discovery,
+            "lib.argocd_register.argocd_lib.list_argocd_applications",
+            return_value=None,
         ):
             prep._pause_argocd_acm_apps()
 

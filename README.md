@@ -12,7 +12,7 @@ Automated, idempotent tool for switching over Red Hat Advanced Cluster Managemen
 - ✅ **Idempotent execution** - Resume from last successful step
 - ✅ **Comprehensive validation** - Pre-flight and post-flight checks for safety
 - ✅ **RBAC enforcement** - Least privilege access control with validation
-- ✅ **ArgoCD support (production-ready)** - Pause/resume ACM-touching Applications with automatic CRD detection
+- ✅ **ArgoCD support (production-ready)** - Pause/resume ACM-touching Applications with automatic API discovery
 - ✅ **Data protection** - Verifies `preserveOnDelete` on ClusterDeployments
 - ✅ **Auto-detection** - Automatically detects ACM Observability and version
 - ✅ **Dry-run mode** - Preview actions without making changes
@@ -46,7 +46,8 @@ secondary-only, and standalone decommission remains outside this two-hub guard.
 
 ArgoCD integration is fully available and stable in the switchover workflow.
 
-- Automatic read-only Argo CD discovery runs when the Applications CRD is present. A discovery or LIST failure produces an advisory warning.
+- Automatic read-only Argo CD discovery checks whether the Application API is served.
+  Discovery errors and invalid inventories produce advisory warnings.
 - Managed pause with `--argocd-manage` skips an unserved Application API and stops if the cluster-wide inventory cannot be verified.
 - Resume-only mode is available through `--argocd-resume-only` (after updating Git for the new hub)
 - Managed pause blocks unsafe cases instead of patching child Applications that a parent ApplicationSet can revert, or Applications whose ACM impact cannot be determined from current Argo CD status

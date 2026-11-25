@@ -348,9 +348,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowlist. The `argocd_manage` fallback to the ambient kubeconfig on a direct entry is not
   changed here. Fake-backed and static evidence only; not live certification.
 - The Python CLI and Ansible Collection distinguish an unserved Argo CD Application API
-  from a failed cluster-wide discovery or LIST. A valid empty inventory succeeds. Failed or
-  malformed responses, including a LIST 404 on a discovered route, stop managed discovery and
-  produce sanitized warnings during advisory discovery (#390).
+  from a failed cluster-wide discovery or LIST. Both require fresh API discovery to establish
+  absence. A valid empty inventory succeeds. Failed or malformed responses, including a LIST 404
+  on a discovered route or an Application without a usable name and namespace, stop managed
+  discovery and produce sanitized warnings during advisory discovery (#390).
 
 - Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
   exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request

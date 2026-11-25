@@ -14,7 +14,7 @@ python acm_switchover.py \
   --method passive
 ```
 
-Argo CD detection runs automatically during preflight when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
+Preflight automatically checks whether the Argo CD Application API is served on each hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
 
 Note: `--secondary-context` is required for switchover operations unless you are using `--decommission` or `--setup`.
 For `--setup`, `--include-decommission` is only valid with `--role operator` or `--role both`, and should be used only when the generated operator kubeconfig must support teardown workflows.
@@ -31,7 +31,7 @@ For `--setup`, `--include-decommission` is only valid with `--role operator` or 
 - ✓ Passive sync restore is current (Method 1 only)
 - ✓ ACM Observability detected (if present)
 - ✓ GitOps marker detection warnings for ArgoCD/Flux (unless `--skip-gitops-check`)
-- ✓ Argo CD discovery and ACM-impact summary on both hubs (automatic when CRD detected)
+- ✓ Automatic Argo CD API discovery and ACM-impact summary on both hubs
 
 Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
 
@@ -1385,8 +1385,9 @@ python acm_switchover.py \
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
 
 With cluster-wide Application discovery, both the Python CLI and Ansible Collection
-skip a hub when they establish that the Application API is unserved. When the API is
-served, a complete empty inventory succeeds. Discovery or LIST failures, including
+skip a hub only when fresh API discovery establishes that the Application API is unserved.
+When the API is served, a complete empty inventory succeeds. Each Application in a nonempty
+inventory must have a usable name and namespace. Discovery or LIST failures, including
 authorization, transport, malformed responses, and HTTP 404 on a confirmed LIST route,
 stop managed discovery. Read-only advisory checks warn and continue.
 

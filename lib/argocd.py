@@ -25,6 +25,7 @@ from lib.constants import (
 from lib.kube_client import KubeClient
 from lib.strict_read import StrictReadStatus
 from lib.utils import dry_run_skip
+from lib.validation import K8S_NAME_MAX_LENGTH, K8S_NAME_PATTERN, K8S_NAMESPACE_MAX_LENGTH, K8S_NAMESPACE_PATTERN
 
 logger = logging.getLogger("acm_switchover")
 
@@ -363,7 +364,7 @@ def list_argocd_applications(
     namespaces: Optional[List[str]] = None,
     *,
     public_advisory: bool = False,
-) -> List[Dict[str, Any]]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     List Argo CD Application resources.
 
@@ -372,7 +373,7 @@ def list_argocd_applications(
         namespaces: If set, list only from these namespaces; else list cluster-wide.
 
     Returns:
-        List of Application resource dicts.
+        Application resource dicts, or None when cluster-wide discovery proves the API is unserved.
 
     Raises:
         RuntimeError: When cluster-wide discovery or listing cannot be verified.
@@ -398,10 +399,27 @@ def list_argocd_applications(
         kind="Application",
     )
     if outcome.status is StrictReadStatus.CRD_ABSENT:
-        return []
+        return None
     if not outcome.is_success:
         raise RuntimeError(f"Argo CD Application discovery failed ({outcome.reason}). Verify hub API access and retry.")
+    if not all(_has_usable_application_identity(app) for app in outcome.items):
+        raise RuntimeError("Argo CD Application discovery failed (malformed Application identity).")
     return outcome.items
+
+
+def _has_usable_application_identity(app: Dict[str, Any]) -> bool:
+    metadata = app.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    namespace, name = _app_identity(app)
+    return (
+        isinstance(name, str)
+        and len(name) <= K8S_NAME_MAX_LENGTH
+        and K8S_NAME_PATTERN.fullmatch(name) is not None
+        and isinstance(namespace, str)
+        and len(namespace) <= K8S_NAMESPACE_MAX_LENGTH
+        and K8S_NAMESPACE_PATTERN.fullmatch(namespace) is not None
+    )
 
 
 def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[str]:
