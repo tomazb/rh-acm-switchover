@@ -321,6 +321,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Post-activation verifies the observatorium-api rollout in both the Python CLI and Ansible
+  Collection. Python reads the SDK's Deployment status fields and Ansible evaluates both rollout
+  conditions successfully (#388, #392).
 - Collection `acm_switchover_execution.mode: validate` no longer mutates anything in
   `primary_prep`, `argocd_manage` or `rbac_bootstrap` (#284). Their writes (the BackupSchedule
   pause, the disable-auto-import annotations, the Thanos compactor scale, the Argo CD pause and
