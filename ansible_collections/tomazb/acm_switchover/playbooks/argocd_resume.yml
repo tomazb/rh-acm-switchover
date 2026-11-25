@@ -3,6 +3,20 @@
   hosts: localhost
   gather_facts: false
   pre_tasks:
+    # #284: resume has no non-mutating validate path, and the Python CLI refuses
+    # --validate-only together with --argocd-resume-only. Refused before any read, in
+    # every mode including native check mode; an unknown mode is refused the same way.
+    - name: Refuse validate and unknown execution modes before any read
+      ansible.builtin.assert:
+        that:
+          - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'dry_run']
+        fail_msg: >-
+          Argo CD resume refuses execution mode
+          '{{ acm_switchover_execution.mode | default('dry_run') }}': it supports execute,
+          or dry_run to preview. Validation runs no resume, as acm_switchover.py
+          --validate-only cannot be combined with --argocd-resume-only.
+        quiet: true
+
     - name: Resolve whether Argo CD resume checkpoint lookup is needed
       ansible.builtin.set_fact:
         _argocd_resume_checkpoint_lookup_required: >-

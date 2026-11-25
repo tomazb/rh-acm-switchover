@@ -135,7 +135,7 @@
         >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
       )
       and (
-        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)))) | int)
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1))))) | int)
         <= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
       )
       and (
@@ -170,7 +170,7 @@
           >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
         )
         and (
-          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)))) | int)
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1))))) | int)
           <= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
         )
         and (

@@ -267,6 +267,26 @@ def test_check_mode_keeps_namespace_detection_and_skips_rbac(native_check):
     _assert_rbac_validation_is_explicitly_skipped(native_check)
 
 
+@pytest.mark.parametrize("checkpoint_available", [False, True])
+def test_standalone_rejects_unknown_execution_mode_before_checkpoint_or_cluster_access(checkpoint_available):
+    result = run_decommission_role(
+        standalone_playbook=True,
+        execution_mode="Execute",
+        allow_unknown_execution_mode=True,
+        checkpoint_available=checkpoint_available,
+    )
+
+    assert result["returncode"] != 0
+    failed = [task for task in result["tasks"] if task["failed"]]
+    assert len(failed) == 1
+    assert "acm_switchover_execution.mode" in failed[0]["result"]["msg"]
+    assert not _named(result, _ENTER)
+    assert result["requests"] == []
+    assert result["delete_calls"] == []
+    assert result["checkpoint"]["phases"] == []
+    assert result["checkpoint"]["operational_data"] == result["checkpoint"]["before_operational_data"]
+
+
 def test_standalone_check_mode_skips_checkpoint_transitions_and_still_previews():
     result = run_role_check_mode(standalone_playbook=True)
     for name in (_ENTER, _PASS):

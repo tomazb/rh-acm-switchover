@@ -1,4 +1,18 @@
 ---
+# #284: RBAC bootstrap has no non-mutating validate path, and the Python CLI refuses
+# --validate-only together with --setup. Refused before any read, in every mode including
+# native check mode; an unknown mode is refused the same way.
+- name: Refuse validate and unknown execution modes before any read
+  ansible.builtin.assert:
+    that:
+      - (acm_switchover_execution.mode | default('dry_run')) in ['execute', 'dry_run']
+    fail_msg: >-
+      rbac_bootstrap refuses execution mode
+      '{{ acm_switchover_execution.mode | default('dry_run') }}': it supports execute,
+      or dry_run to preview. Validation applies no RBAC, as acm_switchover.py
+      --validate-only cannot be combined with --setup.
+    quiet: true
+
 - name: Plan RBAC manifest selection
   tomazb.acm_switchover.acm_rbac_bootstrap:
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
@@ -27,6 +41,23 @@
       generated_kubeconfig: "{{ acm_switchover_rbac_bootstrap_generated_kubeconfig | default('') }}"
       generated_kubeconfigs: "{{ acm_switchover_rbac_bootstrap_generated_kubeconfigs | default({}) }}"
       status: pass
+  when: acm_switchover_execution.mode | default('dry_run') == 'execute'
+
+# A dry run applies and generates nothing: the applied lists stay empty and the plan is
+# reported under planned_assets and planned_kubeconfigs.
+- name: Publish rbac_bootstrap preview result
+  ansible.builtin.set_fact:
+    acm_switchover_rbac_bootstrap_result:
+      phase: rbac_bootstrap
+      mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+      role: "{{ acm_switchover_rbac_bootstrap.role }}"
+      assets_applied: []
+      planned_assets: "{{ _rbac_plan.assets }}"
+      generated_kubeconfig: ""
+      generated_kubeconfigs: {}
+      planned_kubeconfigs: "{{ acm_switchover_rbac_bootstrap_planned_kubeconfigs | default({}) }}"
+      status: pass
+  when: acm_switchover_execution.mode | default('dry_run') != 'execute'
 
 - name: Resolve summary path to absolute
   ansible.builtin.set_fact:

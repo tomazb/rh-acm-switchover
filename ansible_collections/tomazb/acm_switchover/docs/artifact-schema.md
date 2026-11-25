@@ -75,6 +75,12 @@ instead of `~/.kube/config`.
 
 Only phases that ran before any failure are included in `phases`.
 
+In `dry_run` a phase result also carries `preview: true` and `reason` (the mode) where
+the role publishes them (for `primary_prep` since #284), and `argocd.summary` counts only
+applied pauses and restores, so it reads `0` in a preview. The planned counts are in the
+`acm_switchover_argocd_summary` fact; see the
+[variable reference](variable-reference.md#preview-results-validate-and-dry_run).
+
 The optional `argocd` object records pause metadata needed for later explicit
 resume when Argo CD management is enabled. `run_id` matches the
 `acm-switchover.argoproj.io/paused-by` marker written to Applications.

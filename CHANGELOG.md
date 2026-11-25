@@ -323,6 +323,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Ansible preflight preserves discovered Velero Backups when no backup needs to finish
   before validation, on the primary hub during switchover and on the target hub during restore-only (#389).
+- Standalone Ansible decommission rejects unrecognized execution modes before
+  checkpoint entry or Kubernetes access, including when checkpointing is disabled (#391).
+- Post-activation verifies the observatorium-api rollout in both the Python CLI and Ansible
+  Collection. Python reads the SDK's Deployment status fields and Ansible evaluates both rollout
+  conditions successfully (#388, #392).
+- Collection `acm_switchover_execution.mode: validate` no longer mutates anything in
+  `primary_prep`, `argocd_manage` or `rbac_bootstrap` (#284). Their writes (the BackupSchedule
+  pause, the disable-auto-import annotations, the Thanos compactor scale, the Argo CD pause and
+  resume patches, the RBAC manifests and the generated service-account kubeconfigs) ran under a
+  `!= 'dry_run'` gate that `validate` passed; they now run only in `execute`. `rbac_bootstrap` and
+  `playbooks/argocd_resume.yml` refuse `validate` and any unknown mode before any read, as the
+  Python CLI refuses `--validate-only` with `--setup` or `--argocd-resume-only`; a direct
+  `primary_prep` entry refuses an unknown mode before its first checkpoint action. In `validate`
+  and `dry_run` the published results now report what was planned, not applied: the compactor
+  result reports `scaled: false` with `planned`, the BackupSchedule result `applied: false`, the
+  phase result `preview: true` and `reason`, the Argo CD summaries `planned_pause` and
+  `planned_resume` beside zero applied counts, and the RBAC dry run `planned_assets` and
+  `planned_kubeconfigs` with empty applied lists. Visible `dry_run` change: before, the compactor
+  result read `scaled: true` and the RBAC result listed its plan as `assets_applied`.
+  `execute` results are unchanged. Native `--check` no longer fails on the Argo CD post-pause
+  re-read (the patch is a server-side dry run) or after a five-minute wait for compactor pods
+  that a check-mode scale never stops. The static guardrail from #335 now covers every role and
+  shipped playbook: it resolves each task's action with Ansible's parser, refuses non-canonical
+  or unresolvable actions, then requires an execute gate on everything outside a read-only
+  allowlist. The `argocd_manage` fallback to the ambient kubeconfig on a direct entry is not
+  changed here. Fake-backed and static evidence only; not live certification.
 - Kubernetes API response text and transport-error text no longer leave `KubeClient` for logs,
   exception text, tracebacks, the state file `errors[]` or the report JSON (#283). Every hub request
   `KubeClient` makes through the Kubernetes client (generated Core, Apps and Custom Objects calls,
