@@ -279,7 +279,10 @@ contract; no parity status or checkpoint interchange is introduced.
 Neither behavior certifies unknown historical gate provenance beyond post-activation.
 Python finalization and COMPLETED checkpoints are not automatically rewound or reset.
 Follow the [operator hold](../../../../docs/operations/usage.md#legacy-python-klusterlet-checkpoint-hold)
-for the population still owned by open #352. Existing missing-completion rewind guidance
+for the remaining population. Python now logs a warning at finalization and at the completed
+no-op when only the unversioned marker is present, but does not re-verify it; the Collection
+emits no such warning. The hold also says how to recognise an affected Collection checkpoint.
+Tracking: [#352](https://github.com/tomazb/rh-acm-switchover/issues/352). Existing missing-completion rewind guidance
 is not a recovery procedure for unknown marker provenance.
 
 ## Auto-import reset obligation (issue #214, audit C3/C4)

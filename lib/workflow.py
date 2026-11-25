@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Collection, Optional, Tuple
 
 from lib.constants import (
+    CURRENT_KLUSTERLET_STEP,
+    LEGACY_KLUSTERLET_PROVENANCE_WARNING,
+    LEGACY_KLUSTERLET_STEP,
     STALE_STATE_THRESHOLD,
     WORKFLOW_ALREADY_COMPLETED_MESSAGE,
     WORKFLOW_BANNER,
@@ -89,6 +92,25 @@ def log_completed_noop(
     logger.info(WORKFLOW_STATE_AGE_MESSAGE, age_minutes)
     logger.info(WORKFLOW_NO_PHASES_EXECUTED_MESSAGE)
     logger.info(WORKFLOW_STATE_FILE_MESSAGE, state.state_file)
+
+
+def warn_legacy_klusterlet_provenance(
+    state: StateManager, logger: logging.Logger, args: Optional[argparse.Namespace] = None
+) -> None:
+    """Warn, without changing the run, when only the pre-fix klusterlet marker exists (#352).
+
+    Advisory only: it never raises, so a malformed checkpoint behaves as it did without the warning.
+    Validate-only is not a resume and does not warn.
+    """
+    if getattr(args, "validate_only", False):
+        return
+    try:
+        steps = (getattr(state, "state", None) or {}).get("completed_steps")
+        names = {step.get("name") for step in steps if isinstance(step, dict)} if isinstance(steps, list) else set()
+        if LEGACY_KLUSTERLET_STEP in names and CURRENT_KLUSTERLET_STEP not in names:
+            logger.warning(LEGACY_KLUSTERLET_PROVENANCE_WARNING, LEGACY_KLUSTERLET_STEP)
+    except Exception:  # pragma: no cover - defensive: an advisory must not alter the outcome
+        return
 
 
 def log_operation_completion(
@@ -182,6 +204,7 @@ def handle_completed_state(args, state, logger, config, *, primary, secondary, b
         if not backup_continuity_guard(args, state, primary, secondary, logger, completed=True):
             return False
         log_completed_noop(state, logger, age, config.operation_label)
+        warn_legacy_klusterlet_provenance(state, logger, args)
         return True
     except Exception:
         logger.error("Completed Backup assessment is unavailable; preserving the original checkpoint.")
@@ -376,6 +399,10 @@ def run_phase_flow(
             logger.error(refusal)
             return False
         return fail_phase(state, refusal, logger)
+
+    if current_phase == Phase.FINALIZATION:
+        # Resumed straight into finalization: no gate runs in this process, so the marker is not re-earned.
+        warn_legacy_klusterlet_provenance(state, logger, args)
 
     ran_phase = False
     for handler, allowed_states, expected_phase in phase_flow:
