@@ -1156,21 +1156,25 @@ class TestListArgocdApplications:
 
         assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]
 
-    def test_namespaced_listing_skips_empty_namespace_entries(self):
-        """Empty namespace strings should be ignored without suppressing valid results."""
+    @pytest.mark.parametrize(
+        "namespaces",
+        [
+            [""],
+            ["argocd", ""],
+            ["9-team", "bad.ns"],
+            ["9-team\n"],
+        ],
+    )
+    def test_namespaced_listing_rejects_malformed_scope_before_any_call(self, namespaces):
+        """Malformed scoped namespace lists must fail closed before listing any namespace."""
+        from lib.exceptions import ValidationError
+
         client = MagicMock()
-        client.list_custom_resources.side_effect = [
-            [{"metadata": {"namespace": "argocd", "name": "app-1"}}],
-            [{"metadata": {"namespace": "test-ns", "name": "app-2"}}],
-        ]
 
-        apps = argocd_lib.list_argocd_applications(client, namespaces=["", "argocd", "", "test-ns"])
+        with pytest.raises(ValidationError):
+            argocd_lib.list_argocd_applications(client, namespaces=namespaces)
 
-        assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]
-        assert [call.kwargs["namespace"] for call in client.list_custom_resources.call_args_list] == [
-            "argocd",
-            "test-ns",
-        ]
+        client.list_custom_resources.assert_not_called()
 
 
 @pytest.mark.unit
@@ -1210,13 +1214,28 @@ class TestApplicationNamespaceDiscovery:
         assert argocd_lib.trusted_application_namespaces(None) is None
         assert argocd_lib.trusted_application_namespaces([]) is None
 
-    def test_trusted_application_namespaces_normalizes_and_deduplicates(self):
-        assert argocd_lib.trusted_application_namespaces([" team-gitops ", "argocd", "argocd", ""]) == [
+    def test_trusted_application_namespaces_deduplicates_and_sorts_valid_names(self):
+        assert argocd_lib.trusted_application_namespaces(["team-gitops", "9-team", "argocd", "argocd"]) == [
+            "9-team",
             "argocd",
             "team-gitops",
         ]
 
-    def test_trusted_application_namespaces_rejects_non_list_values(self):
-        assert argocd_lib.trusted_application_namespaces("argocd") is None
-        assert argocd_lib.trusted_application_namespaces({"primary": ["argocd"]}) is None
-        assert argocd_lib.trusted_application_namespaces(123) is None
+    @pytest.mark.parametrize(
+        "namespaces",
+        [
+            [" team-gitops "],
+            ["9-team\n"],
+            [""],
+            ["9-team", "bad.ns"],
+            [123],
+            "argocd",
+            {"primary": ["argocd"]},
+            123,
+        ],
+    )
+    def test_trusted_application_namespaces_rejects_malformed_values(self, namespaces):
+        from lib.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            argocd_lib.trusted_application_namespaces(namespaces)

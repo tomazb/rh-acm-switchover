@@ -11,6 +11,7 @@ import pytest
 
 from lib import argocd as argocd_lib
 from lib.argocd_register import ArgocdPauseRegister, RegisterStatus
+from lib.exceptions import ValidationError
 from tests.argocd_register_helpers import (
     _discovery_with_crd,
     _discovery_without_crd,
@@ -355,12 +356,21 @@ class TestDiscoveryNamespaceScope:
         mock_list.assert_called_once_with(client, namespaces=None)
         assert state._config["argocd_discovery_namespaces"] == {"primary": ["team-gitops"]}
 
-    def test_malformed_recorded_namespace_value_falls_back_to_cluster_wide(self):
+    @pytest.mark.parametrize(
+        "recorded_namespaces",
+        [
+            {"primary": "argocd"},
+            {"primary": [""]},
+            {"primary": ["9-team\n"]},
+            "not-a-mapping",
+        ],
+    )
+    def test_malformed_recorded_namespace_value_fails_closed(self, recorded_namespaces):
         state = _make_state_manager(
             {
                 "argocd_run_id": "run-1",
                 "argocd_paused_apps": [],
-                "argocd_discovery_namespaces": {"primary": "argocd"},
+                "argocd_discovery_namespaces": recorded_namespaces,
             }
         )
         client = Mock()
@@ -369,7 +379,7 @@ class TestDiscoveryNamespaceScope:
             patch(
                 "lib.argocd_register.argocd_lib.detect_argocd_installation",
                 return_value=_discovery_with_crd(),
-            ),
+            ) as mock_detect,
             patch(
                 "lib.argocd_register.argocd_lib.list_argocd_applications",
                 return_value=[],
@@ -380,9 +390,11 @@ class TestDiscoveryNamespaceScope:
             ),
         ):
             coordinator = ArgocdPauseRegister(state, dry_run=False)
-            coordinator.pause_hubs([(client, "primary")])
+            with pytest.raises(ValidationError):
+                coordinator.pause_hubs([(client, "primary")])
 
-        mock_list.assert_called_once_with(client, namespaces=None)
+        mock_detect.assert_not_called()
+        mock_list.assert_not_called()
 
 
 @pytest.mark.unit

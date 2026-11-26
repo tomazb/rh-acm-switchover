@@ -22,6 +22,7 @@ from lib.constants import (
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
 )
+from lib.exceptions import ValidationError
 from lib.utils import StateManager
 
 logger = logging.getLogger("acm_switchover")
@@ -212,9 +213,11 @@ class PauseRegisterStore:
         self._clear()
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
-        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
-        if not isinstance(stored, dict):
+        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES)
+        if stored is None:
             return {}
+        if not isinstance(stored, dict):
+            raise ValidationError("Persisted argocd_discovery_namespaces must be a mapping.")
         return copy.deepcopy(stored)
 
     def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:

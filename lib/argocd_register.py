@@ -232,9 +232,16 @@ class ArgocdPauseRegister:
         """Read all inventories and blockers before recording pause state or patching."""
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers: List[Any] = []
+        hub_scopes = [
+            (
+                client,
+                hub_label,
+                argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label)),
+            )
+            for client, hub_label in hubs
+        ]
 
-        for client, hub_label in hubs:
-            trusted_namespaces = argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label))
+        for client, hub_label, trusted_namespaces in hub_scopes:
             if trusted_namespaces is not None:
                 discovery = argocd_lib.detect_argocd_installation(client)
                 if not discovery.has_applications_crd:

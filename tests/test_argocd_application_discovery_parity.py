@@ -285,8 +285,20 @@ def test_digit_leading_namespace_pause_scoped_retry_and_resume(tmp_path, monkeyp
         hub.close()
 
 
-@pytest.mark.parametrize("invalid_namespace", ["bad.ns", "-bad", "Bad", "9-team-", "9-team\n", "a-team\n"])
-def test_invalid_namespace_rejected_before_scoped_list(tmp_path, monkeypatch, invalid_namespace):
+@pytest.mark.parametrize(
+    "namespaces",
+    [
+        ["bad.ns"],
+        ["-bad"],
+        ["Bad"],
+        ["9-team-"],
+        ["9-team\n"],
+        ["a-team\n"],
+        [""],
+        ["9-team", "bad.ns"],
+    ],
+)
+def test_invalid_namespace_rejected_before_scoped_list(tmp_path, monkeypatch, namespaces):
     hub = FakeArgoCDHub(cluster_uid="secondary-uid", applications=[])
     kubeconfig = tmp_path / "fixture-kubeconfig"
     write_kubeconfig(kubeconfig, context="fixture-hub", server=hub.url)
@@ -294,7 +306,7 @@ def test_invalid_namespace_rejected_before_scoped_list(tmp_path, monkeypatch, in
     try:
         client = KubeClient(context="fixture-hub")
         with pytest.raises(ValidationError):
-            list_argocd_applications(client, namespaces=[invalid_namespace])
+            list_argocd_applications(client, namespaces=namespaces)
         assert hub.requests == []
     finally:
         hub.close()
@@ -343,3 +355,104 @@ def test_invalid_namespace_rejected_in_unscoped_discovery(tmp_path, monkeypatch,
         assert hub.patches == []
     finally:
         hub.close()
+
+
+@pytest.mark.parametrize(
+    "persisted_scope",
+    [
+        {"secondary": ["9-team\n"]},
+        {"secondary": [""]},
+        {"secondary": [" 9-team "]},
+        {"secondary": ["9-team", "bad.ns"]},
+        {"secondary": "9-team"},
+        "not-a-mapping",
+    ],
+)
+def test_malformed_persisted_discovery_scope_rejected_before_pause_hubs_calls(tmp_path, monkeypatch, persisted_scope):
+    app = application("9-team", "acm-app.example", automated=True)
+    hub = FakeArgoCDHub(
+        cluster_uid="secondary-uid",
+        applications=[app],
+        application_crd_present=True,
+    )
+    kubeconfig = tmp_path / "fixture-kubeconfig"
+    write_kubeconfig(kubeconfig, context="fixture-hub", server=hub.url)
+    monkeypatch.setattr(config.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", str(kubeconfig))
+    state = _make_real_state(tmp_path)
+    state._set_config(STATE_KEY_ARGOCD_RUN_ID, "run-1")
+    state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, persisted_scope)
+    try:
+        client = KubeClient(context="fixture-hub")
+        with pytest.raises(ValidationError):
+            ArgocdPauseRegister(state).pause_hubs([(client, "secondary")])
+        assert hub.requests == []
+        assert hub.patches == []
+    finally:
+        hub.close()
+
+
+def test_malformed_secondary_persisted_discovery_scope_aborts_before_primary_calls(tmp_path, monkeypatch):
+    primary_hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[application("9-team", "acm-primary", automated=True)],
+        application_crd_present=True,
+    )
+    secondary_hub = FakeArgoCDHub(
+        cluster_uid="secondary-uid",
+        applications=[application("argocd", "acm-secondary", automated=True)],
+        application_crd_present=True,
+    )
+    kubeconfig = tmp_path / "fixture-kubeconfig"
+    kubeconfig.write_text(
+        f"""apiVersion: v1
+kind: Config
+clusters:
+- name: primary-cluster
+  cluster:
+    server: {primary_hub.url}
+    insecure-skip-tls-verify: true
+- name: secondary-cluster
+  cluster:
+    server: {secondary_hub.url}
+    insecure-skip-tls-verify: true
+contexts:
+- name: primary-ctx
+  context:
+    cluster: primary-cluster
+    user: primary-user
+- name: secondary-ctx
+  context:
+    cluster: secondary-cluster
+    user: secondary-user
+current-context: primary-ctx
+users:
+- name: primary-user
+  user:
+    username: fixture
+    password: fixture
+- name: secondary-user
+  user:
+    username: fixture
+    password: fixture
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", str(kubeconfig))
+    state = _make_real_state(tmp_path)
+    state._set_config(STATE_KEY_ARGOCD_RUN_ID, "run-1")
+    state._set_config(
+        STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
+        {"primary": ["9-team"], "secondary": ["bad.ns"]},
+    )
+    try:
+        primary_client = KubeClient(context="primary-ctx")
+        secondary_client = KubeClient(context="secondary-ctx")
+        with pytest.raises(ValidationError):
+            ArgocdPauseRegister(state).pause_hubs([(primary_client, "primary"), (secondary_client, "secondary")])
+        assert primary_hub.requests == []
+        assert primary_hub.patches == []
+        assert secondary_hub.requests == []
+        assert secondary_hub.patches == []
+    finally:
+        primary_hub.close()
+        secondary_hub.close()

@@ -383,14 +383,17 @@ def list_argocd_applications(
         Application resource dicts, or None when cluster-wide discovery proves the API is unserved.
 
     Raises:
+        ValidationError: When any supplied scoped namespace is invalid.
         RuntimeError: When cluster-wide discovery or listing cannot be verified.
         ApiException: When a scoped LIST fails with an API error other than 404.
     """
     if namespaces is not None:
+        if not isinstance(namespaces, list):
+            raise ValidationError("Argo CD discovery namespaces must be a list of namespace names.")
+        for ns in namespaces:
+            InputValidator.validate_kubernetes_namespace(ns)
         result: List[Dict[str, Any]] = []
         for ns in namespaces:
-            if not ns:
-                continue
             result.extend(
                 _list_argocd_applications_once(
                     client,
@@ -445,15 +448,16 @@ def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[st
 
 
 def trusted_application_namespaces(namespaces: Optional[List[str]]) -> Optional[List[str]]:
-    """Return a normalized namespace list for scoped listing, or None for cluster-wide."""
+    """Return a validated, deduplicated namespace list for scoped listing, or None for cluster-wide."""
     if namespaces is None:
         return None
     if not isinstance(namespaces, list):
-        return None
+        raise ValidationError("Persisted Argo CD discovery namespaces must be a list of namespace names.")
     if not namespaces:
         return None
-    normalized = sorted({ns.strip() for ns in namespaces if isinstance(ns, str) and ns.strip()})
-    return normalized or None
+    for ns in namespaces:
+        InputValidator.validate_kubernetes_namespace(ns)
+    return sorted(set(namespaces))
 
 
 def _resource_touches_acm(resource: Dict[str, Any]) -> bool:
