@@ -22,10 +22,17 @@ from lib.constants import (
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
 )
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.strict_read import StrictReadStatus
 from lib.utils import dry_run_skip
-from lib.validation import K8S_NAME_MAX_LENGTH, K8S_NAME_PATTERN, K8S_NAMESPACE_MAX_LENGTH
+from lib.validation import (
+    K8S_NAME_MAX_LENGTH,
+    K8S_NAME_PATTERN,
+    K8S_NAMESPACE_MAX_LENGTH,
+    K8S_NAMESPACE_PATTERN,
+    InputValidator,
+)
 
 logger = logging.getLogger("acm_switchover")
 
@@ -34,9 +41,6 @@ ARGOCD_APP_GROUP = "argoproj.io"
 ARGOCD_APP_VERSION = "v1alpha1"
 ARGOCD_APP_PLURAL = "applications"
 ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
-
-# Namespace names returned by the API use DNS-1123 labels.
-_ARGOCD_APPLICATION_NAMESPACE_PATTERN = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 # Annotation key for our pause marker (must match the Ansible argocd_manage role)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
@@ -421,7 +425,7 @@ def _has_usable_application_identity(app: Dict[str, Any]) -> bool:
         and K8S_NAME_PATTERN.fullmatch(name) is not None
         and isinstance(namespace, str)
         and len(namespace) <= K8S_NAMESPACE_MAX_LENGTH
-        and _ARGOCD_APPLICATION_NAMESPACE_PATTERN.fullmatch(namespace) is not None
+        and K8S_NAMESPACE_PATTERN.fullmatch(namespace) is not None
     )
 
 
@@ -661,6 +665,18 @@ def pause_autosync(
             patched=False,
             error=_applicationset_message(ns, name, _applicationset_owner_name(app)),
         )
+    try:
+        InputValidator.validate_kubernetes_namespace(ns)
+    except ValidationError as e:
+        detail = _log_patch_failure(ns, name, "pause auto-sync", e)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            patch_applied=False,
+            error=f"invalid Application namespace: {detail}",
+        )
     # Null deletes the CRD map key under Kubernetes merge-patch semantics.
     new_sync = dict(sync_policy)
     new_sync["automated"] = None
@@ -675,7 +691,7 @@ def pause_autosync(
             plural=ARGOCD_APP_PLURAL,
             name=name,
             patch=patch,
-            namespace=ns or None,
+            namespace=ns,
         )
     except Exception as e:
         detail = _log_patch_failure(ns, name, "pause auto-sync", e)
@@ -685,7 +701,7 @@ def pause_autosync(
                 version=ARGOCD_APP_VERSION,
                 plural=ARGOCD_APP_PLURAL,
                 name=name,
-                namespace=ns or None,
+                namespace=ns,
             )
         except Exception as read_exc:
             read_detail = _format_exception_detail(read_exc)
@@ -726,7 +742,7 @@ def pause_autosync(
             version=ARGOCD_APP_VERSION,
             plural=ARGOCD_APP_PLURAL,
             name=name,
-            namespace=ns or None,
+            namespace=ns,
         )
     except Exception as e:
         detail = _format_exception_detail(e)
@@ -793,12 +809,22 @@ def resume_autosync(
         ResumeResult with restored=True if patch was applied.
     """
     try:
+        InputValidator.validate_kubernetes_namespace(namespace)
+    except ValidationError as e:
+        logger.warning("Refusing to resume Application %s/%s: invalid namespace: %s", namespace, name, e)
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"invalid namespace: {e}",
+        )
+    try:
         current = client.get_custom_resource(
             group=ARGOCD_APP_GROUP,
             version=ARGOCD_APP_VERSION,
             plural=ARGOCD_APP_PLURAL,
             name=name,
-            namespace=namespace or None,
+            namespace=namespace,
         )
     except ApiException as e:
         if e.status == 404:
@@ -876,7 +902,7 @@ def resume_autosync(
             plural=ARGOCD_APP_PLURAL,
             name=name,
             patch=patch,
-            namespace=namespace or None,
+            namespace=namespace,
         )
     except Exception as e:
         detail = _log_patch_failure(namespace, name, "resume auto-sync", e)

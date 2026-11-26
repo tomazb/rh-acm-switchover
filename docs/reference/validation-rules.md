@@ -58,14 +58,13 @@ The ACM switchover automation tool implements comprehensive input validation to:
 ### 2. Kubernetes Namespace Validation
 
 **Pattern**: DNS-1123 label format
-**Regex**: `^[a-z]([-a-z0-9]*[a-z0-9])?$`
+**Regex**: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 **Max Length**: 63 characters
 
 **Rules**:
 - Must contain only lowercase alphanumeric characters (`a-z`, `0-9`)
 - May contain hyphens (`-`)
-- Must start with a lowercase letter (not a digit)
-- Must end with an alphanumeric character
+- Must start and end with a lowercase alphanumeric character (digits permitted)
 - Cannot contain dots (`.`) - this is for labels only
 
 **Valid Examples**:
@@ -73,13 +72,16 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `kube-system`
 - `my-namespace`
 - `my-namespace-123`
+- `123namespace`
+- `9-team`
 
 **Invalid Examples**:
 - `My-Namespace` (uppercase)
 - `my namespace` (spaces)
 - `my@namespace` (invalid characters)
-- `123namespace` (starts with number)
 - `my-namespace-` (ends with hyphen)
+- `-my-namespace` (starts with hyphen)
+- `bad.ns` (contains dot)
 
 ### 3. Kubernetes Label Validation
 

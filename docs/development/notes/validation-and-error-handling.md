@@ -312,9 +312,9 @@ K8S_NAME_PATTERN = re.compile(
 )
 
 # DNS-1123 Label (Namespaces)
-# Note: Must start with a lowercase letter per Kubernetes implementation
+# Note: Lowercase alphanumeric characters or '-', starting and ending with alphanumeric
 K8S_NAMESPACE_PATTERN = re.compile(
-    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
+    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
 )
 ```
 

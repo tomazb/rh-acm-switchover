@@ -56,7 +56,6 @@ CONTEXT_ALLOWED = frozenset(ASCII_ALNUM + "_.:-/@")
 DNS_ALLOWED = frozenset(LOWER_ALNUM + "-")
 LABEL_ALLOWED = frozenset(LABEL_INTERIOR)
 LOWER_ALNUM_SET = frozenset(LOWER_ALNUM)
-LOWERCASE_SET = frozenset("abcdefghijklmnopqrstuvwxyz")
 SAFE_IDENTIFIER_CHARS_SET = frozenset(SAFE_IDENTIFIER_CHARS)
 
 
@@ -110,15 +109,12 @@ def _kubernetes_name_sound(candidate: str) -> bool:
 
 
 def _namespace_sound(candidate: str) -> bool:
-    return (
-        _bounded_components_sound(
-            candidate,
-            max_length=63,
-            separator=None,
-            allowed=DNS_ALLOWED,
-            boundary=LOWER_ALNUM_SET,
-        )
-        and candidate[0] in LOWERCASE_SET
+    return _bounded_components_sound(
+        candidate,
+        max_length=63,
+        separator=None,
+        allowed=DNS_ALLOWED,
+        boundary=LOWER_ALNUM_SET,
     )
 
 
@@ -198,6 +194,8 @@ def test_kubernetes_name_acceptance_is_sound(candidate: str) -> None:
 @example(candidate="a" * 63)
 @example(candidate="a" * 64)
 @example(candidate="1namespace")
+@example(candidate="9-team")
+@example(candidate="9-team\n")
 @example(candidate="namespace-")
 @given(candidate=kubernetes_namespace_candidates())
 def test_kubernetes_namespace_acceptance_is_sound(candidate: str) -> None:

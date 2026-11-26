@@ -1156,8 +1156,13 @@ class TestKubernetesResourceValidation:
             "kube-system",
             "my-namespace",
             "my-namespace-123",
+            "123namespace",  # starts with digit (DNS-1123 label)
+            "9-team",
+            "0",
+            "1a",
             "a",  # single letter
             "a" + "b" * 62,  # max length (63 chars, starts with letter)
+            "9" + "0" * 62,  # max length (63 chars, starts with digit)
         ]
 
         for namespace in valid_namespaces:
@@ -1170,11 +1175,13 @@ class TestKubernetesResourceValidation:
             "My-Namespace",  # uppercase
             "my namespace",  # space
             "my@namespace",  # invalid character
-            "123namespace",  # starts with number
             "my-namespace-",  # ends with hyphen
             "a" * 64,  # too long
             "my..namespace",  # consecutive dots
+            "bad.ns",  # contains dot
             "-my-namespace",  # starts with hyphen
+            "9-team\n",  # trailing newline
+            "a-team\n",  # trailing newline
         ]
 
         for namespace in invalid_namespaces:

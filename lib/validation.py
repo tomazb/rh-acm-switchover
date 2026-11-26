@@ -56,9 +56,9 @@ K8S_NAME_PATTERN: Pattern[str] = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[
 K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
-# RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
-# this project intentionally requires a leading letter even though Kubernetes also allows digits
-K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
+# RFC 1123 / DNS-1123 label format: contains only lowercase alphanumeric characters or '-',
+# starting and ending with a lowercase alphanumeric character (digits permitted).
+K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 K8S_NAMESPACE_MAX_LENGTH = 63
 
 # Kubernetes label validation patterns
@@ -227,7 +227,7 @@ class InputValidator:
         Raises:
             ValidationError: If namespace is invalid
         """
-        if not namespace:
+        if not isinstance(namespace, str) or not namespace:
             raise ValidationError("Namespace cannot be empty")
 
         if len(namespace) > K8S_NAMESPACE_MAX_LENGTH:
@@ -235,11 +235,11 @@ class InputValidator:
                 f"Namespace '{namespace}' exceeds maximum length of {K8S_NAMESPACE_MAX_LENGTH} characters"
             )
 
-        if not K8S_NAMESPACE_PATTERN.match(namespace):
+        if not K8S_NAMESPACE_PATTERN.fullmatch(namespace):
             raise ValidationError(
                 f"Invalid namespace '{namespace}'. "
-                f"Must consist of lower case alphanumeric characters or '-', "
-                f"must start with a lowercase letter, and end with an alphanumeric character"
+                f"Must consist of lowercase alphanumeric characters or '-', "
+                f"must start and end with an alphanumeric character (DNS-1123 label)"
             )
 
     @staticmethod
