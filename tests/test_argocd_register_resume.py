@@ -189,3 +189,24 @@ class TestRegisterResume:
             0,
             0,
         )
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    @pytest.mark.parametrize("invalid_namespace", ["bad.ns", "9-team\n"])
+    def test_resume_rejects_invalid_namespace_in_live_and_dry_run(self, tmp_path, invalid_namespace, dry_run):
+        state = _make_real_state(tmp_path)
+        state._set_config("argocd_run_id", "run-1")
+        entry = {**_register_entry("secondary", "app-1"), "namespace": invalid_namespace}
+        state._set_config("argocd_paused_apps", [entry])
+        client = _make_resume_client({})
+        client.dry_run = dry_run
+
+        register = ArgocdPauseRegister(state, dry_run=dry_run)
+        summary = register.resume(None, client)
+
+        assert summary.failed == 1
+        assert summary.restored == 0
+        assert summary.remaining_in_register == 1
+        assert state._get_config("argocd_paused_apps") == [entry]
+        assert state._get_config("argocd_run_id") == "run-1"
+        client.get_custom_resource.assert_not_called()
+        client.patch_custom_resource.assert_not_called()

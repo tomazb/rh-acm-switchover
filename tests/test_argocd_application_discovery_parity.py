@@ -312,14 +312,15 @@ def test_invalid_namespace_rejected_before_scoped_list(tmp_path, monkeypatch, na
         hub.close()
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
 @pytest.mark.parametrize("invalid_namespace", ["bad.ns", "-bad", "Bad", "9-team-", "9-team\n", "a-team\n", ""])
-def test_invalid_namespace_rejected_before_pause_or_resume_mutation(tmp_path, monkeypatch, invalid_namespace):
+def test_invalid_namespace_rejected_before_pause_or_resume_mutation(tmp_path, monkeypatch, invalid_namespace, dry_run):
     hub = FakeArgoCDHub(cluster_uid="secondary-uid", applications=[])
     kubeconfig = tmp_path / "fixture-kubeconfig"
     write_kubeconfig(kubeconfig, context="fixture-hub", server=hub.url)
     monkeypatch.setattr(config.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", str(kubeconfig))
     try:
-        client = KubeClient(context="fixture-hub")
+        client = KubeClient(context="fixture-hub", dry_run=dry_run)
         app = application(invalid_namespace, "acm-app", automated=True)
 
         pause_result = argocd.pause_autosync(client, app, "run-1")

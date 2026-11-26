@@ -617,20 +617,6 @@ def find_acm_touching_apps(
     return result
 
 
-# NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
-# Applied here to a module-level function, KubeClient takes the "self" slot, so
-# dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
-# is constructed with dry_run=True when dry-run mode is intended.
-@dry_run_skip(
-    message="Skipping Argo CD Application patch in dry-run",
-    return_value=lambda client, app, run_id: PauseResult(
-        namespace=(app.get("metadata", {}) or {}).get("namespace", ""),
-        name=(app.get("metadata", {}) or {}).get("name", ""),
-        original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
-        patched=is_autosync_enabled(app),
-        patch_applied=False,
-    ),
-)
 def pause_autosync(
     client: KubeClient,
     app: Dict[str, Any],
@@ -647,10 +633,10 @@ def pause_autosync(
     Returns:
         PauseResult with original sync policy and whether a patch was applied.
     """
-    meta = app.get("metadata", {})
+    meta = app.get("metadata") or {}
     ns = meta.get("namespace", "")
     name = meta.get("name", "")
-    spec = app.get("spec", {})
+    spec = app.get("spec") or {}
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
     if not is_autosync_enabled(app):
@@ -681,6 +667,31 @@ def pause_autosync(
             patch_applied=False,
             error=f"invalid Application namespace: {detail}",
         )
+    return _apply_pause_autosync(client, ns, name, sync_policy, original, run_id)
+
+
+# NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
+# Applied here to a module-level helper, KubeClient takes the "self" slot, so
+# dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
+# is constructed with dry_run=True when dry-run mode is intended.
+@dry_run_skip(
+    message="Skipping Argo CD Application patch in dry-run",
+    return_value=lambda client, ns, name, sync_policy, original, run_id: PauseResult(
+        namespace=ns,
+        name=name,
+        original_sync_policy=original,
+        patched=True,
+        patch_applied=False,
+    ),
+)
+def _apply_pause_autosync(
+    client: KubeClient,
+    ns: str,
+    name: str,
+    sync_policy: Dict[str, Any],
+    original: Dict[str, Any],
+    run_id: str,
+) -> PauseResult:
     # Null deletes the CRD map key under Kubernetes merge-patch semantics.
     new_sync = dict(sync_policy)
     new_sync["automated"] = None
@@ -783,15 +794,6 @@ def pause_autosync(
     )
 
 
-# NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
-@dry_run_skip(
-    message="Would resume auto-sync",
-    return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
-        namespace=namespace,
-        name=name,
-        restored=True,
-    ),
-)
 def resume_autosync(
     client: KubeClient,
     namespace: str,
@@ -822,6 +824,25 @@ def resume_autosync(
             restored=False,
             skip_reason=f"invalid namespace: {e}",
         )
+    return _apply_resume_autosync(client, namespace, name, original_sync_policy, run_id)
+
+
+# NOTE: same dry_run_skip / KubeClient-as-self pattern as _apply_pause_autosync above.
+@dry_run_skip(
+    message="Would resume auto-sync",
+    return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
+        namespace=namespace,
+        name=name,
+        restored=True,
+    ),
+)
+def _apply_resume_autosync(
+    client: KubeClient,
+    namespace: str,
+    name: str,
+    original_sync_policy: Dict[str, Any],
+    run_id: str,
+) -> ResumeResult:
     try:
         current = client.get_custom_resource(
             group=ARGOCD_APP_GROUP,

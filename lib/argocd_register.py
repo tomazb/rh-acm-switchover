@@ -25,6 +25,7 @@ from lib.constants import (
 from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
+from lib.validation import InputValidator
 
 __all__ = ["ArgocdPauseRegister", "PauseSummary", "PauseRegisterStore", "RegisterStatus"]
 
@@ -152,6 +153,12 @@ class ArgocdPauseRegister:
                 logger.warning(
                     "  Skip entry (hub=%s, namespace=%s, name=%s): unusable record or no client", hub, ns, name
                 )
+                continue
+            try:
+                InputValidator.validate_kubernetes_namespace(ns)
+            except ValidationError as e:
+                summary.failed += 1
+                logger.warning("  Failed %s/%s: invalid namespace: %s", ns, name, e)
                 continue
             if self.dry_run:
                 summary.restored += 1
