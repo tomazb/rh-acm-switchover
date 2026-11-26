@@ -364,6 +364,7 @@ class TestDiscoveryNamespaceScope:
             {"primary": None},
             {"primary": [""]},
             {"primary": ["9-team\n"]},
+            None,
             "not-a-mapping",
         ],
     )

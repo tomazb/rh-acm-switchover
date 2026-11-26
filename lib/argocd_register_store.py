@@ -213,9 +213,7 @@ class PauseRegisterStore:
         self._clear()
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
-        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES)
-        if stored is None:
-            return {}
+        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
         if not isinstance(stored, dict) or not all(isinstance(hub_key, str) for hub_key in stored):
             raise ValidationError("Persisted argocd_discovery_namespaces must be a mapping.")
         return copy.deepcopy(stored)
