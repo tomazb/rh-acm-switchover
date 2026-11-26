@@ -1476,7 +1476,9 @@ python acm_switchover.py \
 This replaces the checkpoint before validation begins and discards all progress, including any
 recorded migration journal and Argo CD pause register. Reset acquires the same run lock as
 switchover and preserves the original file if another process holds the lock. If the state file
-is a symbolic link, pass its real path to `--state-file`. The CLI rejects `--reset-state` with
+is a symbolic link, reset refuses it. Pass the real path to `--state-file` to replace the target
+checkpoint, or choose a new `--state-file` path to start fresh and preserve the target. The CLI
+rejects `--reset-state` with
 `--dry-run` or `--argocd-resume-only`. See [Migration journal on resume](#migration-journal-on-resume).
 
 Without an explicit reset, `--validate-only` preserves the checkpoint if the stored contexts

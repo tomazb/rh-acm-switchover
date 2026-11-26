@@ -278,7 +278,10 @@ class StateManager:
             # Replacing a leaf symlink would change the canonical lock path while
             # this process still holds the lock for its original target.
             if os.path.islink(self.state_file):
-                raise StateLoadError("Cannot reset a state file through a symlink. Pass the real path to --state-file.")
+                raise StateLoadError(
+                    "Cannot reset a state file through a symlink. To replace the target checkpoint, pass its "
+                    "real path to --state-file. To preserve it and start fresh, choose a new --state-file path."
+                )
             if os.path.exists(self.state_file):
                 logging.getLogger("acm_switchover").warning("Resetting state file: %s", self.state_file)
 
