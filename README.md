@@ -431,7 +431,7 @@ Check Velero restore logs: `oc logs -n open-cluster-management-backup deployment
 
 ### Resume from Specific Step
 
-Edit state file manually or use `--reset-state` to start fresh (use with caution). Once a migration journal is recorded, `--reset-state` also discards it; see [Migration journal on resume](docs/operations/usage.md#migration-journal-on-resume) for the journal-preserving recovery.
+Edit the state file manually or use `--reset-state` to start fresh. Reset requires the run lock and discards all saved progress, including any migration journal or Argo CD pause register. The CLI rejects reset with `--dry-run` or `--argocd-resume-only`. See [Migration journal on resume](docs/operations/usage.md#migration-journal-on-resume) for recovery that preserves the journal.
 
 ## Testing
 

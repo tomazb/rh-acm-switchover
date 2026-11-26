@@ -321,6 +321,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python acquires the run lock before resetting a checkpoint, including a corrupt checkpoint.
+  It rejects reset with Argo CD resume-only and preserves saved progress when validate-only
+  encounters missing or mismatched contexts that would otherwise trigger a reset (#404).
 - Ansible preflight preserves discovered Velero Backups when no backup needs to finish
   before validation, on the primary hub during switchover and on the target hub during restore-only (#389).
 - Standalone Ansible decommission rejects unrecognized execution modes before

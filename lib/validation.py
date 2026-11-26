@@ -596,6 +596,8 @@ class InputValidator:
 
         # --argocd-resume-only needs state file (primary + secondary context) to restore from
         if has_argocd_resume_only:
+            if getattr(args, "reset_state", False):
+                raise ValidationError("--argocd-resume-only cannot be used with --reset-state")
             if has_validate_only:
                 raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
             if is_decommission:

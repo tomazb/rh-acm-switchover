@@ -1113,16 +1113,36 @@ class TestStateLoadSafety:
         assert state_file.exists()
         assert sm.get_current_phase() == Phase.INIT
 
-    def test_reset_state_flag_allows_recovery_from_corrupt_file(self, tmp_path):
-        """Simulates the --reset-state path: delete file before constructing StateManager."""
+    @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
+    def test_reset_from_corruption_holds_run_lock_during_initial_write(self, tmp_path):
         state_file = tmp_path / "state.json"
         state_file.write_text("{invalid}")
+        write_state = StateManager._write_state
 
-        # --reset-state removes the file before constructing StateManager
-        state_file.unlink()
-        sm = StateManager(str(state_file))
+        def write_with_lock_check(manager, state):
+            # A separately opened descriptor contends even within this process.
+            with (tmp_path / "state.json.run.lock").open() as lock:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            write_state(manager, state)
+
+        with patch.object(StateManager, "_write_state", write_with_lock_check):
+            sm = StateManager(str(state_file), reset=True)
 
         assert sm.get_current_phase() == Phase.INIT
+        assert not list(tmp_path.glob("state.json.corrupt.*"))
+
+    def test_reset_refuses_leaf_symlink_without_changing_its_target(self, tmp_path):
+        target = tmp_path / "actual.json"
+        target.write_bytes(b'{"current_phase": "init"}\n')
+        alias = tmp_path / "alias.json"
+        alias.symlink_to(target)
+
+        with pytest.raises(StateLoadError, match="real path"):
+            StateManager(str(alias), reset=True)
+
+        assert alias.is_symlink()
+        assert target.read_bytes() == b'{"current_phase": "init"}\n'
 
     def test_same_process_reuses_run_lock(self, tmp_path):
         """Multiple StateManager instances in the same process should share the run lock."""

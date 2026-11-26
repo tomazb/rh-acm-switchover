@@ -322,7 +322,7 @@ Examples:
     parser.add_argument(
         "--reset-state",
         action="store_true",
-        help="Reset state file and start fresh (use with caution)",
+        help="Reset state file and start fresh (incompatible with --dry-run and --argocd-resume-only)",
     )
 
     # Old hub handling after switchover (required)
@@ -1323,10 +1323,17 @@ def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namesp
     Under --dry-run the snapshot is captured BEFORE ensure_contexts: its
     context-mismatch reset flushes to disk, and a later snapshot would only
     preserve the wiped state (parity audit finding H10). main() restores the
-    returned guard after the rehearsal completes.
+    returned guard after the rehearsal completes. Validate-only checks context
+    compatibility without writing unless an explicit reset was requested.
     """
     if workflow.completed_backup_assessment(args, state):
         state.validate_retained_contexts(
+            getattr(args, "primary_context", None),
+            getattr(args, "secondary_context", None),
+        )
+        return None
+    if getattr(args, "validate_only", False) and not getattr(args, "reset_state", False):
+        state.validate_contexts_read_only(
             getattr(args, "primary_context", None),
             getattr(args, "secondary_context", None),
         )
@@ -1363,26 +1370,15 @@ def _prepare_runtime(
     """Create state and clients while preserving existing entrypoint ordering."""
     _reject_dry_run_reset_state(args, logger)
 
-    if getattr(args, "reset_state", False):
-        # --reset-state: delete existing state file before loading so StateManager
-        # starts fresh.  We handle this before constructing StateManager to allow
-        # recovery from a corrupt state file via the flag.
-        if os.path.exists(resolved_state_file):
-            logger.warning("Resetting state file: %s", resolved_state_file)
-            try:
-                os.remove(resolved_state_file)
-            except OSError as exc:
-                logger.error("Failed to remove state file: %s", exc)
-                sys.exit(EXIT_FAILURE)
-
+    reset = getattr(args, "reset_state", False)
     try:
-        state = StateManager(resolved_state_file)
+        state = StateManager(resolved_state_file, reset=reset)
     except (StateLoadError, StateLockError) as exc:
         logger.error("")
         logger.error("FATAL: Cannot initialize switchover state file.")
         logger.error("%s", exc)
         logger.error("")
-        if isinstance(exc, StateLoadError):
+        if isinstance(exc, StateLoadError) and not reset:
             logger.error("To start a fresh switchover run:")
             logger.error("  --reset-state  (removes and recreates the state file)")
             logger.error("  or manually remove: %s", resolved_state_file)
@@ -1396,7 +1392,6 @@ def _prepare_runtime(
         try:
             dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
         except (MigrationJournalResetRefused, StateIdentityMismatch) as exc:
-            # ensure_contexts refused a reset that would drop a migration journal.
             logger.error("%s", exc)
             sys.exit(EXIT_FAILURE)
 

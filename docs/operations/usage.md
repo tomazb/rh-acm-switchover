@@ -1421,7 +1421,7 @@ restore or concurrent run changes the Application before the patch, Kubernetes
 rejects it (normally with `409 Conflict`); the result is actionable, not a
 no-op, and the operator must inspect the new live owner before retrying.
 
-Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
+Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, `--setup`, or `--reset-state`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Applications and reports ApplicationSet or stale-status blockers during both switchover and restore-only flows before continuing. Dry-run suppresses the patch itself, but it no longer skips the discovery/reporting path.
 
@@ -1468,11 +1468,20 @@ python acm_switchover.py \
   --reset-state \
   --validate-only \
   --primary-context primary-acm-hub \
-  --secondary-context secondary-acm-hub
+  --secondary-context secondary-acm-hub \
+  --method passive \
+  --old-hub-action secondary
 ```
 
-This deletes all progress tracking and starts from scratch, including any recorded
-migration journal (see [Migration journal on resume](#migration-journal-on-resume)).
+This replaces the checkpoint before validation begins and discards all progress, including any
+recorded migration journal and Argo CD pause register. Reset acquires the same run lock as
+switchover and preserves the original file if another process holds the lock. If the state file
+is a symbolic link, pass its real path to `--state-file`. The CLI rejects `--reset-state` with
+`--dry-run` or `--argocd-resume-only`. See [Migration journal on resume](#migration-journal-on-resume).
+
+Without an explicit reset, `--validate-only` preserves the checkpoint if the stored contexts
+differ or are missing from an in-progress run. To validate in either case, choose a separate
+`--state-file`.
 
 ### Use Custom State File
 

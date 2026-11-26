@@ -165,7 +165,9 @@ python acm_switchover.py \
   --reset-state \
   --validate-only \
   --primary-context <primary> \
-  --secondary-context <secondary>
+  --secondary-context <secondary> \
+  --method passive \
+  --old-hub-action secondary
 
 ```
 
@@ -303,7 +305,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
 | `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
-| `--reset-state` | Reset state file and start fresh; also discards a recorded migration journal (`--force` never does) |
+| `--reset-state` | Start fresh under the run lock. Discards the migration journal and Argo CD pause register. Incompatible with `--dry-run` and `--argocd-resume-only` |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Explicitly bypass blocking Observability steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
@@ -311,7 +313,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
-| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--decommission`, or `--setup`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--decommission`, `--setup`, or `--reset-state`) |
 | `--verbose, -v` | Enable verbose logging |
 
 For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
