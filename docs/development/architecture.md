@@ -85,12 +85,15 @@ The entrypoint exposes five distinct execution branches:
    - Bypasses the phased switchover workflow and runs the old-hub teardown flow directly.
 4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
+   - Rejects `--reset-state` before state initialization to preserve the pause register.
 5. **Restore-only path (`--restore-only`)**
    - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight, and can optionally pause Argo CD apps on the secondary hub before activation.
 
 ```mermaid
 flowchart TD
-    A[CLI args parsed] --> B{Mode}
+    A[CLI args parsed] --> AV{Resume-only with reset?}
+    AV -->|yes| AX[Refuse before state initialization]
+    AV -->|no| B{Mode}
     B -->|--setup| C[Run setup-rbac.sh wrapper]
     B -->|--decommission| D[Run decommission flow]
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]

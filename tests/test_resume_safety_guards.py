@@ -9,14 +9,18 @@ the invocation's contexts differ from the file's (ensure_contexts reset).
 import argparse
 import json
 import logging
-from unittest.mock import patch
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
-from acm_switchover import _prepare_runtime, _resolve_managed_cluster_expectation
+from acm_switchover import _prepare_runtime, _resolve_managed_cluster_expectation, main
+from lib.constants import EXIT_FAILURE, EXIT_SUCCESS, STATE_KEY_ARGOCD_PAUSED_APPS, STATE_KEY_ARGOCD_RUN_ID
 from lib.exceptions import SwitchoverError
 from lib.run_record import RunRecord
-from lib.utils import StateManager
+from lib.utils import Phase, StateManager, fcntl
 
 pytestmark = pytest.mark.unit
 
@@ -268,3 +272,139 @@ class TestDryRunStateGuard:
         on_disk = json.loads(path.read_text())
         assert on_disk["contexts"] != {"primary": "old-primary", "secondary": "old-secondary"}
         assert not any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+
+
+class TestResetStateStartup:
+    @staticmethod
+    def _cli(path, *flags):
+        return [
+            str(Path(__file__).resolve().parents[1] / "acm_switchover.py"),
+            "--primary-context",
+            "hub-a",
+            "--secondary-context",
+            "hub-b",
+            "--method",
+            "passive",
+            "--old-hub-action",
+            "secondary",
+            "--state-file",
+            str(path),
+            *flags,
+        ]
+
+    @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
+    @pytest.mark.parametrize("contents", [b'{"current_phase": "init"}\n', b"{corrupt\n"])
+    def test_competing_cli_reset_preserves_exact_bytes(self, tmp_path, contents):
+        path = tmp_path / "state.json"
+        owner = StateManager(str(path))
+        path.write_bytes(contents)
+
+        try:
+            result = subprocess.run(
+                [sys.executable, *self._cli(path, "--reset-state")],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        finally:
+            owner._release_run_lock()
+
+        assert result.returncode == EXIT_FAILURE
+        assert "already using state file" in result.stdout + result.stderr
+        assert path.exists(), "reset removed a checkpoint while the other process held its run lock"
+        assert path.read_bytes() == contents
+
+    def test_resume_only_reset_preserves_pause_register(self, tmp_path):
+        path = tmp_path / "state.json"
+        state = StateManager(str(path))
+        state.state["config"][STATE_KEY_ARGOCD_RUN_ID] = "paused-run"
+        state.state["config"][STATE_KEY_ARGOCD_PAUSED_APPS] = [
+            {
+                "hub": "primary",
+                "namespace": "openshift-gitops",
+                "name": "acm",
+                "pause_applied": True,
+                "original_sync_policy": {"automated": {}},
+            }
+        ]
+        state.flush_state()
+        before = path.read_bytes()
+        argv = [
+            "acm_switchover.py",
+            "--argocd-resume-only",
+            "--reset-state",
+            "--secondary-context",
+            "hub-b",
+            "--state-file",
+            str(path),
+        ]
+        with patch("sys.argv", argv), patch(
+            "acm_switchover._initialize_clients", return_value=(None, None)
+        ) as initialize, pytest.raises(SystemExit) as result:
+            main()
+
+        assert path.read_bytes() == before
+        assert result.value.code == EXIT_FAILURE
+        initialize.assert_not_called()
+
+    @pytest.mark.parametrize("stored_contexts", [None, {"primary": "old-a", "secondary": "old-b"}])
+    @pytest.mark.parametrize("explicit_reset", [False, True])
+    def test_validate_only_requires_explicit_reset_to_discard_legacy_progress(
+        self, tmp_path, stored_contexts, explicit_reset
+    ):
+        path = tmp_path / "state.json"
+        state = StateManager(str(path))
+        state.state["contexts"] = stored_contexts
+        state.set_phase(Phase.ACTIVATION)
+        state.mark_step_completed("legacy-progress")
+        before = path.read_bytes()
+        primary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-a"}
+        secondary = Mock()
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-b"}
+        argv = self._cli(path, "--validate-only")
+        if explicit_reset:
+            argv.append("--reset-state")
+
+        with patch("sys.argv", argv), patch(
+            "acm_switchover._initialize_clients", return_value=(primary, secondary)
+        ), patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, pytest.raises(
+            SystemExit
+        ) as result:
+            main()
+
+        if explicit_reset:
+            assert result.value.code == EXIT_SUCCESS
+            preflight.assert_called_once()
+            fresh = json.loads(path.read_bytes())
+            assert fresh["contexts"] == {"primary": "hub-a", "secondary": "hub-b"}
+            assert fresh["current_phase"] == Phase.INIT.value
+            assert fresh["completed_steps"] == []
+        else:
+            assert path.read_bytes() == before
+            assert result.value.code == EXIT_FAILURE
+            preflight.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("stored_contexts", "primary_context"),
+        [
+            (None, "hub-a"),
+            ({"primary": "hub-a", "secondary": "hub-b"}, "hub-a"),
+            ({"primary": None, "secondary": "hub-b"}, None),
+        ],
+    )
+    def test_validate_only_accepts_fresh_or_matching_contexts_without_rebinding(
+        self, tmp_path, stored_contexts, primary_context
+    ):
+        path = tmp_path / "state.json"
+        state = StateManager(str(path))
+        state.state["contexts"] = stored_contexts
+        state.flush_state()
+        before = path.read_bytes()
+        args = _args(validate_only=True, primary_context=primary_context)
+
+        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
+            _prepare_runtime(args, logging.getLogger("test"), str(path))
+
+        assert path.read_bytes() == before

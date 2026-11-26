@@ -160,7 +160,7 @@ def _fsync_directory(path: str) -> None:
 class StateManager:
     """Manages switchover state for idempotent operations."""
 
-    def __init__(self, state_file: str = ".state/switchover-state.json"):
+    def __init__(self, state_file: str = ".state/switchover-state.json", *, reset: bool = False):
         self.state_file = state_file
         self._dirty = False  # Track if state has pending writes
         self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
@@ -195,7 +195,7 @@ class StateManager:
                         "Cannot register signal handler for %s (not in main thread)",
                         sig,
                     )
-            self.state = self._load_state()
+            self.state = self._load_state(reset=reset)
         except Exception:
             self._release_run_lock()
             raise
@@ -266,18 +266,31 @@ class StateManager:
 
         self._run_lock_handle = None
 
-    def _load_state(self) -> Dict[str, Any]:
-        """Load state from file, or create a new state file when none exists.
+    def _load_state(self, *, reset: bool = False) -> Dict[str, Any]:
+        """Load state under the run lock, or initialize a fresh checkpoint.
 
         Raises StateLoadError if the file exists but cannot be read or parsed.
         The corrupt file is preserved (copied to *.corrupt.<timestamp>) so that
         operators can inspect it while the original path continues blocking reuse.
-        Never silently replaces a corrupt state file —
-        that would risk replaying mutations that were already applied to a real hub.
+        An explicit reset replaces the checkpoint without reading it.
         """
-        if not os.path.exists(self.state_file):
+        if reset:
+            # Replacing a leaf symlink would change the canonical lock path while
+            # this process still holds the lock for its original target.
+            if os.path.islink(self.state_file):
+                raise StateLoadError(
+                    "Cannot reset a state file through a symlink. To replace the target checkpoint, pass its "
+                    "real path to --state-file. To preserve it and start fresh, choose a new --state-file path."
+                )
+            if os.path.exists(self.state_file):
+                logging.getLogger("acm_switchover").warning("Resetting state file: %s", self.state_file)
+
+        if reset or not os.path.exists(self.state_file):
             state = self._new_state()
-            self._write_state(state)
+            try:
+                self._write_state(state)
+            except OSError as exc:
+                raise StateLoadError(f"Could not initialize fresh state at {self.state_file}: {exc}") from exc
             return state
 
         try:
@@ -734,6 +747,24 @@ class StateManager:
             raise StateIdentityMismatch(
                 "Completed assessment requires the exact retained contexts; preserving checkpoint."
             )
+
+    def validate_contexts_read_only(self, primary_context: Optional[str], secondary_context: Optional[str]) -> None:
+        """Allow matching contexts or a fresh unbound checkpoint without writing either."""
+        stored = self.state.get("contexts") or {}
+        stored_contexts = (stored.get("primary"), stored.get("secondary"))
+        if stored_contexts == (None, None):
+            if not self._has_progress():
+                return
+            reason = "Stored state contexts are missing for an in-progress state."
+        elif stored_contexts == (primary_context, secondary_context):
+            return
+        else:
+            reason = "Stored state contexts differ from the current invocation."
+
+        raise StateIdentityMismatch(
+            f"{reason} Validate-only preserves the checkpoint. Use a separate --state-file to validate, "
+            "or pass --reset-state if you intend to discard the checkpoint."
+        )
 
     def validate_retained_hub_identities(self, identities) -> None:
         """Require complete matching physical identities without any state change."""

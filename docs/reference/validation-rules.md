@@ -186,6 +186,7 @@ validates the path before writing `preflight-report.json`, `switchover-report.js
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
 - `--argocd-resume-only` cannot be used with `--decommission`
 - `--argocd-resume-only` cannot be used with `--setup`
+- `--argocd-resume-only` cannot be used with `--reset-state` (resume needs the saved Argo CD pause register)
 - `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
 - `--argocd-manage` cannot be used with `--argocd-resume-only`
 - `--argocd-resume-on-failure` requires `--argocd-manage`
