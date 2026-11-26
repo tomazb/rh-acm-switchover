@@ -357,6 +357,7 @@ def test_invalid_namespace_rejected_in_unscoped_discovery(tmp_path, monkeypatch,
         hub.close()
 
 
+@pytest.mark.parametrize("run_id", ["run-1", None])
 @pytest.mark.parametrize(
     "persisted_scope",
     [
@@ -365,10 +366,13 @@ def test_invalid_namespace_rejected_in_unscoped_discovery(tmp_path, monkeypatch,
         {"secondary": [" 9-team "]},
         {"secondary": ["9-team", "bad.ns"]},
         {"secondary": "9-team"},
+        {"secondary": None},
         "not-a-mapping",
     ],
 )
-def test_malformed_persisted_discovery_scope_rejected_before_pause_hubs_calls(tmp_path, monkeypatch, persisted_scope):
+def test_malformed_persisted_discovery_scope_rejected_before_pause_hubs_calls(
+    tmp_path, monkeypatch, persisted_scope, run_id
+):
     app = application("9-team", "acm-app.example", automated=True)
     hub = FakeArgoCDHub(
         cluster_uid="secondary-uid",
@@ -379,7 +383,8 @@ def test_malformed_persisted_discovery_scope_rejected_before_pause_hubs_calls(tm
     write_kubeconfig(kubeconfig, context="fixture-hub", server=hub.url)
     monkeypatch.setattr(config.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", str(kubeconfig))
     state = _make_real_state(tmp_path)
-    state._set_config(STATE_KEY_ARGOCD_RUN_ID, "run-1")
+    if run_id is not None:
+        state._set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
     state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, persisted_scope)
     try:
         client = KubeClient(context="fixture-hub")

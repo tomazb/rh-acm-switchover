@@ -356,19 +356,21 @@ class TestDiscoveryNamespaceScope:
         mock_list.assert_called_once_with(client, namespaces=None)
         assert state._config["argocd_discovery_namespaces"] == {"primary": ["team-gitops"]}
 
+    @pytest.mark.parametrize("run_id", ["run-1", None])
     @pytest.mark.parametrize(
         "recorded_namespaces",
         [
             {"primary": "argocd"},
+            {"primary": None},
             {"primary": [""]},
             {"primary": ["9-team\n"]},
             "not-a-mapping",
         ],
     )
-    def test_malformed_recorded_namespace_value_fails_closed(self, recorded_namespaces):
+    def test_malformed_recorded_namespace_value_fails_closed(self, recorded_namespaces, run_id):
         state = _make_state_manager(
             {
-                "argocd_run_id": "run-1",
+                "argocd_run_id": run_id,
                 "argocd_paused_apps": [],
                 "argocd_discovery_namespaces": recorded_namespaces,
             }
