@@ -209,3 +209,33 @@ def test_negative_count_degrades_to_none():
     assert facts["expected_managed_cluster_count"] is None
     facts = checkpoint_facts({"operational_data": {"expected_managed_cluster_count": 0}})
     assert facts["expected_managed_cluster_count"] == 0
+
+
+def test_checkpoint_facts_accepts_valid_argocd_discovery_namespaces():
+    for valid_scope in ({"primary": ["9-team"]}, {"primary": ["argocd", "9-team"], "secondary": []}, {}):
+        facts = checkpoint_facts({"operational_data": {"argocd_discovery_namespaces": valid_scope}})
+        assert facts["argocd_discovery_namespaces"] == valid_scope
+
+
+@pytest.mark.parametrize(
+    "malformed_scope",
+    [
+        None,
+        "not-a-mapping",
+        ["9-team"],
+        {1: ["9-team"]},
+        {"primary": None},
+        {"primary": "9-team"},
+        {"primary": [""]},
+        {"primary": [" 9-team "]},
+        {"primary": ["9-team\n"]},
+        {"primary": ["bad.ns"]},
+        {"primary": ["-bad"]},
+        {"primary": ["Bad"]},
+        {"primary": ["9-team-"]},
+        {"primary": ["9-team", "bad.ns"]},
+    ],
+)
+def test_checkpoint_facts_fails_closed_on_malformed_argocd_discovery_namespaces(malformed_scope):
+    with pytest.raises(ValueError):
+        checkpoint_facts({"operational_data": {"argocd_discovery_namespaces": malformed_scope}})

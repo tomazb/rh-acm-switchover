@@ -51,43 +51,57 @@
 - name: Discover Argo CD Applications from cluster
   when: acm_switchover_argocd_mock_apps is not defined
   block:
-    - name: Resolve raw trusted Argo CD discovery namespaces for current hub
-      ansible.builtin.set_fact:
-        _argocd_raw_trusted_discovery_namespaces: >-
-          {{
-            [((acm_switchover_argocd | default({})).get('namespace', '') | trim)]
-            if (
-              ((acm_switchover_argocd | default({})).get('namespace', '') is string)
-              and (
-                ((acm_switchover_argocd | default({})).get('namespace', '') | trim | length)
-                > 0
-              )
-            )
-            else (
-              (acm_switchover_argocd_discovery_namespaces | default({}))
-              .get(_argocd_discover_hub | default('primary'), [])
-              if (
-                ((acm_switchover_argocd_discovery_namespaces | default({}))
-                .get(_argocd_discover_hub | default('primary'), [])
-                | type_debug) == 'list'
-              )
-              else []
-            )
-          }}
-      no_log: true
-
-    - name: Fail when explicit Argo CD discovery namespace is malformed
+    - name: Fail when persisted Argo CD discovery namespaces are not a mapping
       ansible.builtin.fail:
-        msg: "Explicit Argo CD discovery namespace must be a non-empty namespace name."
+        msg: "Persisted argocd_discovery_namespaces must be a mapping."
       when:
-        - "'namespace' in (acm_switchover_argocd | default({}))"
+        - acm_switchover_argocd_discovery_namespaces is defined
         - >-
-          (
-            not ((acm_switchover_argocd | default({})).get('namespace') is string)
-          )
+          (acm_switchover_argocd_discovery_namespaces is not mapping)
           or (
-            ((acm_switchover_argocd | default({})).get('namespace', '') | trim | length) == 0
+            (
+              acm_switchover_argocd_discovery_namespaces
+              | dict2items
+              | map(attribute='key')
+              | reject('string')
+              | list
+              | length
+            ) > 0
           )
+
+    - name: Fail when any persisted Argo CD discovery namespace entry is malformed
+      ansible.builtin.fail:
+        msg: >-
+          Persisted Argo CD discovery namespaces must contain lists of valid
+          Kubernetes DNS-1123 labels.
+      vars:
+        _argocd_application_namespace_pattern: '[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?'
+      loop: >-
+        {{
+          (acm_switchover_argocd_discovery_namespaces | dict2items)
+          if (
+            acm_switchover_argocd_discovery_namespaces is defined
+            and acm_switchover_argocd_discovery_namespaces is mapping
+          )
+          else []
+        }}
+      loop_control:
+        label: "{{ item.key }}"
+      when:
+        - acm_switchover_argocd_discovery_namespaces is defined
+        - acm_switchover_argocd_discovery_namespaces is mapping
+        - >-
+          ((item.value | type_debug) != 'list')
+          or (
+            (
+              item.value
+              | select('string')
+              | select('regex', _argocd_application_namespace_pattern, match_type='fullmatch')
+              | list
+              | length
+            ) != (item.value | length)
+          )
+      no_log: true
 
     - name: Fail when persisted Argo CD discovery namespaces are malformed for current hub
       ansible.builtin.fail:
@@ -95,16 +109,63 @@
           Persisted Argo CD discovery namespaces for the selected hub must be
           a list of namespace names.
       when:
-        - ((acm_switchover_argocd | default({})).get('namespace', '') | default('') | length) == 0
+        - ((acm_switchover_argocd | default({})).get('namespace', '') | default('', true)) is string
+        - ((acm_switchover_argocd | default({})).get('namespace', '') | default('', true) | length) == 0
         - (_argocd_discover_hub | default('primary')) in (acm_switchover_argocd_discovery_namespaces | default({}))
         - ((acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) | type_debug) != 'list'
+
+    - name: Fail when explicit Argo CD discovery namespace is malformed
+      ansible.builtin.fail:
+        msg: >-
+          Explicit Argo CD discovery namespace must be a non-empty namespace name.
+          Must be a valid Kubernetes DNS-1123 label.
+      vars:
+        _argocd_application_namespace_pattern: '[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?'
+        _argocd_explicit_namespace: "{{ (acm_switchover_argocd | default({})).get('namespace') }}"
+      when:
+        - "'namespace' in (acm_switchover_argocd | default({}))"
+        - >-
+          (not (_argocd_explicit_namespace is string))
+          or (not (_argocd_explicit_namespace is regex(_argocd_application_namespace_pattern, match_type='fullmatch')))
+
+    - name: Resolve raw trusted Argo CD discovery namespaces for current hub
+      ansible.builtin.set_fact:
+        _argocd_raw_trusted_discovery_namespaces: >-
+          {{
+            [(acm_switchover_argocd | default({})).get('namespace', '')]
+            if (
+              'namespace' in (acm_switchover_argocd | default({}))
+              and ((acm_switchover_argocd | default({})).get('namespace', '') is string)
+              and (
+                ((acm_switchover_argocd | default({})).get('namespace', '') | length)
+                > 0
+              )
+            )
+            else (
+              (acm_switchover_argocd_discovery_namespaces | default({}))
+              .get(_argocd_discover_hub | default('primary'), [])
+              if (
+                (acm_switchover_argocd_discovery_namespaces is defined)
+                and (acm_switchover_argocd_discovery_namespaces is mapping)
+                and (
+                  ((acm_switchover_argocd_discovery_namespaces | default({}))
+                  .get(_argocd_discover_hub | default('primary'), [])
+                  | type_debug) == 'list'
+                )
+              )
+              else []
+            )
+          }}
+      no_log: true
 
     - name: Validate trusted Argo CD discovery namespace entries
       ansible.builtin.assert:
         that:
           - item is string
-          - (item | trim | length) > 0
-        fail_msg: "Trusted Argo CD discovery namespaces must contain only non-empty namespace names."
+          - item is regex(_argocd_application_namespace_pattern, match_type='fullmatch')
+        fail_msg: "Trusted Argo CD discovery namespaces must contain only valid Kubernetes DNS-1123 labels."
+      vars:
+        _argocd_application_namespace_pattern: '[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?'
       loop: "{{ _argocd_raw_trusted_discovery_namespaces | default([]) }}"
       loop_control:
         label: "trusted namespace"
@@ -115,7 +176,6 @@
         _argocd_trusted_discovery_namespaces: >-
           {{
             _argocd_raw_trusted_discovery_namespaces
-            | map('trim')
             | unique
             | sort
             | list
@@ -308,7 +368,8 @@
         - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
         - not (_argocd_use_scoped_discovery | default(false) | bool)
         - _argocd_published_discovery.status == 'ok'
-        - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
+        - ((acm_switchover_argocd | default({})).get('namespace', '') | default('', true)) is string
+        - (((acm_switchover_argocd | default({})).get('namespace', '') | default('', true)) | length) == 0
 
   rescue:
     - name: Record sanitized advisory Argo CD discovery failure

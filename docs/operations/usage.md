@@ -1391,12 +1391,15 @@ inventory must have a usable name and namespace. Discovery or LIST failures, inc
 authorization, transport, malformed responses, and HTTP 404 on a confirmed LIST route,
 stop managed discovery. Read-only advisory checks warn and continue.
 
-For collection retries and standalone resume, checkpoint-persisted namespace
-scope is fail-closed: every normalized namespace must return exactly one
-positively successful discovery result before any Application is aggregated,
-filtered, or patched. A failed, skipped, unreachable, malformed, incomplete, or
-mixed present/absent namespace result invalidates the entire discovery; partial
-Applications are never mutated.
+For retries and standalone resume in both runtimes, explicit and
+persisted namespace scopes are validated raw as Kubernetes DNS-1123 labels
+before any API request: malformed mappings, explicit `null`, non-list values,
+or invalid/whitespace-padded namespace entries fail closed before discovery.
+For collection retries and standalone resume, every validated namespace must
+return exactly one positively successful discovery result before any
+Application is aggregated, filtered, or patched. A failed, skipped,
+unreachable, malformed, incomplete, or mixed present/absent namespace result
+invalidates the entire discovery; partial Applications are never mutated.
 
 **Managed pause safety checks:**
 - ApplicationSet-managed child Applications are not patched. The ApplicationSet controller can revert child edits, so pause or update the parent ApplicationSet, generator, or template, then retry.
@@ -1424,6 +1427,8 @@ no-op, and the operator must inspect the new live owner before retrying.
 Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, `--setup`, or `--reset-state`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Applications and reports ApplicationSet or stale-status blockers during both switchover and restore-only flows before continuing. Dry-run suppresses the patch itself, but it no longer skips the discovery/reporting path.
+
+> **Downgrade note (digit-leading namespaces):** If an Application in a digit-leading Kubernetes namespace (such as `9-team`) was paused by this version, discharge the pause obligation with `--argocd-resume-only` (or `playbooks/argocd_resume.yml`) before downgrading to an older Python CLI release whose namespace validator rejected leading digits.
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 

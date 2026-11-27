@@ -321,10 +321,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Python `InputValidator.validate_kubernetes_namespace` and `lib/argocd.py` now accept valid
-  digit-leading DNS-1123 Kubernetes namespaces (such as `9-team`) using `fullmatch`, validate
-  Argo CD pause/resume target namespaces plus scoped/persisted discovery namespace scopes raw and
-  fail closed before any cluster API call, and remove the duplicate discovery namespace regex (#401).
+- Python `InputValidator.validate_kubernetes_namespace`, `lib/argocd.py`, and the Ansible
+  Collection (`argocd_manage` discovery and checkpoint validation) now accept valid digit-leading
+  DNS-1123 Kubernetes namespaces (such as `9-team`) using `fullmatch`, validate explicit,
+  target, and persisted Argo CD discovery namespaces raw without whitespace/newline trimming so
+  malformed inputs fail closed before any cluster API call across live and dry-run runs, and
+  remove Python's duplicate discovery namespace regex (#401).
 - Python acquires the run lock before resetting a checkpoint, including a corrupt checkpoint.
   It rejects reset with Argo CD resume-only and preserves saved progress when validate-only
   encounters missing or mismatched contexts that would otherwise trigger a reset (#404).

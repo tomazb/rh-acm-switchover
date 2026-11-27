@@ -283,3 +283,22 @@ class TestTrustedNamespaceDiscovery:
             task.get("name") for task in validation_tasks if task.get("name") in decision_task_names
         }
         assert "msg" not in decision_text
+
+    def test_discovery_validates_raw_dns1123_namespaces_without_trimming(self):
+        """Collection discovery must validate raw namespaces before any API list call without trim."""
+        block_tasks = _get_discovery_block(_load_discover_tasks())["block"]
+        names = [task.get("name") for task in block_tasks]
+        raw_text = (ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text()
+
+        assert "map('trim')" not in raw_text
+        assert "| trim" not in str(block_tasks[: names.index("List Applications in trusted namespaces")])
+        mapping_fail_idx = names.index("Fail when persisted Argo CD discovery namespaces are not a mapping")
+        entry_fail_idx = names.index("Fail when any persisted Argo CD discovery namespace entry is malformed")
+        explicit_fail_idx = names.index("Fail when explicit Argo CD discovery namespace is malformed")
+        validate_idx = names.index("Validate trusted Argo CD discovery namespace entries")
+        scoped_list_idx = names.index("List Applications in trusted namespaces")
+        cluster_list_idx = names.index("List Applications with verified API discovery")
+
+        assert mapping_fail_idx < entry_fail_idx < validate_idx < scoped_list_idx
+        assert explicit_fail_idx < scoped_list_idx
+        assert validate_idx < cluster_list_idx

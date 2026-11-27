@@ -5,8 +5,9 @@ the on-disk entry schema, legacy sanitization, load/persist, entry
 find/upsert/remove/mark helpers, the status snapshot, and the pause-state
 reset.
 
-Deliberately free of cluster concerns -- it imports ``StateManager`` and
-``lib.constants`` only, never ``lib.argocd`` or ``lib.kube_client``. Readers
+Deliberately free of cluster concerns -- it imports ``StateManager``,
+``lib.constants``, and ``lib.exceptions`` only, never ``lib.argocd`` or
+``lib.kube_client``. Readers
 that hold state but no cluster connection (report artifacts) can therefore
 read the register without dragging in the Kubernetes SDK.
 """
