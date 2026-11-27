@@ -1428,7 +1428,7 @@ Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect 
 
 With `--argocd-manage --dry-run`, the Python CLI still discovers ACM-touching Applications and reports ApplicationSet or stale-status blockers during both switchover and restore-only flows before continuing. Dry-run suppresses the patch itself, but it no longer skips the discovery/reporting path.
 
-> **Downgrade note (digit-leading namespaces):** If an Application in a digit-leading Kubernetes namespace (such as `9-team`) was paused by this version, discharge the pause obligation with `--argocd-resume-only` (or `playbooks/argocd_resume.yml`) before downgrading to an older Python CLI release whose namespace validator rejected leading digits.
+> **Downgrade note (digit-leading namespaces):** If an Application in a digit-leading Kubernetes namespace (such as `9-team`) was paused by this version of the Python CLI, discharge the pause obligation with `acm_switchover.py --argocd-resume-only` before downgrading to an older Python CLI release whose namespace validator rejected leading digits (pauses created by the Python CLI cannot be resumed by the Ansible collection playbook; discharge Ansible collection-created pauses with `playbooks/argocd_resume.yml`).
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
