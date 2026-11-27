@@ -1002,15 +1002,14 @@ def test_malformed_checkpoint_discovery_namespaces_fail_on_retry_and_standalone_
         completed = _run_playbook(tmp_path, playbook, variables)
         output = completed.stdout + completed.stderr
         assert completed.returncode == 2, output
-        if flow == "standalone_resume":
-            # standalone resume reads kube-system identities before Argo CD discovery, or fails before Argo CD requests
-            assert not any("argoproj.io" in req["path"] for req in primary.requests)
-            assert not any("argoproj.io" in req["path"] for req in secondary.requests)
-        else:
-            assert not any("argoproj.io" in req["path"] for req in primary.requests)
-            assert not any("argoproj.io" in req["path"] for req in secondary.requests)
-        assert primary.patches == []
-        assert secondary.patches == []
+        # Neither flow should issue any Argo CD API requests (e.g. /apis/argoproj.io/...);
+        # standalone resume may inspect cluster identity before failing on checkpoint validation.
+        for hub in (primary, secondary):
+            for req in hub.requests:
+                segments = req["path"].lstrip("/").split("/")
+                assert segments[:2] != ["apis", "argoproj.io"]
+                assert "applications" not in segments
+            assert hub.patches == []
     finally:
         primary.close()
         secondary.close()
