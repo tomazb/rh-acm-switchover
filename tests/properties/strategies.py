@@ -293,13 +293,13 @@ def kubernetes_name_candidates() -> SearchStrategy[str]:
 
 @st.composite
 def _invalid_namespace(draw: st.DrawFn) -> str:
-    base = draw(_dns_label(max_size=30, leading_letter=True))
+    base = draw(_dns_label(max_size=30, leading_letter=False))
     mutation = draw(
         st.sampled_from(
             (
                 "leading_hyphen",
                 "trailing_hyphen",
-                "digit_prefix",
+                "trailing_newline",
                 "uppercase",
                 "dot",
                 "whitespace",
@@ -311,8 +311,8 @@ def _invalid_namespace(draw: st.DrawFn) -> str:
         return "-" + base
     if mutation == "trailing_hyphen":
         return base + "-"
-    if mutation == "digit_prefix":
-        return "1" + base
+    if mutation == "trailing_newline":
+        return base + "\n"
     if mutation == "uppercase":
         return "A" + base
     if mutation == "dot":
@@ -323,9 +323,9 @@ def _invalid_namespace(draw: st.DrawFn) -> str:
 
 
 def kubernetes_namespace_candidates() -> SearchStrategy[str]:
-    """Generate namespace labels with the project's leading-letter rule."""
-    boundaries = st.sampled_from(("", "a", "a" * 63, "a" * 64, "1namespace"))
-    return st.one_of(_dns_label(leading_letter=True), _invalid_namespace(), boundaries)
+    """Generate DNS-1123 label namespace candidates and focused invalid mutations."""
+    boundaries = st.sampled_from(("", "a", "0", "9-team", "a" * 63, "a" * 64, "1namespace", "9-team\n"))
+    return st.one_of(_dns_label(leading_letter=False), _invalid_namespace(), boundaries)
 
 
 def _label_component(*, max_size: int = 63) -> SearchStrategy[str]:

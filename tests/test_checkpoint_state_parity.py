@@ -249,3 +249,87 @@ def test_valid_records_are_accepted_by_both_implementations():
             )
             == stored
         )
+
+
+@pytest.mark.parametrize(
+    ("include_key", "discovery_namespaces"),
+    [
+        (False, None),
+        (True, {}),
+        (True, {"primary": ["9-team"]}),
+        (True, {"primary": ["argocd", "9-team"], "secondary": []}),
+    ],
+    ids=["absent", "empty-dict", "digit-leading", "multi-hub"],
+)
+def test_argocd_discovery_namespaces_accepts_same_valid_shapes(tmp_path, include_key, discovery_namespaces):
+    from lib.argocd import trusted_application_namespaces
+    from lib.argocd_register import ArgocdPauseRegister
+    from lib.constants import STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "switchover-state.json"))
+    checkpoint = {"operational_data": {}}
+    if include_key:
+        state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, discovery_namespaces)
+        checkpoint["operational_data"][ansible_checkpoint.KEY_ARGOCD_DISCOVERY_NAMESPACES] = discovery_namespaces
+
+    py_stored = ArgocdPauseRegister(state)._store._get_discovery_namespaces_by_hub()
+    col_validated = ansible_checkpoint.argocd_discovery_namespaces(checkpoint)
+    col_facts = ansible_checkpoint.checkpoint_facts(checkpoint)[ansible_checkpoint.KEY_ARGOCD_DISCOVERY_NAMESPACES]
+
+    assert py_stored == col_validated == col_facts
+    for hub, namespaces in col_validated.items():
+        expected = sorted(set(namespaces)) or None
+        assert trusted_application_namespaces(namespaces) == expected
+
+
+@pytest.mark.parametrize(
+    "malformed_scope",
+    [
+        None,
+        "not-a-mapping",
+        ["9-team"],
+        42,
+        {1: ["9-team"]},
+        {"primary": None},
+        {"primary": "9-team"},
+        {"primary": 42},
+        {"primary": [""]},
+        {"primary": [" "]},
+        {"primary": [" 9-team "]},
+        {"primary": ["9-team\n"]},
+        {"primary": ["bad.ns"]},
+        {"primary": ["-bad"]},
+        {"primary": ["Bad"]},
+        {"primary": ["9-team-"]},
+        {"primary": [123]},
+        {"primary": ["9-team", "bad.ns"]},
+        {"primary": ["9-team"], "secondary": ["bad.ns"]},
+    ],
+)
+@pytest.mark.parametrize("run_id", ["run-1", None])
+def test_argocd_discovery_namespaces_rejects_same_malformed_shapes(tmp_path, malformed_scope, run_id):
+    from unittest.mock import Mock
+
+    from lib.argocd_register import ArgocdPauseRegister
+    from lib.constants import STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, STATE_KEY_ARGOCD_RUN_ID
+    from lib.exceptions import ValidationError
+    from lib.utils import StateManager
+
+    state = StateManager(str(tmp_path / "switchover-state.json"))
+    if run_id is not None:
+        state._set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+    state._set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, malformed_scope)
+    primary = Mock()
+    secondary = Mock()
+
+    with pytest.raises(ValidationError):
+        ArgocdPauseRegister(state).pause_hubs([(primary, "primary"), (secondary, "secondary")])
+    assert primary.method_calls == []
+    assert secondary.method_calls == []
+
+    checkpoint = {"operational_data": {ansible_checkpoint.KEY_ARGOCD_DISCOVERY_NAMESPACES: malformed_scope}}
+    with pytest.raises(ValueError):
+        ansible_checkpoint.argocd_discovery_namespaces(checkpoint)
+    with pytest.raises(ValueError):
+        ansible_checkpoint.checkpoint_facts(checkpoint)

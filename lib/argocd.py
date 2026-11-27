@@ -22,10 +22,17 @@ from lib.constants import (
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
 )
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.strict_read import StrictReadStatus
 from lib.utils import dry_run_skip
-from lib.validation import K8S_NAME_MAX_LENGTH, K8S_NAME_PATTERN, K8S_NAMESPACE_MAX_LENGTH
+from lib.validation import (
+    K8S_NAME_MAX_LENGTH,
+    K8S_NAME_PATTERN,
+    K8S_NAMESPACE_MAX_LENGTH,
+    K8S_NAMESPACE_PATTERN,
+    InputValidator,
+)
 
 logger = logging.getLogger("acm_switchover")
 
@@ -34,9 +41,6 @@ ARGOCD_APP_GROUP = "argoproj.io"
 ARGOCD_APP_VERSION = "v1alpha1"
 ARGOCD_APP_PLURAL = "applications"
 ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
-
-# Namespace names returned by the API use DNS-1123 labels.
-_ARGOCD_APPLICATION_NAMESPACE_PATTERN = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 # Annotation key for our pause marker (must match the Ansible argocd_manage role)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
@@ -379,14 +383,17 @@ def list_argocd_applications(
         Application resource dicts, or None when cluster-wide discovery proves the API is unserved.
 
     Raises:
+        ValidationError: When any supplied scoped namespace is invalid.
         RuntimeError: When cluster-wide discovery or listing cannot be verified.
         ApiException: When a scoped LIST fails with an API error other than 404.
     """
     if namespaces is not None:
+        if not isinstance(namespaces, list):
+            raise ValidationError("Argo CD discovery namespaces must be a list of namespace names.")
+        for ns in namespaces:
+            InputValidator.validate_kubernetes_namespace(ns)
         result: List[Dict[str, Any]] = []
         for ns in namespaces:
-            if not ns:
-                continue
             result.extend(
                 _list_argocd_applications_once(
                     client,
@@ -421,7 +428,7 @@ def _has_usable_application_identity(app: Dict[str, Any]) -> bool:
         and K8S_NAME_PATTERN.fullmatch(name) is not None
         and isinstance(namespace, str)
         and len(namespace) <= K8S_NAMESPACE_MAX_LENGTH
-        and _ARGOCD_APPLICATION_NAMESPACE_PATTERN.fullmatch(namespace) is not None
+        and K8S_NAMESPACE_PATTERN.fullmatch(namespace) is not None
     )
 
 
@@ -441,15 +448,16 @@ def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[st
 
 
 def trusted_application_namespaces(namespaces: Optional[List[str]]) -> Optional[List[str]]:
-    """Return a normalized namespace list for scoped listing, or None for cluster-wide."""
+    """Return a validated, deduplicated namespace list for scoped listing, or None for cluster-wide."""
     if namespaces is None:
         return None
     if not isinstance(namespaces, list):
-        return None
+        raise ValidationError("Persisted Argo CD discovery namespaces must be a list of namespace names.")
     if not namespaces:
         return None
-    normalized = sorted({ns.strip() for ns in namespaces if isinstance(ns, str) and ns.strip()})
-    return normalized or None
+    for ns in namespaces:
+        InputValidator.validate_kubernetes_namespace(ns)
+    return sorted(set(namespaces))
 
 
 def _resource_touches_acm(resource: Dict[str, Any]) -> bool:
@@ -609,20 +617,6 @@ def find_acm_touching_apps(
     return result
 
 
-# NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
-# Applied here to a module-level function, KubeClient takes the "self" slot, so
-# dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
-# is constructed with dry_run=True when dry-run mode is intended.
-@dry_run_skip(
-    message="Skipping Argo CD Application patch in dry-run",
-    return_value=lambda client, app, run_id: PauseResult(
-        namespace=(app.get("metadata", {}) or {}).get("namespace", ""),
-        name=(app.get("metadata", {}) or {}).get("name", ""),
-        original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
-        patched=is_autosync_enabled(app),
-        patch_applied=False,
-    ),
-)
 def pause_autosync(
     client: KubeClient,
     app: Dict[str, Any],
@@ -639,10 +633,10 @@ def pause_autosync(
     Returns:
         PauseResult with original sync policy and whether a patch was applied.
     """
-    meta = app.get("metadata", {})
+    meta = app.get("metadata") or {}
     ns = meta.get("namespace", "")
     name = meta.get("name", "")
-    spec = app.get("spec", {})
+    spec = app.get("spec") or {}
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
     if not is_autosync_enabled(app):
@@ -661,6 +655,43 @@ def pause_autosync(
             patched=False,
             error=_applicationset_message(ns, name, _applicationset_owner_name(app)),
         )
+    try:
+        InputValidator.validate_kubernetes_namespace(ns)
+    except ValidationError as e:
+        detail = _log_patch_failure(ns, name, "pause auto-sync", e)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            patch_applied=False,
+            error=f"invalid Application namespace: {detail}",
+        )
+    return _apply_pause_autosync(client, ns, name, sync_policy, original, run_id)
+
+
+# NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
+# Applied here to a module-level helper, KubeClient takes the "self" slot, so
+# dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
+# is constructed with dry_run=True when dry-run mode is intended.
+@dry_run_skip(
+    message="Skipping Argo CD Application patch in dry-run",
+    return_value=lambda client, ns, name, sync_policy, original, run_id: PauseResult(
+        namespace=ns,
+        name=name,
+        original_sync_policy=original,
+        patched=True,
+        patch_applied=False,
+    ),
+)
+def _apply_pause_autosync(
+    client: KubeClient,
+    ns: str,
+    name: str,
+    sync_policy: Dict[str, Any],
+    original: Dict[str, Any],
+    run_id: str,
+) -> PauseResult:
     # Null deletes the CRD map key under Kubernetes merge-patch semantics.
     new_sync = dict(sync_policy)
     new_sync["automated"] = None
@@ -675,7 +706,7 @@ def pause_autosync(
             plural=ARGOCD_APP_PLURAL,
             name=name,
             patch=patch,
-            namespace=ns or None,
+            namespace=ns,
         )
     except Exception as e:
         detail = _log_patch_failure(ns, name, "pause auto-sync", e)
@@ -685,7 +716,7 @@ def pause_autosync(
                 version=ARGOCD_APP_VERSION,
                 plural=ARGOCD_APP_PLURAL,
                 name=name,
-                namespace=ns or None,
+                namespace=ns,
             )
         except Exception as read_exc:
             read_detail = _format_exception_detail(read_exc)
@@ -726,7 +757,7 @@ def pause_autosync(
             version=ARGOCD_APP_VERSION,
             plural=ARGOCD_APP_PLURAL,
             name=name,
-            namespace=ns or None,
+            namespace=ns,
         )
     except Exception as e:
         detail = _format_exception_detail(e)
@@ -763,15 +794,6 @@ def pause_autosync(
     )
 
 
-# NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
-@dry_run_skip(
-    message="Would resume auto-sync",
-    return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
-        namespace=namespace,
-        name=name,
-        restored=True,
-    ),
-)
 def resume_autosync(
     client: KubeClient,
     namespace: str,
@@ -793,12 +815,41 @@ def resume_autosync(
         ResumeResult with restored=True if patch was applied.
     """
     try:
+        InputValidator.validate_kubernetes_namespace(namespace)
+    except ValidationError as e:
+        logger.warning("Refusing to resume Application %s/%s: invalid namespace: %s", namespace, name, e)
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"invalid namespace: {e}",
+        )
+    return _apply_resume_autosync(client, namespace, name, original_sync_policy, run_id)
+
+
+# NOTE: same dry_run_skip / KubeClient-as-self pattern as _apply_pause_autosync above.
+@dry_run_skip(
+    message="Would resume auto-sync",
+    return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
+        namespace=namespace,
+        name=name,
+        restored=True,
+    ),
+)
+def _apply_resume_autosync(
+    client: KubeClient,
+    namespace: str,
+    name: str,
+    original_sync_policy: Dict[str, Any],
+    run_id: str,
+) -> ResumeResult:
+    try:
         current = client.get_custom_resource(
             group=ARGOCD_APP_GROUP,
             version=ARGOCD_APP_VERSION,
             plural=ARGOCD_APP_PLURAL,
             name=name,
-            namespace=namespace or None,
+            namespace=namespace,
         )
     except ApiException as e:
         if e.status == 404:
@@ -876,7 +927,7 @@ def resume_autosync(
             plural=ARGOCD_APP_PLURAL,
             name=name,
             patch=patch,
-            namespace=namespace or None,
+            namespace=namespace,
         )
     except Exception as e:
         detail = _log_patch_failure(namespace, name, "resume auto-sync", e)

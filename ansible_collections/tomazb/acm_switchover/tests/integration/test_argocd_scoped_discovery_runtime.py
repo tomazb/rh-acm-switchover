@@ -790,3 +790,226 @@ def test_standalone_resume_discovers_both_hubs_and_reports_each_changed_patch_on
     finally:
         primary.close()
         secondary.close()
+
+
+def test_digit_leading_namespace_pause_retry_and_standalone_resume(tmp_path):
+    primary = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[application("9-team", "acm-digit", automated=True)],
+    )
+    secondary = FakeArgoCDHub(cluster_uid="secondary-uid", applications=[])
+    try:
+        hubs = _write_hub_inputs(tmp_path, primary, secondary)
+        checkpoint_path = tmp_path / "digit-namespace-checkpoint.json"
+        playbook = "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/argocd_primary_prep_retry.yml"
+
+        first = _run_playbook(
+            tmp_path,
+            playbook,
+            _primary_prep_variables(hubs, checkpoint_path, acm_version="invalid-version"),
+        )
+        assert first.returncode != 0
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        assert checkpoint["operational_data"]["argocd_discovery_namespaces"]["primary"] == ["9-team"]
+        assert [(entry["namespace"], entry["name"]) for entry in primary.patches if entry["changed"]] == [
+            ("9-team", "acm-digit")
+        ]
+
+        patches_before_retry = len(primary.patches)
+        req_before_retry = len(primary.requests)
+        retry = _run_playbook(
+            tmp_path,
+            playbook,
+            _primary_prep_variables(hubs, checkpoint_path, acm_version="2.14.3"),
+        )
+        retry_output = retry.stdout + retry.stderr
+        assert retry.returncode == 0, retry_output
+        assert "PRIMARY_PREP_PAUSED=0" in retry_output
+        assert "PRIMARY_NAMESPACES=1" in retry_output
+        assert primary.patches[patches_before_retry:] == []
+        assert {"method": "GET", "path": "/apis/argoproj.io/v1alpha1/namespaces/9-team/applications"} in (
+            primary.requests[req_before_retry:]
+        )
+
+        resume_variables = {
+            "acm_switchover_hubs": hubs,
+            "acm_switchover_operation": {
+                "method": "passive",
+                "activation_method": "patch",
+                "restore_only": False,
+                "old_hub_action": "secondary",
+            },
+            "acm_switchover_execution": {
+                "mode": "execute",
+                "checkpoint": {
+                    "enabled": True,
+                    "backend": "file",
+                    "path": str(checkpoint_path),
+                },
+            },
+        }
+        patches_before_resume = len(primary.patches)
+        resume = _run_playbook(
+            tmp_path,
+            "ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml",
+            resume_variables,
+        )
+        resume_output = resume.stdout + resume.stderr
+        assert resume.returncode == 0, resume_output
+        assert "Argo CD standalone resume summary: restored=1 primary=1 secondary=0" in resume_output
+        assert [(entry["namespace"], entry["name"]) for entry in primary.patches[patches_before_resume:]] == [
+            ("9-team", "acm-digit")
+        ]
+        assert "automated" in primary.get_application("9-team", "acm-digit")["spec"]["syncPolicy"]
+    finally:
+        primary.close()
+        secondary.close()
+
+
+@pytest.mark.parametrize(
+    "persisted_scope",
+    [
+        "not-a-mapping",
+        None,
+        {"primary": "9-team"},
+        {"primary": None},
+        {"primary": [""]},
+        {"primary": [" "]},
+        {"primary": [" 9-team "]},
+        {"primary": ["9-team\n"]},
+        {"primary": ["bad.ns"]},
+        {"primary": ["-bad"]},
+        {"primary": ["Bad"]},
+        {"primary": ["9-team-"]},
+        {"primary": ["9-team", "bad.ns"]},
+        {"primary": ["9-team"], "secondary": ["bad.ns"]},
+    ],
+)
+def test_malformed_persisted_discovery_namespaces_fail_before_api_calls(tmp_path, persisted_scope):
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[application("9-team", "acm-app", automated=True)],
+    )
+    try:
+        kc = tmp_path / "kubeconfig.yml"
+        write_kubeconfig(kc, context="primary-hub", server=hub.url)
+        completed = _run_playbook(
+            tmp_path,
+            _DISCOVERY_PLAYBOOK,
+            {
+                "acm_switchover_hubs": {"primary": {"kubeconfig": str(kc), "context": "primary-hub"}},
+                "acm_switchover_execution": {"mode": "execute"},
+                "acm_switchover_argocd_mode_override": "pause",
+                "acm_switchover_argocd": {"run_id": "expected-run"},
+                "acm_switchover_argocd_discovery_namespaces": persisted_scope,
+            },
+        )
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 2, output
+        assert hub.requests == []
+        assert hub.patches == []
+    finally:
+        hub.close()
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [" ", " 9-team ", "9-team\n", "bad.ns", "-bad", "Bad", "9-team-", None],
+)
+def test_malformed_explicit_argocd_namespace_fails_before_api_calls(tmp_path, namespace):
+    hub = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[application("9-team", "acm-app", automated=True)],
+    )
+    try:
+        kc = tmp_path / "kubeconfig.yml"
+        write_kubeconfig(kc, context="primary-hub", server=hub.url)
+        completed = _run_playbook(
+            tmp_path,
+            _DISCOVERY_PLAYBOOK,
+            {
+                "acm_switchover_hubs": {"primary": {"kubeconfig": str(kc), "context": "primary-hub"}},
+                "acm_switchover_execution": {"mode": "execute"},
+                "acm_switchover_argocd_mode_override": "pause",
+                "acm_switchover_argocd": {"run_id": "expected-run", "namespace": namespace},
+            },
+        )
+        output = completed.stdout + completed.stderr
+
+        assert completed.returncode == 2, output
+        assert hub.requests == []
+        assert hub.patches == []
+    finally:
+        hub.close()
+
+
+@pytest.mark.parametrize("flow", ["retry", "standalone_resume"])
+@pytest.mark.parametrize(
+    "bad_scope",
+    [
+        None,
+        "not-a-mapping",
+        {"primary": "9-team"},
+        {"primary": [" 9-team "]},
+        {"primary": ["9-team\n"]},
+        {"primary": ["bad.ns"]},
+    ],
+)
+def test_malformed_checkpoint_discovery_namespaces_fail_on_retry_and_standalone_resume(tmp_path, flow, bad_scope):
+    run_id = "expected-run"
+    primary = FakeArgoCDHub(
+        cluster_uid="primary-uid",
+        applications=[
+            application(
+                "9-team", "acm-app", automated=(flow == "retry"), run_id=run_id if flow == "standalone_resume" else None
+            )
+        ],
+    )
+    secondary = FakeArgoCDHub(cluster_uid="secondary-uid", applications=[])
+    try:
+        hubs = _write_hub_inputs(tmp_path, primary, secondary)
+        checkpoint_data = _checkpoint(run_id, hubs)
+        checkpoint_data["operational_data"]["argocd_discovery_namespaces"] = bad_scope
+        checkpoint_path = tmp_path / "bad-discovery-checkpoint.json"
+        checkpoint_path.write_text(json.dumps(checkpoint_data), encoding="utf-8")
+
+        if flow == "retry":
+            playbook = (
+                "ansible_collections/tomazb/acm_switchover/tests/integration/playbooks/argocd_primary_prep_retry.yml"
+            )
+            variables = _primary_prep_variables(hubs, checkpoint_path, acm_version="2.14.3")
+        else:
+            playbook = "ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml"
+            variables = {
+                "acm_switchover_hubs": hubs,
+                "acm_switchover_operation": {
+                    "method": "passive",
+                    "activation_method": "patch",
+                    "restore_only": False,
+                    "old_hub_action": "secondary",
+                },
+                "acm_switchover_execution": {
+                    "mode": "execute",
+                    "checkpoint": {
+                        "enabled": True,
+                        "backend": "file",
+                        "path": str(checkpoint_path),
+                    },
+                },
+            }
+
+        completed = _run_playbook(tmp_path, playbook, variables)
+        output = completed.stdout + completed.stderr
+        assert completed.returncode == 2, output
+        # Neither flow should issue any Argo CD API requests (e.g. /apis/argoproj.io/...);
+        # standalone resume may inspect cluster identity before failing on checkpoint validation.
+        for hub in (primary, secondary):
+            for req in hub.requests:
+                segments = req["path"].lstrip("/").split("/")
+                assert segments[:2] != ["apis", "argoproj.io"]
+                assert "applications" not in segments
+            assert hub.patches == []
+    finally:
+        primary.close()
+        secondary.close()

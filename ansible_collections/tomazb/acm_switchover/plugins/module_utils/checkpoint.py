@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime, timezone
 from typing import NoReturn
 
@@ -245,6 +246,43 @@ def _pre_enable_cleanup_retry(checkpoint: dict, data: dict, phases: list) -> boo
     )
 
 
+_K8S_NAMESPACE_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+
+def argocd_discovery_namespaces(checkpoint) -> dict:
+    """Validate and return persisted Argo CD discovery namespaces from a checkpoint.
+
+    An absent ``operational_data`` or absent ``argocd_discovery_namespaces`` key
+    returns ``{}``. When present, the container must be a mapping with string
+    hub keys, and each hub's value must be a list of raw Kubernetes DNS-1123
+    namespace labels. Malformed shapes — including explicit ``null`` and
+    whitespace/newline-padded namespace names — fail closed with ``ValueError``.
+    """
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"checkpoint must be a mapping, got {type(checkpoint).__name__}")
+    if "operational_data" not in checkpoint:
+        return {}
+    data = checkpoint["operational_data"]
+    if not isinstance(data, dict):
+        raise ValueError(f"operational_data must be a mapping, got {data!r}")
+    if KEY_ARGOCD_DISCOVERY_NAMESPACES not in data:
+        return {}
+    raw_map = data[KEY_ARGOCD_DISCOVERY_NAMESPACES]
+    if not isinstance(raw_map, dict) or not all(isinstance(hub_key, str) for hub_key in raw_map):
+        raise ValueError("Persisted argocd_discovery_namespaces must be a mapping.")
+    validated: dict = {}
+    for hub, entries in raw_map.items():
+        if not isinstance(entries, list):
+            raise ValueError("Persisted Argo CD discovery namespaces must be a list of namespace names.")
+        for ns in entries:
+            if not isinstance(ns, str) or _K8S_NAMESPACE_PATTERN.fullmatch(ns) is None:
+                raise ValueError(
+                    "Persisted Argo CD discovery namespaces must contain valid Kubernetes DNS-1123 labels."
+                )
+        validated[hub] = list(entries)
+    return validated
+
+
 def checkpoint_facts(checkpoint) -> dict:
     """Flattened named view of a checkpoint's cross-phase facts.
 
@@ -253,7 +291,11 @@ def checkpoint_facts(checkpoint) -> dict:
     to distinguish as never-recorded stay None.
     """
     data = _operational_data(checkpoint)
-    namespaces = data.get(KEY_ARGOCD_DISCOVERY_NAMESPACES)
+    validated_discovery_namespaces = (
+        argocd_discovery_namespaces(checkpoint)
+        if isinstance(checkpoint, dict) and isinstance(checkpoint.get("operational_data", {}), dict)
+        else {}
+    )
     saved_schedule = data.get(KEY_SAVED_BACKUP_SCHEDULE)
     resume_summary = data.get(KEY_RESUME_SUMMARY)
     if not isinstance(resume_summary, dict):
@@ -270,7 +312,7 @@ def checkpoint_facts(checkpoint) -> dict:
     return {
         "backup_continuity": backup_continuity_facts(checkpoint),
         KEY_ARGOCD_RUN_ID: data.get(KEY_ARGOCD_RUN_ID) or "",
-        KEY_ARGOCD_DISCOVERY_NAMESPACES: (namespaces if isinstance(namespaces, dict) else {}),
+        KEY_ARGOCD_DISCOVERY_NAMESPACES: validated_discovery_namespaces,
         # Ansible's own boolean vocabulary coerces; anything else — e.g. a
         # hand-edited "banana" — degrades to False, never truthy: this flag
         # feeds finalization's legacy discharge branch, which deletes the

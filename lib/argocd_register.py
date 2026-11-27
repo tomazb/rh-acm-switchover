@@ -22,8 +22,10 @@ from lib.constants import (
     STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STATE_KEY_ARGOCD_RUN_ID,
 )
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
+from lib.validation import InputValidator
 
 __all__ = ["ArgocdPauseRegister", "PauseSummary", "PauseRegisterStore", "RegisterStatus"]
 
@@ -152,6 +154,12 @@ class ArgocdPauseRegister:
                     "  Skip entry (hub=%s, namespace=%s, name=%s): unusable record or no client", hub, ns, name
                 )
                 continue
+            try:
+                InputValidator.validate_kubernetes_namespace(ns)
+            except ValidationError as e:
+                summary.failed += 1
+                logger.warning("  Failed %s/%s: invalid namespace: %s", ns, name, e)
+                continue
             if self.dry_run:
                 summary.restored += 1
                 logger.info("  [DRY-RUN] Would resume Argo CD Application %s/%s on %s", ns, name, hub)
@@ -202,7 +210,12 @@ class ArgocdPauseRegister:
             Exception: Propagated from ArgoCD detection or application listing.
         """
         existing_run_id = self.state._get_config(STATE_KEY_ARGOCD_RUN_ID)
-        discovery_namespaces_by_hub = self._store._get_discovery_namespaces_by_hub() if existing_run_id else {}
+        stored_discovery_namespaces = self._store._get_discovery_namespaces_by_hub()
+        for namespaces in stored_discovery_namespaces.values():
+            if not isinstance(namespaces, list):
+                raise ValidationError("Persisted Argo CD discovery namespaces must be a list of namespace names.")
+            argocd_lib.trusted_application_namespaces(namespaces)
+        discovery_namespaces_by_hub = stored_discovery_namespaces if existing_run_id else {}
         applications_by_hub, pause_blockers = self._collect_applications(hubs, discovery_namespaces_by_hub)
         if not applications_by_hub:
             return self._handle_no_applications_crd()
@@ -232,9 +245,16 @@ class ArgocdPauseRegister:
         """Read all inventories and blockers before recording pause state or patching."""
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers: List[Any] = []
+        hub_scopes = [
+            (
+                client,
+                hub_label,
+                argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label)),
+            )
+            for client, hub_label in hubs
+        ]
 
-        for client, hub_label in hubs:
-            trusted_namespaces = argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label))
+        for client, hub_label, trusted_namespaces in hub_scopes:
             if trusted_namespaces is not None:
                 discovery = argocd_lib.detect_argocd_installation(client)
                 if not discovery.has_applications_crd:

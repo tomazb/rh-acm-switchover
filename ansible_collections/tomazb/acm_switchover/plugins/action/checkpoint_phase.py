@@ -24,6 +24,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     KNOWN_PHASES,
     SCHEMA_VERSION,
     CheckpointIdentityMismatch,
+    argocd_discovery_namespaces,
     build_checkpoint_record,
     build_operation_identity,
     check_migration_fail,
@@ -1014,6 +1015,11 @@ class ActionModule(ActionBase):
                 return save_result
 
         if status == "enter":
+            if isinstance(checkpoint_data, dict) and isinstance(checkpoint_data.get("operational_data", {}), dict):
+                try:
+                    argocd_discovery_namespaces(checkpoint_data)
+                except ValueError as exc:
+                    return {"failed": True, "msg": str(exc)}
             resume_summary_changed = False
             already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
             if (

@@ -5,8 +5,9 @@ the on-disk entry schema, legacy sanitization, load/persist, entry
 find/upsert/remove/mark helpers, the status snapshot, and the pause-state
 reset.
 
-Deliberately free of cluster concerns -- it imports ``StateManager`` and
-``lib.constants`` only, never ``lib.argocd`` or ``lib.kube_client``. Readers
+Deliberately free of cluster concerns -- it imports ``StateManager``,
+``lib.constants``, and ``lib.exceptions`` only, never ``lib.argocd`` or
+``lib.kube_client``. Readers
 that hold state but no cluster connection (report artifacts) can therefore
 read the register without dragging in the Kubernetes SDK.
 """
@@ -22,6 +23,7 @@ from lib.constants import (
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
 )
+from lib.exceptions import ValidationError
 from lib.utils import StateManager
 
 logger = logging.getLogger("acm_switchover")
@@ -212,9 +214,9 @@ class PauseRegisterStore:
         self._clear()
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
-        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
-        if not isinstance(stored, dict):
-            return {}
+        stored = self.state._get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
+        if not isinstance(stored, dict) or not all(isinstance(hub_key, str) for hub_key in stored):
+            raise ValidationError("Persisted argocd_discovery_namespaces must be a mapping.")
         return copy.deepcopy(stored)
 
     def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:

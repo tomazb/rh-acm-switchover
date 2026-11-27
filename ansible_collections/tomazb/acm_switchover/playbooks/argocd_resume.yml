@@ -89,13 +89,51 @@
         - _argocd_resume_checkpoint is defined
         - ((_argocd_resume_checkpoint | default({})).get('operational_data', {}).get('argocd_run_id', '')) | length > 0
 
+    - name: Fail when checkpoint Argo CD discovery namespaces are not a mapping
+      ansible.builtin.fail:
+        msg: "Checkpoint operational_data.argocd_discovery_namespaces must be a mapping."
+      when:
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint is defined
+        - (((_argocd_resume_checkpoint | default({})).get('operational_data') or {}) is mapping)
+        - "'argocd_discovery_namespaces' in ((_argocd_resume_checkpoint | default({})).get('operational_data') or {})"
+        - >-
+          (
+            not (
+              (
+                ((_argocd_resume_checkpoint | default({})).get('operational_data') or {})
+                .get('argocd_discovery_namespaces')
+              ) is mapping
+            )
+          )
+          or (
+            (
+              (((_argocd_resume_checkpoint | default({})).get('operational_data') or {}).get('argocd_discovery_namespaces'))
+              | dict2items
+              | map(attribute='key')
+              | reject('string')
+              | list
+              | length
+            ) > 0
+          )
+
     - name: Validate rehydrated Argo CD discovery namespaces from checkpoint
       ansible.builtin.assert:
         that:
           - (item.value | type_debug) == 'list'
+          - >-
+            (
+              item.value
+              | select('string')
+              | select('regex', _argocd_application_namespace_pattern, match_type='fullmatch')
+              | list
+              | length
+            ) == (item.value | length)
         fail_msg: >-
           Checkpoint operational_data.argocd_discovery_namespaces.{{ item.key }}
-          must be a list of namespace names.
+          must be a list of valid Kubernetes DNS-1123 namespace names.
+      vars:
+        _argocd_application_namespace_pattern: '[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?'
       loop: >-
         {{
           (_argocd_resume_checkpoint | default({})).get('operational_data', {}).get('argocd_discovery_namespaces', {})
