@@ -773,8 +773,8 @@ Python:
 
 - `--dry-run` lets phase code execute while mutating helpers skip writes or log
   intended mutations.
-- dry-run captures and restores a state snapshot so rehearsal does not advance
-  persistent state.
+- Dry-run keeps rehearsal changes in memory and neither creates nor rewrites
+  the checkpoint file.
 - `--validate-only` runs preflight and restores runtime checkpoint state so it
   does not mutate phase/error progression.
 

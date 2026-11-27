@@ -9,6 +9,7 @@ the invocation's contexts differ from the file's (ensure_contexts reset).
 import argparse
 import json
 import logging
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -68,7 +69,82 @@ class TestExpectationFailsClosed:
         assert _resolve_managed_cluster_expectation(_args(min_managed_clusters=0), state) == (0, [], False)
 
 
-class TestDryRunStateGuard:
+class TestDryRunStateIsolation:
+    @pytest.mark.parametrize("contents", [b'{ "current_phase": "activation", "contexts": {} }\n', None])
+    @pytest.mark.parametrize("termination", ["normal", "error", "SIGTERM", "SIGKILL"])
+    def test_cli_dry_run_leaves_checkpoint_untouched(self, tmp_path, contents, termination):
+        path = tmp_path / "state.json"
+        report_dir = tmp_path / "reports"
+        if contents is not None:
+            path.write_bytes(contents)
+
+        # Enter the real CLI with fake clients and stop after a critical phase
+        # checkpoint. SIGKILL makes it impossible to repair an earlier write.
+        script = """
+import os
+import signal
+import sys
+from unittest.mock import patch
+
+from acm_switchover import main
+from lib.utils import Phase
+
+termination = sys.argv.pop(1)
+
+def rehearse(args, state, *unused):
+    state.set_phase(Phase.PREFLIGHT)
+    assert state.get_current_phase() == Phase.PREFLIGHT
+    if termination == "error":
+        raise RuntimeError("rehearsal failed")
+    if termination != "normal":
+        os.kill(os.getpid(), getattr(signal, termination))
+    return True
+
+with patch("acm_switchover._initialize_clients", return_value=(None, None)), \
+     patch("acm_switchover._bind_runtime_hub_identities"), \
+     patch("acm_switchover._execute_operation", side_effect=rehearse):
+    main()
+"""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                termination,
+                "--primary-context",
+                "hub-a",
+                "--secondary-context",
+                "hub-b",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--state-file",
+                str(path),
+                "--dry-run",
+                "--report-dir",
+                str(report_dir),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        if termination in ("normal", "error"):
+            expected_exit = EXIT_SUCCESS if termination == "normal" else EXIT_FAILURE
+        else:
+            expected_exit = -getattr(signal, termination)
+        assert result.returncode == expected_exit, result.stdout + result.stderr
+        if contents is None:
+            assert not path.exists()
+        else:
+            assert path.read_bytes() == contents
+        if termination in ("normal", "error"):
+            report = json.loads((report_dir / "switchover-report.json").read_text())
+            assert report["status"] == ("pass" if termination == "normal" else "fail")
+
     def _progressed_state_file(self, tmp_path):
         path = tmp_path / "switchover-guard.json"
         state = StateManager(str(path))
@@ -77,166 +153,105 @@ class TestDryRunStateGuard:
         state.flush_state()
         return path
 
-    def test_dry_run_guard_predates_context_reset(self, tmp_path, caplog):
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_context_reset_persists_only_in_real_run(self, tmp_path, dry_run):
         path = self._progressed_state_file(tmp_path)
-        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+        before = path.read_bytes()
+        args = _args(dry_run=dry_run, primary_context="new-primary", secondary_context="new-secondary")
 
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
             ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
 
-        assert ctx.dry_run_state_guard is not None
-        # The guard captured the state BEFORE ensure_contexts reset it.
-        assert ctx.dry_run_state_guard["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in ctx.dry_run_state_guard["completed_steps"])
+        assert ctx.state.state["contexts"] == {"primary": "new-primary", "secondary": "new-secondary"}
+        assert not ctx.state.is_step_completed("preflight_validation")
+        if dry_run:
+            assert path.read_bytes() == before
+        else:
+            assert json.loads(path.read_text())["contexts"] == ctx.state.state["contexts"]
 
-        # Restoring the guard brings the on-disk file back to the original run.
-        ctx.state.restore_state_snapshot(ctx.dry_run_state_guard)
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
-
-    def test_real_run_has_no_guard_and_keeps_reset(self, tmp_path):
+    def test_unbound_dry_run_does_not_persist_errors(self, tmp_path):
         path = self._progressed_state_file(tmp_path)
-        args = _args(dry_run=False, primary_context="new-primary", secondary_context="new-secondary")
-
-        with patch("acm_switchover._initialize_clients", return_value=(None, None)):
-            ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
-
-        assert ctx.dry_run_state_guard is None
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "new-primary", "secondary": "new-secondary"}
-
-    def test_dry_run_guard_absent_for_unbound_operations(self, tmp_path):
-        path = self._progressed_state_file(tmp_path)
+        before = path.read_bytes()
         args = _args(dry_run=True, argocd_resume_only=True)
 
         with patch("acm_switchover._initialize_clients", return_value=(None, None)):
             ctx = _prepare_runtime(args, logging.getLogger("test"), str(path))
 
-        assert ctx.dry_run_state_guard is None
+        assert ctx.state.is_step_completed("preflight_validation")
+        ctx.state.add_error("simulated failure")
+        assert path.read_bytes() == before
 
-    def test_dry_run_restores_state_when_client_init_fails(self, tmp_path):
+    @pytest.mark.parametrize("error", [RuntimeError("client init boom"), KeyboardInterrupt()])
+    def test_client_init_failure_leaves_checkpoint_untouched(self, tmp_path, error):
         path = self._progressed_state_file(tmp_path)
+        before = path.read_bytes()
         args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
+        expected = KeyboardInterrupt if isinstance(error, KeyboardInterrupt) else SystemExit
 
-        # Simulate _initialize_clients failure in a dry run
-        with patch("acm_switchover._initialize_clients", side_effect=RuntimeError("client init boom")):
-            with patch("sys.exit", side_effect=SystemExit(1)):
-                with pytest.raises(SystemExit):
-                    _prepare_runtime(args, logging.getLogger("test"), str(path))
+        with patch("acm_switchover._initialize_clients", side_effect=error), pytest.raises(expected):
+            _prepare_runtime(args, logging.getLogger("test"), str(path))
 
-        # Verify the state was restored before exit (the fix should do this)
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+        assert path.read_bytes() == before
 
-    def test_dry_run_restores_state_when_client_init_is_interrupted(self, tmp_path):
+    def test_context_binding_failure_leaves_checkpoint_untouched(self, tmp_path):
         path = self._progressed_state_file(tmp_path)
+        before = path.read_bytes()
         args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
-
-        # Simulate Ctrl-C during _initialize_clients's live network connects
-        # (audit H10 finding 1): KeyboardInterrupt is not an Exception
-        # subclass, so it must still trigger the state restore.
-        with patch("acm_switchover._initialize_clients", side_effect=KeyboardInterrupt):
-            with pytest.raises(KeyboardInterrupt):
-                _prepare_runtime(args, logging.getLogger("test"), str(path))
-
-        # Verify the state was restored before the interrupt propagated
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
-
-    def test_dry_run_restores_state_when_ensure_contexts_raises(self, tmp_path):
-        path = self._progressed_state_file(tmp_path)
-        args = _args(dry_run=True, primary_context="new-primary", secondary_context="new-secondary")
-
-        # Simulate ensure_contexts failing AFTER it has already reset and
-        # flushed the mismatched state to disk (e.g. an interrupt or I/O error
-        # raised at the end of the critical-checkpoint flush): the guard must
-        # still restore the original run before the exception propagates.
         real_ensure_contexts = StateManager.ensure_contexts
 
-        def _mutate_then_raise(self, primary_context, secondary_context):
-            real_ensure_contexts(self, primary_context, secondary_context)
+        def mutate_then_raise(state, primary_context, secondary_context):
+            real_ensure_contexts(state, primary_context, secondary_context)
             raise RuntimeError("boom during context binding")
 
-        with patch.object(StateManager, "ensure_contexts", _mutate_then_raise), patch(
-            "acm_switchover._initialize_clients", return_value=(None, None)
-        ):
+        with patch.object(StateManager, "ensure_contexts", mutate_then_raise):
             with pytest.raises(RuntimeError, match="boom during context binding"):
                 _prepare_runtime(args, logging.getLogger("test"), str(path))
 
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+        assert path.read_bytes() == before
 
-    def test_dry_run_restores_state_when_operation_raises(self, tmp_path):
-        from types import SimpleNamespace
-        from unittest.mock import Mock
+    def test_dry_run_refuses_corrupt_checkpoint_without_copying_it(self, tmp_path, caplog):
+        path = tmp_path / "state.json"
+        contents = b"{corrupt"
+        path.write_bytes(contents)
 
-        from acm_switchover import main
+        with pytest.raises(SystemExit) as result:
+            _prepare_runtime(_args(dry_run=True), logging.getLogger("test"), str(path))
 
-        path = self._progressed_state_file(tmp_path)
-        args = SimpleNamespace(
-            dry_run=True,
-            primary_context="new-primary",
-            secondary_context="new-secondary",
-            state_file=str(path),
-            reset_state=False,
-            verbose=False,
-            log_format="text",
-            force=False,
-            validate_only=False,
-            argocd_resume_only=False,
-            decommission=False,
-            skip_gitops_check=False,
-            setup=False,
-        )
-        logger = Mock()
-        state_mock = Mock()
-        state_mock.restore_state_snapshot = StateManager(str(path)).restore_state_snapshot
+        assert result.value.code == EXIT_FAILURE
+        assert "State file is corrupt" in caplog.text
+        assert path.read_bytes() == contents
+        assert not list(tmp_path.glob("state.json.corrupt.*"))
 
-        runtime = SimpleNamespace(
-            state=state_mock,
-            primary=None,
-            secondary=None,
-            should_bind_state=True,
-            should_record_state_errors=True,
-            dry_run_state_guard=None,  # Will be set by _prepare_runtime
-        )
+    @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
+    @pytest.mark.parametrize("alias", ["hardlink", "dangling-symlink"])
+    def test_dry_run_refuses_lock_alias_to_checkpoint(self, tmp_path, alias):
+        path = tmp_path / "state.json"
+        lock = tmp_path / "state.json.run.lock"
+        contents = b'{ "current_phase": "init" }\n'
+        if alias == "hardlink":
+            path.write_bytes(contents)
+            lock.hardlink_to(path)
+        else:
+            lock.symlink_to(path)
 
-        def _mutate_state_then_raise(*_args, **_kwargs):
-            # Simulate the rehearsal actually mutating the on-disk state
-            # (e.g. via a later ensure_contexts/flush) before it fails, so
-            # this test can only pass if main()'s finally-restore runs.
-            mutator = StateManager(str(path))
-            mutator.ensure_contexts("mutated-primary", "mutated-secondary")
-            raise RuntimeError("operation boom")
+        with pytest.raises(SystemExit) as result:
+            _prepare_runtime(_args(dry_run=True), logging.getLogger("test"), str(path))
 
-        with patch("acm_switchover.parse_args", return_value=args), patch(
-            "acm_switchover.setup_logging", return_value=logger
-        ), patch("acm_switchover.validate_args"), patch(
-            "acm_switchover._resolve_state_file", return_value=str(path)
-        ), patch(
-            "acm_switchover._prepare_runtime", return_value=runtime
-        ), patch(
-            "acm_switchover._build_cli_operation_hooks", return_value={}
-        ), patch(
-            "acm_switchover.cli_outcomes.run_operation_outcome", side_effect=_mutate_state_then_raise
-        ), patch(
-            "acm_switchover.GitOpsCollector.get_instance"
-        ):
-            # Set dry_run_state_guard on the runtime to simulate _prepare_runtime's capture
-            with pytest.raises(RuntimeError):
-                # Capture the progressed state before operation
-                guard_snapshot = StateManager(str(path)).capture_state_snapshot()
-                runtime.dry_run_state_guard = guard_snapshot
-                main()
+        assert result.value.code == EXIT_FAILURE
+        if alias == "hardlink":
+            assert path.read_bytes() == contents
+        else:
+            assert not path.exists()
 
-        # Verify the state was restored in the finally block even though operation raised
-        on_disk = json.loads(path.read_text())
-        assert on_disk["contexts"] == {"primary": "old-primary", "secondary": "old-secondary"}
-        assert any(step.get("name") == "preflight_validation" for step in on_disk["completed_steps"])
+    @pytest.mark.parametrize("suffix", ["/", "/."])
+    def test_dry_run_refuses_directory_path_without_creating_it(self, tmp_path, suffix):
+        path = tmp_path / "state.json"
+
+        with pytest.raises(SystemExit) as result:
+            _prepare_runtime(_args(dry_run=True), logging.getLogger("test"), str(path) + suffix)
+
+        assert result.value.code == EXIT_FAILURE
+        assert not path.exists()
 
     def test_dry_run_rejects_reset_state(self, tmp_path):
         path = self._progressed_state_file(tmp_path)
@@ -294,14 +309,15 @@ class TestResetStateStartup:
 
     @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
     @pytest.mark.parametrize("contents", [b'{"current_phase": "init"}\n', b"{corrupt\n"])
-    def test_competing_cli_reset_preserves_exact_bytes(self, tmp_path, contents):
+    @pytest.mark.parametrize("mode", ["--reset-state", "--dry-run"])
+    def test_competing_cli_preserves_exact_bytes(self, tmp_path, contents, mode):
         path = tmp_path / "state.json"
         owner = StateManager(str(path))
         path.write_bytes(contents)
 
         try:
             result = subprocess.run(
-                [sys.executable, *self._cli(path, "--reset-state")],
+                [sys.executable, *self._cli(path, mode)],
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -312,7 +328,7 @@ class TestResetStateStartup:
 
         assert result.returncode == EXIT_FAILURE
         assert "already using state file" in result.stdout + result.stderr
-        assert path.exists(), "reset removed a checkpoint while the other process held its run lock"
+        assert path.exists(), "the checkpoint disappeared while the other process held its run lock"
         assert path.read_bytes() == contents
 
     def test_resume_only_reset_preserves_pause_register(self, tmp_path):

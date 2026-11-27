@@ -531,22 +531,10 @@ def run_switchover(
     logger: logging.Logger,
 ):
     """Execute the main switchover workflow."""
-    # The public wrapper owns dry-run rollback because the library runner still
-    # performs durable phase bookkeeping to exercise the real workflow path.
-    dry_run_snapshot = (
-        state.capture_state_snapshot()
-        if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state)
-        else None
-    )
-    try:
-        return _run_switchover_impl(args, state, primary, secondary, logger)
-    except MigrationJournalResetRefused:
-        # Refused before any change: restoring the rehearsal would be the only write.
-        dry_run_snapshot = None
-        raise
-    finally:
-        if dry_run_snapshot is not None:
-            state.restore_state_snapshot(dry_run_snapshot)
+    if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state):
+        with state.rehearse():
+            return _run_switchover_impl(args, state, primary, secondary, logger)
+    return _run_switchover_impl(args, state, primary, secondary, logger)
 
 
 def _run_switchover_impl(
@@ -629,22 +617,10 @@ def run_restore_only(
     logger: logging.Logger,
 ) -> bool:
     """Execute restore-only workflow for single-hub restore from backup."""
-    # Keep dry-run rollback at the wrapper boundary so restore-only and full
-    # switchover discard all durable state written by shared runner helpers.
-    dry_run_snapshot = (
-        state.capture_state_snapshot()
-        if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state)
-        else None
-    )
-    try:
-        return _run_restore_only_impl(args, state, secondary, logger)
-    except MigrationJournalResetRefused:
-        # Refused before any change: restoring the rehearsal would be the only write.
-        dry_run_snapshot = None
-        raise
-    finally:
-        if dry_run_snapshot is not None:
-            state.restore_state_snapshot(dry_run_snapshot)
+    if getattr(args, "dry_run", False) and not workflow.completed_backup_assessment(args, state):
+        with state.rehearse():
+            return _run_restore_only_impl(args, state, secondary, logger)
+    return _run_restore_only_impl(args, state, secondary, logger)
 
 
 def _run_restore_only_impl(
@@ -1317,49 +1293,16 @@ def _reject_dry_run_reset_state(args: argparse.Namespace, logger: logging.Logger
         sys.exit(EXIT_FAILURE)
 
 
-def _bind_contexts_with_dry_run_guard(state: StateManager, args: argparse.Namespace) -> Optional[dict]:
-    """Bind invocation contexts, returning the dry-run state guard (or None).
-
-    Under --dry-run the snapshot is captured BEFORE ensure_contexts: its
-    context-mismatch reset flushes to disk, and a later snapshot would only
-    preserve the wiped state (parity audit finding H10). main() restores the
-    returned guard after the rehearsal completes. Validate-only checks context
-    compatibility without writing unless an explicit reset was requested.
-    """
+def _bind_runtime_contexts(state: StateManager, args: argparse.Namespace) -> None:
+    """Check or bind the invocation contexts before initializing clients."""
+    primary_context = getattr(args, "primary_context", None)
+    secondary_context = getattr(args, "secondary_context", None)
     if workflow.completed_backup_assessment(args, state):
-        state.validate_retained_contexts(
-            getattr(args, "primary_context", None),
-            getattr(args, "secondary_context", None),
-        )
-        return None
-    if getattr(args, "validate_only", False) and not getattr(args, "reset_state", False):
-        state.validate_contexts_read_only(
-            getattr(args, "primary_context", None),
-            getattr(args, "secondary_context", None),
-        )
-        return None
-    dry_run_state_guard = None
-    if getattr(args, "dry_run", False):
-        dry_run_state_guard = state.capture_state_snapshot()
-    try:
-        state.ensure_contexts(
-            getattr(args, "primary_context", None),
-            getattr(args, "secondary_context", None),
-        )
-    except MigrationJournalResetRefused:
-        # Refused before any change: there is nothing to restore, and restoring would write.
-        raise
-    except BaseException:
-        # H10 guard: ensure_contexts flushes its context-mismatch reset as a
-        # critical checkpoint, so an interrupt or I/O error raised during the
-        # call can leave the wiped state on disk with main()'s finally never
-        # reached. Restore before propagating. If the restore write fails too
-        # (same disk fault), let it propagate — the original exception is
-        # preserved as __context__.
-        if dry_run_state_guard is not None:
-            state.restore_state_snapshot(dry_run_state_guard)
-        raise
-    return dry_run_state_guard
+        state.validate_retained_contexts(primary_context, secondary_context)
+    elif getattr(args, "validate_only", False) and not getattr(args, "reset_state", False):
+        state.validate_contexts_read_only(primary_context, secondary_context)
+    else:
+        state.ensure_contexts(primary_context, secondary_context)
 
 
 def _prepare_runtime(
@@ -1372,7 +1315,11 @@ def _prepare_runtime(
 
     reset = getattr(args, "reset_state", False)
     try:
-        state = StateManager(resolved_state_file, reset=reset)
+        state = StateManager(
+            resolved_state_file,
+            reset=reset,
+            persist_state=not getattr(args, "dry_run", False),
+        )
     except (StateLoadError, StateLockError) as exc:
         logger.error("")
         logger.error("FATAL: Cannot initialize switchover state file.")
@@ -1387,10 +1334,9 @@ def _prepare_runtime(
     should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
     should_record_state_errors = not getattr(args, "decommission", False)
 
-    dry_run_state_guard = None
     if should_bind_state:
         try:
-            dry_run_state_guard = _bind_contexts_with_dry_run_guard(state, args)
+            _bind_runtime_contexts(state, args)
         except (MigrationJournalResetRefused, StateIdentityMismatch) as exc:
             logger.error("%s", exc)
             sys.exit(EXIT_FAILURE)
@@ -1407,29 +1353,10 @@ def _prepare_runtime(
         primary, secondary = _initialize_clients(args, logger, sanitize_identity_errors=sanitize_identity_errors)
     except runtime_bootstrap.HubIdentityVerificationError as exc:
         logger.error("%s", exc)
-        # H10 guard: restore dry-run state before exiting, so the rehearsal's
-        # on-disk effects (including the ensure_contexts reset) are always
-        # rolled back, even on client-init failure.
-        if dry_run_state_guard is not None:
-            state.restore_state_snapshot(dry_run_state_guard)
         sys.exit(EXIT_FAILURE)
     except Exception as exc:
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
-        # H10 guard: restore dry-run state before exiting, so the rehearsal's
-        # on-disk effects (including the ensure_contexts reset) are always
-        # rolled back, even on client-init failure.
-        if dry_run_state_guard is not None:
-            state.restore_state_snapshot(dry_run_state_guard)
         sys.exit(EXIT_FAILURE)
-    except BaseException:
-        # H10 guard: _initialize_clients performs live network connects, so a
-        # Ctrl-C (KeyboardInterrupt) or SystemExit here is realistic and is
-        # not caught by the Exception arm above. Restore the dry-run state
-        # before propagating so the rehearsal's on-disk effects are always
-        # rolled back, even on interruption.
-        if dry_run_state_guard is not None:
-            state.restore_state_snapshot(dry_run_state_guard)
-        raise
 
     return runtime_bootstrap.RuntimeContext(
         state_file=resolved_state_file,
@@ -1438,7 +1365,6 @@ def _prepare_runtime(
         secondary=secondary,
         should_bind_state=should_bind_state,
         should_record_state_errors=should_record_state_errors,
-        dry_run_state_guard=dry_run_state_guard,
     )
 
 
@@ -1525,29 +1451,19 @@ def main():
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
 
-    outcome: Optional[cli_outcomes.OperationOutcome] = None
-    try:
-        outcome = cli_outcomes.run_operation_outcome(
-            args,
-            state,
-            runtime.primary,
-            runtime.secondary,
-            logger,
-            should_bind_state=runtime.should_bind_state,
-            should_record_state_errors=runtime.should_record_state_errors,
-            hooks=_build_cli_operation_hooks(),
-            exit_success=EXIT_SUCCESS,
-            exit_failure=EXIT_FAILURE,
-            exit_interrupt=EXIT_INTERRUPT,
-        )
-    finally:
-        # A migration-journal reset refusal changed nothing; rolling back would only write.
-        refused = outcome is not None and outcome.journal_reset_refused
-        if runtime.dry_run_state_guard is not None and not refused:
-            # H10 guard: put the state file back exactly as it was before the
-            # dry-run rehearsal, including a context-mismatch reset that
-            # ensure_contexts may have flushed in _prepare_runtime.
-            state.restore_state_snapshot(runtime.dry_run_state_guard)
+    outcome = cli_outcomes.run_operation_outcome(
+        args,
+        state,
+        runtime.primary,
+        runtime.secondary,
+        logger,
+        should_bind_state=runtime.should_bind_state,
+        should_record_state_errors=runtime.should_record_state_errors,
+        hooks=_build_cli_operation_hooks(),
+        exit_success=EXIT_SUCCESS,
+        exit_failure=EXIT_FAILURE,
+        exit_interrupt=EXIT_INTERRUPT,
+    )
     sys.exit(outcome.exit_code)
 
 

@@ -164,7 +164,7 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 ### Minimize hidden side effects
 
 - `--dry-run` logs intended operations instead of mutating cluster resources
-- `--dry-run` restores the pre-run state file after rehearsal so resume/checkpoint state is not advanced
+- `--dry-run` keeps rehearsal state in memory and leaves the checkpoint file untouched
 - `--validate-only` runs checks without entering mutation phases
 - Setup mode and resume-only mode are isolated from the main switchover control flow
 
@@ -179,8 +179,7 @@ The entrypoint owns:
 - runtime bootstrap (client, state-file, and state-directory resolution)
 - construction of the runner hook dataclasses (`_build_switchover_runner_hooks`,
   `_build_restore_only_runner_hooks`, `_build_operation_dispatch_hooks`, `acm_switchover.py:390`)
-- the dry-run snapshot/restore wrappers around each operation (`run_switchover`,
-  `run_restore_only`, `acm_switchover.py:424`)
+- in-memory checkpoint handling for dry-run, including the `run_switchover` and `run_restore_only` wrappers
 - the concrete phase adapters the hooks point at — `_run_phase_preflight`,
   `_run_phase_primary_prep`, `_run_phase_activation`, `_run_phase_post_activation`,
   `_run_phase_finalization` — all five defined in `acm_switchover.py`, at lines 616, 773, 801,
@@ -249,10 +248,10 @@ Provides the operational scaffolding:
 - error history
 
 Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
-Active dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
-validate-only runtime checkpoints, which intentionally preserve discovered run facts while restoring phase and error
-state. Completed Backup assessment takes neither write path: bootstrap and outcomes validate retained state read-only,
-including interruption and unexpected failure.
+Dry-run suppresses checkpoint writes from state initialization through shutdown. Direct calls to the switchover
+and restore-only wrappers also discard rehearsal changes from the caller's in-memory state. Validate-only
+runtime checkpoints preserve discovered run facts while restoring phase and error state. Completed Backup
+assessment reads retained state without writing checkpoints, including on interruption or unexpected failure.
 
 The main switchover and restore-only phase loops assert the expected durable phase
 after each handler that returns success. This keeps resume and completion

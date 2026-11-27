@@ -806,12 +806,13 @@ class TestDryRunForceRefusalWritesNothing:
         write.assert_not_called()
         assert path.read_bytes() == before
 
-    def test_an_ordinary_dry_run_failure_still_rolls_back(self, tmp_path):
+    def test_an_ordinary_dry_run_failure_preserves_checkpoint(self, tmp_path):
         path = tmp_path / "switchover-plain.json"
         state = StateManager(str(path))
         state.ensure_contexts("hub-a", "hub-b")
         state.state.update(current_phase="failed", errors=[])
         state.flush_state()
+        before = path.read_bytes()
         cli = [
             "acm_switchover.py",
             "--primary-context",
@@ -833,19 +834,10 @@ class TestDryRunForceRefusalWritesNothing:
             stack.enter_context(patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())))
             stack.enter_context(patch("acm_switchover._bind_runtime_hub_identities"))
             stack.enter_context(patch("acm_switchover._write_python_report"))
-            restore = stack.enter_context(
-                patch.object(
-                    StateManager,
-                    "restore_state_snapshot",
-                    autospec=True,
-                    side_effect=lambda *a: None,
-                )
-            )
             with pytest.raises(SystemExit) as exc_info:
                 acm_switchover.main()
         assert exc_info.value.code == 1
-        # The wrapper and main() both put the rehearsal back, exactly as before.
-        assert restore.call_count == 2
+        assert path.read_bytes() == before
 
 
 class TestIdentityBindingPrecedesNoRefusal:
