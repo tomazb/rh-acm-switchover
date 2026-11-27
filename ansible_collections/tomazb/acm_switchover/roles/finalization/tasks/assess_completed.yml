@@ -22,6 +22,17 @@
       - acm_switchover_backup_lifecycle_inputs.invalid_reason is not defined
     fail_msg: Backup continuity refused; invalid_backup_evidence. Preserve the original checkpoint.
 
+- name: Classify historical Backup continuity
+  ansible.builtin.set_fact:
+    acm_switchover_historical_backup_continuity: >-
+      {{
+        (acm_switchover_backup_lifecycle_inputs.enabled_at_present | default(false) | bool)
+        or (
+          (acm_switchover_backup_lifecycle_inputs.phase | default('')) == 'finalization'
+          and not (acm_switchover_backup_lifecycle_inputs.pre_enable_cleanup_retry | default(false) | bool)
+        )
+      }}
+
 - name: Assess completed Backup continuity without checkpoint mutation
   when: acm_switchover_backup_lifecycle_inputs.finalization_completed | default(false) | bool
   block:

@@ -59,12 +59,7 @@
     # Historical boundary proof runs after required re-pause, before cleanup/enable.
     - name: Prove historical Backup continuity before finalization mutations
       ansible.builtin.include_tasks: verify_backup_proof.yml
-      when: >-
-        (acm_switchover_backup_lifecycle_inputs.enabled_at_present | default(false) | bool)
-        or (
-          (acm_switchover_backup_lifecycle_inputs.phase | default('')) == 'finalization'
-          and not (acm_switchover_backup_lifecycle_inputs.pre_enable_cleanup_retry | default(false) | bool)
-        )
+      when: acm_switchover_historical_backup_continuity | bool
 
     # R4-04: the journal comes only from the checkpoint enter and is validated before any
     # Restore cleanup, old-hub action or BackupSchedule enablement. Restore-only and full

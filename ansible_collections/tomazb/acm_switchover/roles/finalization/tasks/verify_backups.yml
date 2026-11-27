@@ -19,8 +19,7 @@
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - not ansible_check_mode
     - acm_switchover_operation.restore_only | default(false)
-    - ((acm_switchover_backup_lifecycle_inputs | default({})).phase | default('')) == 'finalization'
-    - not ((acm_switchover_backup_lifecycle_inputs | default({})).pre_enable_cleanup_retry | default(false) | bool)
+    - acm_switchover_historical_backup_continuity | default(false) | bool
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
 
 - name: Skip backup continuity verification when restore_only has no BackupSchedule
@@ -36,7 +35,7 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') == 'execute'
     - acm_switchover_operation.restore_only | default(false)
-    - ansible_check_mode or ((acm_switchover_backup_lifecycle_inputs | default({})).phase | default('')) != 'finalization'
+    - ansible_check_mode or not (acm_switchover_historical_backup_continuity | default(false) | bool)
     - not ((acm_switchover_backup_lifecycle_inputs | default({})).pre_enable_cleanup_retry | default(false) | bool)
     - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
     - acm_enable_backup_schedule_operation.operation.action == 'none'

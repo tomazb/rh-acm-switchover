@@ -505,13 +505,17 @@ def test_failed_finalization_retry_repauses_before_history_proof(attempt, restor
     assert runtime.state.state["config"]["post_switchover_backup_name"] == raw["config"]["post_switchover_backup_name"]
 
 
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.POST_ACTIVATION])
 @pytest.mark.parametrize("verified_schedule", [False, True])
 def test_historical_restore_only_without_schedule_refuses_before_completion(
-    attempt, monkeypatch, caplog, verified_schedule
+    attempt, monkeypatch, caplog, verified_schedule, phase
 ):
     args, path, raw, _, _, _, transport, _ = attempt(restore=True, label="none", good=True)
     saved = json.loads(raw)
+    saved["current_phase"] = phase.value
     saved["config"].pop("post_switchover_backup_name")
+    if phase == Phase.POST_ACTIVATION:
+        monkeypatch.setattr(cli, "_run_phase_post_activation", lambda *a: True)
     if verified_schedule:
         saved["completed_steps"].extend(
             {"name": step} for step in ("verify_backup_schedule_enabled", "fix_backup_collision")
