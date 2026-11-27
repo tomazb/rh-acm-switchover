@@ -179,7 +179,9 @@ def write_json_report_artifact(report: dict[str, Any], destination: str, *, prot
     else:
         # Pin the report directory so the name check and open use the same parent.
         checkpoint = Path(os.path.realpath(protected_path))
-        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        # A handle for relative lookup should not require permission to list the directory.
+        lookup_flags = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY))
+        directory_fd = os.open(path.parent, lookup_flags | getattr(os, "O_DIRECTORY", 0))
         try:
             if path.name == checkpoint.name and os.path.samestat(os.fstat(directory_fd), checkpoint.parent.stat()):
                 raise ValueError(_DRY_RUN_REPORT_CONFLICT)

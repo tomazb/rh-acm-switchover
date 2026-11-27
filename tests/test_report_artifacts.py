@@ -1,6 +1,7 @@
 """Tests for Python CLI machine-readable report artifacts."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -164,4 +165,23 @@ def test_report_writer_leaves_protected_missing_checkpoint_absent(tmp_path):
     with pytest.raises(ValueError, match="conflicts with the state file"):
         write_json_report_artifact({"status": "pass"}, str(checkpoint), protected_path=str(checkpoint))
 
+    assert not checkpoint.exists()
+
+
+@pytest.mark.skipif(
+    not (hasattr(os, "O_PATH") or hasattr(os, "O_SEARCH")) or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="requires a search-only directory handle and an unprivileged user",
+)
+def test_dry_run_report_directory_does_not_require_read_permission(tmp_path):
+    directory = tmp_path / "reports"
+    directory.mkdir()
+    destination = directory / "report.json"
+    checkpoint = tmp_path / "checkpoint.json"
+    directory.chmod(0o300)
+    try:
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+    finally:
+        directory.chmod(0o700)
+
+    assert json.loads(destination.read_text()) == {"status": "pass"}
     assert not checkpoint.exists()
