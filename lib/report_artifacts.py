@@ -165,29 +165,55 @@ def build_operation_report(
 _DRY_RUN_REPORT_CONFLICT = "Dry-run report destination conflicts with the state file. Choose a different --report-dir."
 
 
+def _open_protected_report(path: Path, flags: int, checkpoint: Path) -> int:
+    """Create report parents and open the file using the same pinned directories."""
+    parent = path_safety.validate_report_artifact_path(str(path), resolve_parent=True).parent
+
+    # Search-only access is sufficient for relative lookup and creation.
+    lookup = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY))
+    directory_flags = lookup | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def check_component(directory_fd: int, name: str) -> None:
+        if name != checkpoint.name:
+            return
+        try:
+            checkpoint_parent = checkpoint.parent.stat()
+        except FileNotFoundError:
+            return
+        if os.path.samestat(os.fstat(directory_fd), checkpoint_parent):
+            raise ValueError(_DRY_RUN_REPORT_CONFLICT)
+
+    directory_fd = os.open(parent.anchor, directory_flags)
+    try:
+        for name in parent.parts[1:]:
+            check_component(directory_fd, name)
+            try:
+                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(name, dir_fd=directory_fd)
+                except FileExistsError:
+                    pass
+                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = child_fd
+        check_component(directory_fd, path.name)
+        return os.open(path.name, flags, 0o644, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def write_json_report_artifact(report: dict[str, Any], destination: str, *, protected_path: str | None = None) -> str:
     """Validate and write a JSON report artifact."""
     path = validate_report_artifact_path(destination, "report artifact")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path = validate_report_artifact_path(destination, "report artifact")
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     if protected_path is None:
-        flags |= os.O_TRUNC
-
-    if protected_path is None:
-        fd = os.open(str(path), flags, 0o644)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path = validate_report_artifact_path(destination, "report artifact")
+        fd = os.open(str(path), flags | os.O_TRUNC, 0o644)
     else:
-        # Pin the report directory so the name check and open use the same parent.
         checkpoint = Path(os.path.realpath(protected_path))
-        # A handle for relative lookup should not require permission to list the directory.
-        lookup_flags = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY))
-        directory_fd = os.open(path.parent, lookup_flags | getattr(os, "O_DIRECTORY", 0))
-        try:
-            if path.name == checkpoint.name and os.path.samestat(os.fstat(directory_fd), checkpoint.parent.stat()):
-                raise ValueError(_DRY_RUN_REPORT_CONFLICT)
-            fd = os.open(path.name, flags, 0o644, dir_fd=directory_fd)
-        finally:
-            os.close(directory_fd)
+        fd = _open_protected_report(path, flags, checkpoint)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         if protected_path is not None:
             # The destination may have changed since validation. Compare the

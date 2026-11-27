@@ -185,3 +185,27 @@ def test_dry_run_report_directory_does_not_require_read_permission(tmp_path):
 
     assert json.loads(destination.read_text()) == {"status": "pass"}
     assert not checkpoint.exists()
+
+
+def test_report_writer_does_not_create_protected_checkpoint_as_directory(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+    destination = checkpoint / "reports" / "report.json"
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+
+    assert not checkpoint.exists()
+
+
+def test_protected_report_creates_nested_parents_through_validated_alias(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    (tmp_path / "alias").symlink_to(actual, target_is_directory=True)
+    checkpoint = tmp_path / "checkpoint.json"
+    destination = "alias/nested/reports/report.json"
+
+    assert write_json_report_artifact({"status": "pass"}, destination, protected_path=str(checkpoint)) == destination
+
+    assert json.loads((actual / "nested/reports/report.json").read_text()) == {"status": "pass"}
+    assert not checkpoint.exists()
