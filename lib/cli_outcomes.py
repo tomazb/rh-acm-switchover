@@ -135,7 +135,8 @@ def write_python_report(
     try:
         report_type, filename = report_target(args)
         destination = os.path.join(report_dir, filename)
-        if getattr(args, "dry_run", False):
+        dry_run = getattr(args, "dry_run", False)
+        if dry_run:
             state_file = state.state_file
             checkpoint_path = os.path.realpath(state_file)
             report_path = os.path.realpath(destination)
@@ -156,7 +157,10 @@ def write_python_report(
             refusal_message=refusal_message,
             redact_identity_inputs=redact_identity_inputs,
         )
-        written_path = write_json_report_artifact(report, destination)
+        if dry_run:
+            written_path = write_json_report_artifact(report, destination, protected_path=state.state_file)
+        else:
+            written_path = write_json_report_artifact(report, destination)
         logger.info("Wrote report artifact: %s", written_path)
     except Exception as exc:
         logger.error("Failed to write report artifact: %s", exc)

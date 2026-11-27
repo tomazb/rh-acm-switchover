@@ -162,15 +162,40 @@ def build_operation_report(
     return report
 
 
-def write_json_report_artifact(report: dict[str, Any], destination: str) -> str:
+_DRY_RUN_REPORT_CONFLICT = "Dry-run report destination conflicts with the state file. Choose a different --report-dir."
+
+
+def write_json_report_artifact(report: dict[str, Any], destination: str, *, protected_path: str | None = None) -> str:
     """Validate and write a JSON report artifact."""
     path = validate_report_artifact_path(destination, "report artifact")
     path.parent.mkdir(parents=True, exist_ok=True)
     path = validate_report_artifact_path(destination, "report artifact")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(str(path), flags, 0o644)
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    if protected_path is None:
+        flags |= os.O_TRUNC
+
+    if protected_path is None:
+        fd = os.open(str(path), flags, 0o644)
+    else:
+        # Pin the report directory so the name check and open use the same parent.
+        checkpoint = Path(os.path.realpath(protected_path))
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            if path.name == checkpoint.name and os.path.samestat(os.fstat(directory_fd), checkpoint.parent.stat()):
+                raise ValueError(_DRY_RUN_REPORT_CONFLICT)
+            fd = os.open(path.name, flags, 0o644, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        if protected_path is not None:
+            # The destination may have changed since validation. Compare the
+            # opened inode before truncating anything.
+            try:
+                checkpoint_info = os.stat(protected_path)
+            except FileNotFoundError:
+                checkpoint_info = None
+            if checkpoint_info is not None and os.path.samestat(os.fstat(handle.fileno()), checkpoint_info):
+                raise ValueError(_DRY_RUN_REPORT_CONFLICT)
+            handle.truncate(0)
         handle.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return str(path)

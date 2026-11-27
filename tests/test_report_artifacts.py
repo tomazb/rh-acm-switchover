@@ -143,3 +143,25 @@ def test_argocd_report_counts_only_confirmed_paused_entries():
 
     assert report["argocd"]["run_id"] == "run-1"
     assert report["argocd"]["summary"] == {"paused": 1, "restored": 0}
+
+
+def test_report_writer_preserves_protected_checkpoint_inode(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_bytes(b'{ "current_phase": "init" }\n')
+    destination = tmp_path / "report.json"
+    destination.hardlink_to(checkpoint)
+    original = checkpoint.read_bytes()
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+
+    assert checkpoint.read_bytes() == original
+
+
+def test_report_writer_leaves_protected_missing_checkpoint_absent(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(checkpoint), protected_path=str(checkpoint))
+
+    assert not checkpoint.exists()
