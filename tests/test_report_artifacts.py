@@ -1,6 +1,7 @@
 """Tests for Python CLI machine-readable report artifacts."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -143,3 +144,68 @@ def test_argocd_report_counts_only_confirmed_paused_entries():
 
     assert report["argocd"]["run_id"] == "run-1"
     assert report["argocd"]["summary"] == {"paused": 1, "restored": 0}
+
+
+def test_report_writer_preserves_protected_checkpoint_inode(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_bytes(b'{ "current_phase": "init" }\n')
+    destination = tmp_path / "report.json"
+    destination.hardlink_to(checkpoint)
+    original = checkpoint.read_bytes()
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+
+    assert checkpoint.read_bytes() == original
+
+
+def test_report_writer_leaves_protected_missing_checkpoint_absent(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(checkpoint), protected_path=str(checkpoint))
+
+    assert not checkpoint.exists()
+
+
+@pytest.mark.skipif(
+    not (hasattr(os, "O_PATH") or hasattr(os, "O_SEARCH")) or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="requires a search-only directory handle and an unprivileged user",
+)
+def test_dry_run_report_directory_does_not_require_read_permission(tmp_path):
+    directory = tmp_path / "reports"
+    directory.mkdir()
+    destination = directory / "report.json"
+    checkpoint = tmp_path / "checkpoint.json"
+    directory.chmod(0o300)
+    try:
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+    finally:
+        directory.chmod(0o700)
+
+    assert json.loads(destination.read_text()) == {"status": "pass"}
+    assert not checkpoint.exists()
+
+
+def test_report_writer_does_not_create_protected_checkpoint_as_directory(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+    destination = checkpoint / "reports" / "report.json"
+
+    with pytest.raises(ValueError, match="conflicts with the state file"):
+        write_json_report_artifact({"status": "pass"}, str(destination), protected_path=str(checkpoint))
+
+    assert not checkpoint.exists()
+
+
+def test_protected_report_creates_nested_parents_through_validated_alias(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    (tmp_path / "alias").symlink_to(actual, target_is_directory=True)
+    checkpoint = tmp_path / "checkpoint.json"
+    destination = "alias/nested/reports/report.json"
+
+    assert write_json_report_artifact({"status": "pass"}, destination, protected_path=str(checkpoint)) == destination
+
+    assert json.loads((actual / "nested/reports/report.json").read_text()) == {"status": "pass"}
+    assert not checkpoint.exists()

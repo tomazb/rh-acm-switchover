@@ -122,7 +122,9 @@ def _reject_symlink_escape(path: Path, root: Path, field_name: str) -> None:
             )
 
 
-def validate_report_artifact_path(destination: str, field_name: str = "report artifact") -> Path:
+def validate_report_artifact_path(
+    destination: str, field_name: str = "report artifact", *, resolve_parent: bool = False
+) -> Path:
     """Validate an artifact path before controller-side reads or writes."""
     validate_path_syntax(destination, field_name)
 
@@ -143,6 +145,13 @@ def validate_report_artifact_path(destination: str, field_name: str = "report ar
         raise SecurityValidationError(f"SECURITY: {field_name} path '{destination}' must not be a symlink.")
 
     _reject_symlink_escape(absolute_path.parent / absolute_path.name, root, field_name)
+    if resolve_parent:
+        parent = absolute_path.parent.resolve()
+        if not _commonpath_is_parent(parent, root):
+            raise SecurityValidationError(
+                f"SECURITY: {field_name} directory '{absolute_path.parent}' resolves outside '{root}'."
+            )
+        return parent / absolute_path.name
     if absolute_path.parent.exists() and not _commonpath_is_parent(absolute_path.parent.resolve(), root):
         raise SecurityValidationError(
             f"SECURITY: {field_name} directory '{absolute_path.parent}' resolves outside '{root}'."

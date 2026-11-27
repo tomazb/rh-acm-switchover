@@ -134,6 +134,18 @@ def write_python_report(
 
     try:
         report_type, filename = report_target(args)
+        destination = os.path.join(report_dir, filename)
+        dry_run = getattr(args, "dry_run", False)
+        if dry_run:
+            state_file = state.state_file
+            checkpoint_path = os.path.realpath(state_file)
+            report_path = os.path.realpath(destination)
+            if os.path.commonpath((report_path, checkpoint_path)) == checkpoint_path or (
+                os.path.exists(destination) and os.path.exists(state_file) and os.path.samefile(destination, state_file)
+            ):
+                raise ValueError(
+                    "Dry-run report destination conflicts with the state file. Choose a different --report-dir."
+                )
         state_snapshot = state.capture_state_snapshot()
         report = build_operation_report(
             report_type=report_type,
@@ -145,8 +157,10 @@ def write_python_report(
             refusal_message=refusal_message,
             redact_identity_inputs=redact_identity_inputs,
         )
-        destination = os.path.join(report_dir, filename)
-        written_path = write_json_report_artifact(report, destination)
+        if dry_run:
+            written_path = write_json_report_artifact(report, destination, protected_path=state.state_file)
+        else:
+            written_path = write_json_report_artifact(report, destination)
         logger.info("Wrote report artifact: %s", written_path)
     except Exception as exc:
         logger.error("Failed to write report artifact: %s", exc)
@@ -211,14 +225,9 @@ def _report_interrupted_state(args: Any, state: StateManager, logger: logging.Lo
 
 @dataclass(frozen=True)
 class OperationOutcome:
-    """The exit code, and whether the run ended in a migration-journal reset refusal.
-
-    A refusal changed nothing, so main() must not roll a dry-run back over it: the
-    rollback itself would be the only write.
-    """
+    """The exit code from the prepared CLI operation."""
 
     exit_code: int
-    journal_reset_refused: bool = False
 
 
 def run_operation_mode(*args: Any, **kwargs: Any) -> int:
@@ -243,7 +252,6 @@ def run_operation_outcome(
     """Run the prepared non-setup operation path and return its outcome."""
     exit_code = exit_failure
     completed_assessment = completed_backup_assessment(args, state)
-    journal_reset_refused = False
     refusal_report_message: Optional[str] = None
     try:
         if should_bind_state:
@@ -254,7 +262,7 @@ def run_operation_outcome(
             success = hooks.execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        if not completed_assessment:
+        if not completed_assessment and not getattr(args, "dry_run", False):
             _report_interrupted_state(args, state, logger)
         exit_code = exit_interrupt
     except MigrationJournalResetRefused as exc:
@@ -262,7 +270,6 @@ def run_operation_outcome(
         # this is a refusal, not a run error: never record it into the state file.
         logger.error("\n✗ %s", exc)
         exit_code = exit_failure
-        journal_reset_refused = True
     except StateIdentityMismatch as exc:
         # The binding guard refused this state file; never write into it.
         # The finally block still emits a report from a read-only snapshot,
@@ -309,4 +316,4 @@ def run_operation_outcome(
             )
         hooks.gitops_reporter_factory().print_report()
 
-    return OperationOutcome(exit_code, journal_reset_refused)
+    return OperationOutcome(exit_code)

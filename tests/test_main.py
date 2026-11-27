@@ -1624,7 +1624,6 @@ class TestMainGitOpsReporting:
             secondary=Mock(),
             should_bind_state=True,
             should_record_state_errors=True,
-            dry_run_state_guard=None,
         )
 
         with patch("acm_switchover.parse_args", return_value=args), patch(
@@ -1904,7 +1903,7 @@ class TestMainGitOpsReporting:
                 main()
 
         assert exc_info.value.code == EXIT_SUCCESS
-        state_manager.assert_called_once_with(str(reversed_path), reset=False)
+        state_manager.assert_called_once_with(str(reversed_path), reset=False, persist_state=True)
         assert args.state_file == str(reversed_path)
 
     def test_main_resume_only_uses_unique_secondary_matched_state_file_without_primary_context(
@@ -1937,7 +1936,7 @@ class TestMainGitOpsReporting:
                 main()
 
         assert exc_info.value.code == EXIT_SUCCESS
-        state_manager.assert_called_once_with(str(state_path), reset=False)
+        state_manager.assert_called_once_with(str(state_path), reset=False, persist_state=True)
         assert args.state_file == str(state_path)
 
     def test_main_resume_only_missing_state_file_exits_before_state_manager(self, tmp_path):
@@ -2051,9 +2050,7 @@ class TestPrepareRuntime:
             restore_only=False,
         )
         logger = logging.getLogger(f"task2.prepare-runtime.{failing_role}")
-        snapshot = {"state": "before-dry-run"}
         state = Mock()
-        state.capture_state_snapshot.return_value = snapshot
         primary_client = Mock(name="primary-client")
         kube_client = Mock(
             side_effect=(
@@ -2082,7 +2079,6 @@ class TestPrepareRuntime:
         records = [record for record in caplog.records if record.name == logger.name]
         assert [record.getMessage() for record in records] == [expected_message]
         assert all(record.exc_info is None for record in records)
-        state.restore_state_snapshot.assert_called_once_with(snapshot)
         if failing_role == "primary":
             assert kube_client.call_args_list == [
                 (
@@ -3687,7 +3683,6 @@ class TestCliOutcomesDelegation:
             secondary=secondary,
             should_bind_state=True,
             should_record_state_errors=True,
-            dry_run_state_guard=None,
         )
 
         with patch("acm_switchover.parse_args", return_value=args), patch(

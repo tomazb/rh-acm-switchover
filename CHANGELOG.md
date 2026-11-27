@@ -321,6 +321,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python `--dry-run` keeps rehearsal state in memory, preserves existing checkpoints byte-for-byte,
+  and leaves missing checkpoints absent, including on process interruption. Refs
+  [#407](https://github.com/tomazb/rh-acm-switchover/issues/407).
+
 - Python `InputValidator.validate_kubernetes_namespace`, `lib/argocd.py`, and the Ansible
   Collection (`argocd_manage` discovery and checkpoint validation) now accept valid digit-leading
   DNS-1123 Kubernetes namespaces (such as `9-team`) using `fullmatch`, validate explicit,

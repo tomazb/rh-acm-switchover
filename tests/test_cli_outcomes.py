@@ -22,7 +22,7 @@ from lib.constants import (
     REPORT_TYPE_SWITCHOVER,
 )
 from lib.exceptions import SwitchoverError
-from lib.utils import Phase, StateIdentityMismatch
+from lib.utils import Phase, StateIdentityMismatch, StateManager
 
 
 def test_report_target_maps_cli_modes():
@@ -209,6 +209,27 @@ def test_write_python_report_builds_and_writes_artifact():
     build_report.assert_called_once()
     write_artifact.assert_called_once_with({"schema_version": "1.0"}, "/tmp/reports/switchover-report.json")
     logger.info.assert_called_once_with("Wrote report artifact: %s", "/tmp/reports/switchover-report.json")
+
+
+@pytest.mark.parametrize("alias", ["same-path", "hardlink", "absent", "ancestor"])
+def test_dry_run_report_cannot_overwrite_checkpoint(tmp_path, alias):
+    destination = tmp_path / "switchover-report.json"
+    path = tmp_path / "state.json" if alias == "hardlink" else destination
+    contents = b'{ "current_phase": "init" }\n'
+    if alias == "ancestor":
+        destination = path / "reports" / destination.name
+    if alias in ("same-path", "hardlink"):
+        path.write_bytes(contents)
+    if alias == "hardlink":
+        destination.hardlink_to(path)
+    state = StateManager(str(path), persist_state=False)
+
+    write_python_report(SimpleNamespace(report_dir=str(destination.parent), dry_run=True), state, "pass", Mock())
+
+    if alias in ("absent", "ancestor"):
+        assert not path.exists()
+    else:
+        assert path.read_bytes() == contents
 
 
 def test_write_python_report_logs_error_without_raising():
@@ -695,8 +716,6 @@ def test_an_interrupted_state_write_is_saved_or_reported_indeterminate_never_ass
     import os
     import stat
 
-    from lib.utils import StateManager
-
     state = StateManager(str(tmp_path / "state.json"))
     state.flush_state()
     real_fsync = os.fsync
@@ -755,7 +774,6 @@ def test_api_error_from_a_real_kube_client_reaches_state_and_report_by_status_on
     import logging
 
     from lib.kube_client import KubeClient
-    from lib.utils import StateManager
     from tests.api_error_canary import assert_no_canary, canary_api_exception, real_kube_client_apis
 
     state_path = tmp_path / "state.json"

@@ -13,10 +13,11 @@ import re
 import shutil
 import signal
 import stat
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Callable, Dict, Literal, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, Literal, Optional, Set, Tuple, TypeVar
 
 from lib.exceptions import StateLoadError, StateLockError
 
@@ -160,8 +161,17 @@ def _fsync_directory(path: str) -> None:
 class StateManager:
     """Manages switchover state for idempotent operations."""
 
-    def __init__(self, state_file: str = ".state/switchover-state.json", *, reset: bool = False):
+    def __init__(
+        self,
+        state_file: str = ".state/switchover-state.json",
+        *,
+        reset: bool = False,
+        persist_state: bool = True,
+    ):
+        if not persist_state and os.path.basename(state_file) in ("", ".", ".."):
+            raise StateLoadError("The dry-run state path must name a file, not a directory.")
         self.state_file = state_file
+        self._persist_state = persist_state
         self._dirty = False  # Track if state has pending writes
         self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
         self._flushing = False  # Track if we're currently flushing to avoid double-write
@@ -221,7 +231,12 @@ class StateManager:
             return
 
         self._ensure_state_dir()
-        lock_handle = open(self._run_lock_path, "a+", encoding="utf-8")
+        lock_handle = open(
+            self._run_lock_path,
+            "a+",
+            encoding="utf-8",
+            opener=None if self._persist_state else self._open_dry_run_lock,
+        )
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
@@ -239,6 +254,28 @@ class StateManager:
 
         _RUN_LOCK_REGISTRY[self._run_lock_path] = {"handle": lock_handle, "refcount": 1}
         self._run_lock_handle = lock_handle
+
+    def _open_dry_run_lock(self, path: str, flags: int) -> int:
+        """Open the usual run lock without letting an alias redirect its metadata write."""
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        try:
+            if not nofollow and os.path.islink(path):
+                raise StateLockError(f"Dry-run state lock must not be a symlink: {path}")
+            fd = os.open(path, flags | nofollow, 0o666)
+        except OSError as exc:
+            raise StateLockError(f"Could not open dry-run state lock {path}: {exc}") from exc
+
+        try:
+            try:
+                checkpoint_info = os.stat(self.state_file)
+            except FileNotFoundError:
+                return fd
+            if os.path.samestat(os.fstat(fd), checkpoint_info):
+                raise StateLockError(f"Dry-run state lock points to the checkpoint: {path}")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
 
     def _release_run_lock(self) -> None:
         """Release the process-lifetime run lock if this is the last holder."""
@@ -270,8 +307,8 @@ class StateManager:
         """Load state under the run lock, or initialize a fresh checkpoint.
 
         Raises StateLoadError if the file exists but cannot be read or parsed.
-        The corrupt file is preserved (copied to *.corrupt.<timestamp>) so that
-        operators can inspect it while the original path continues blocking reuse.
+        The corrupt file remains at the original path. Persistent runs also
+        copy it to *.corrupt.<timestamp> for inspection.
         An explicit reset replaces the checkpoint without reading it.
         """
         if reset:
@@ -339,8 +376,10 @@ class StateManager:
     def _preserve_corrupt_state_file(self) -> str:
         """Copy the corrupt state file to *.corrupt.<timestamp> for forensics.
 
-        Returns the path of the forensic copy, or the original path if copying fails.
+        Returns the original path if persistence is disabled or copying fails.
         """
+        if not self._persist_state:
+            return self.state_file
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         corrupt_path = f"{self.state_file}.corrupt.{ts}"
         try:
@@ -384,6 +423,8 @@ class StateManager:
         Uses a write-to-temp + rename pattern to ensure the state file is
         never left in a corrupted state if the process crashes mid-write.
         """
+        if not self._persist_state:
+            return
         self._ensure_state_dir()
         temp_file = self.state_file + ".tmp"
 
@@ -511,7 +552,7 @@ class StateManager:
         self.flush_state()  # Phase transitions are critical checkpoints
 
     def preview_phase(self, phase: Phase) -> None:
-        """Update the current phase in memory only, for a dry-run whose rollback restores the original."""
+        """Update the current phase in memory for a dry-run preview."""
         self.state["current_phase"] = phase.value
 
     def record_retry_error_baseline(self, phase: Any, count: int) -> None:
@@ -547,8 +588,24 @@ class StateManager:
         self._dirty = False
         self._write_state(self.state)
 
+    @contextmanager
+    def rehearse(self) -> Iterator[None]:
+        """Run a workflow in memory and discard its changes when returning to the caller."""
+        snapshot = self.capture_state_snapshot()
+        retry_error_baseline = self._retry_error_baseline
+        was_dirty = self._dirty
+        was_persistent = self._persist_state
+        self._persist_state = False
+        try:
+            yield
+        finally:
+            self.state = snapshot
+            self._retry_error_baseline = retry_error_baseline
+            self._dirty = was_dirty
+            self._persist_state = was_persistent
+
     def capture_state_snapshot(self) -> Dict[str, Any]:
-        """Capture the complete durable state for dry-run rollback."""
+        """Capture a copy of the complete current state."""
         return copy.deepcopy(self.state)
 
     def restore_state_snapshot(self, snapshot: Dict[str, Any]) -> None:
