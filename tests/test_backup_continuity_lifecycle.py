@@ -144,7 +144,7 @@ def client(transport):
 
 @pytest.fixture
 def attempt(tmp_path, monkeypatch):
-    def build(restore=False, label="completed", good=False):
+    def build(restore=False, label="completed", good=False, schedule=False):
         name = ("restore-" if restore else "switchover-") + label + ".json"
         raw = (HISTORY / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == MANIFEST["files"][name]
@@ -176,6 +176,13 @@ def attempt(tmp_path, monkeypatch):
             backup["status"].update(completionTimestamp=timestamp, errors=0)
         primary_transport = LifecycleTransport("primary", backup)
         secondary_transport = LifecycleTransport("secondary", backup)
+        if schedule:
+            secondary_transport.schedules = [
+                {
+                    "metadata": {"name": "fixture-schedule", "namespace": "open-cluster-management-backup"},
+                    "spec": {"paused": False, "veleroSchedule": "*/5 * * * *"},
+                }
+            ]
         primary = None if restore else client(primary_transport)
         secondary = client(secondary_transport)
         argv = [
@@ -498,10 +505,60 @@ def test_failed_finalization_retry_repauses_before_history_proof(attempt, restor
     assert runtime.state.state["config"]["post_switchover_backup_name"] == raw["config"]["post_switchover_backup_name"]
 
 
+@pytest.mark.parametrize("phase", [Phase.FINALIZATION, Phase.POST_ACTIVATION])
+@pytest.mark.parametrize("verified_schedule", [False, True])
+def test_historical_restore_only_without_schedule_refuses_before_completion(
+    attempt, monkeypatch, caplog, verified_schedule, phase
+):
+    args, path, raw, _, _, _, transport, _ = attempt(restore=True, label="none", good=True)
+    saved = json.loads(raw)
+    saved["current_phase"] = phase.value
+    saved["config"].pop("post_switchover_backup_name")
+    if phase == Phase.POST_ACTIVATION:
+        monkeypatch.setattr(cli, "_run_phase_post_activation", lambda *a: True)
+    if verified_schedule:
+        saved["completed_steps"].extend(
+            {"name": step} for step in ("verify_backup_schedule_enabled", "fix_backup_collision")
+        )
+    path.write_text(json.dumps(saved))
+    assert not transport.schedules
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+
+    after = json.loads(path.read_bytes())
+    assert stopped.value.code == 1
+    assert "No BackupSchedule found while verifying finalization" in caplog.text
+    assert after["current_phase"] != Phase.COMPLETED.value
+    assert "post_switchover_backup_name" not in after["config"]
+    assert after["config"]["backup_schedule_enabled_at"] == saved["config"]["backup_schedule_enabled_at"]
+    assert not {"verify_new_backups", "verify_backup_integrity"} & {step["name"] for step in after["completed_steps"]}
+
+
+def test_historical_restore_only_with_schedule_records_backup_before_completion(attempt, monkeypatch):
+    args, path, raw, _, _, _, transport, _ = attempt(restore=True, label="none", good=True, schedule=True)
+    saved = json.loads(raw)
+    saved["config"].pop("post_switchover_backup_name")
+    path.write_text(json.dumps(saved))
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+
+    assert stopped.value.code == 0
+    after = json.loads(path.read_bytes())
+    assert after["current_phase"] == Phase.COMPLETED.value
+    assert after["config"]["post_switchover_backup_name"] == transport.objects[0]["metadata"]["name"]
+    assert after["config"]["backup_schedule_enabled_at"] == saved["config"]["backup_schedule_enabled_at"]
+
+
 @pytest.mark.parametrize("restore", [False, True])
 @pytest.mark.parametrize("label", ["none", "continuity", "integrity", "both"])
 def test_good_current_backup_all_historical_marker_retries_complete(attempt, restore, label):
-    args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label=label, good=True)
+    args, path, raw, primary, secondary, pt, st, logger = attempt(
+        restore=restore, label=label, good=True, schedule=restore
+    )
     runtime = cli._prepare_runtime(args, logger, str(path))
     before = runtime.state.capture_state_snapshot()
     result = run_operation_mode(
@@ -533,7 +590,9 @@ def test_disk_retry_after_real_finalization_return_reproves_before_completion(
 ):
     import lib.operation_runners as runners
 
-    args, path, raw, primary, secondary, pt, st, logger = attempt(restore=restore, label="none", good=True)
+    args, path, raw, primary, secondary, pt, st, logger = attempt(
+        restore=restore, label="none", good=True, schedule=restore
+    )
     runtime = cli._prepare_runtime(args, logger, str(path))
     original = runners.log_operation_completion
 

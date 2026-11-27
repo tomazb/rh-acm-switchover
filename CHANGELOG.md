@@ -321,6 +321,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Historical Python and Ansible restore-only finalization retries now refuse to complete if no
+  BackupSchedule exists after enablement. The fresh restore-only exception remains
+  available. Refs [#374 item 1](https://github.com/tomazb/rh-acm-switchover/issues/374).
+
 - Python `--dry-run` keeps rehearsal state in memory, preserves existing checkpoints byte-for-byte,
   and leaves missing checkpoints absent, including on process interruption. Refs
   [#407](https://github.com/tomazb/rh-acm-switchover/issues/407).

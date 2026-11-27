@@ -161,6 +161,7 @@ def run_backup_entry(tmp_path):
         old_action=None,
         actual_argocd=False,
         complete_after_enable=False,
+        timeout=90,
     ):
         now = datetime.now(timezone.utc)
         enabled = (now - timedelta(minutes=2)).isoformat()
@@ -282,7 +283,7 @@ def run_backup_entry(tmp_path):
             ]
             env["ACM_BACKUP_TRACE_PATH"] = str(tmp_path / "backup-action-trace.jsonl")
             env["ACM_BACKUP_INTERRUPT_AFTER_PROOF"] = "1" if interrupt else "0"
-        completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, env=env, timeout=90)
+        completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, env=env, timeout=timeout)
         (tmp_path / "api-requests.json").write_text(
             json.dumps({"primary": primary.requests, "secondary": secondary.requests}, indent=2)
         )
@@ -676,6 +677,40 @@ def test_fresh_predecessor_missing_boundary_still_allows_shipped_readonly_previe
     assert result.returncode == 0, output
     assert path.read_bytes() == before and path.stat().st_mtime_ns == stat.st_mtime_ns
     assert not p.writes and not s.writes
+
+
+@pytest.mark.parametrize(
+    "route,phase,reset_from",
+    [
+        ("role", "finalization", None),
+        ("playbook", "finalization", None),
+        ("role", "post_activation", None),
+        ("playbook", "post_activation", None),
+        ("playbook", "finalization", "post_activation"),
+    ],
+)
+def test_historical_restore_only_without_schedule_refuses_before_completion(run_backup_entry, route, phase, reset_from):
+    result, _, secondary, path, before, _ = run_backup_entry(
+        route=route,
+        restore=True,
+        good=True,
+        completed=False,
+        state_edit=lambda state: state.update(phase=phase),
+        reset={"reset_from": reset_from} if reset_from else None,
+        timeout=180 if reset_from else 90,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "No BackupSchedule found while verifying finalization" in output, output
+    assert not secondary.schedules
+    if not reset_from:
+        assert not secondary.writes
+    after = json.loads(path.read_bytes())
+    assert "finalization" not in after["completed_phases"]
+    assert after["operational_data"]["backup_schedule_enabled_at"] == (
+        json.loads(before)["operational_data"]["backup_schedule_enabled_at"]
+    )
 
 
 @pytest.mark.parametrize("route", ["role", "playbook"])

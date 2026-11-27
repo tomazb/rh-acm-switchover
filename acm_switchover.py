@@ -1028,20 +1028,27 @@ def _require_waivable_expectation(args: argparse.Namespace, expected_names: list
         )
 
 
+def _has_backup_continuity_history(inputs: dict) -> bool:
+    """Recognize retained Backup evidence regardless of the saved phase."""
+    return any(
+        inputs.get(key)
+        for key in (
+            "invalid_reason",
+            "enabled_at_present",
+            "recorded_name_present",
+            "detected_marker_present",
+            "verification_steps",
+            "legacy_enable_steps",
+        )
+    )
+
+
 def _verify_backup_continuity_entry(args, state, primary, secondary, logger, *, completed: bool) -> bool:
     """Wire domain proof; workflow owns historical/completed applicability."""
     if not completed and not _require_waivable_recorded_expectation(args, state, logger):
         return False
     inputs = RunRecord(state).backup_continuity_inputs()
-    historical = (
-        workflow.historical_finalization_backup_assessment(state)
-        or inputs.get("invalid_reason")
-        or inputs.get("enabled_at_present")
-        or inputs.get("recorded_name_present")
-        or inputs.get("detected_marker_present")
-        or inputs.get("verification_steps")
-        or inputs.get("legacy_enable_steps")
-    )
+    historical = workflow.historical_finalization_backup_assessment(state) or _has_backup_continuity_history(inputs)
     if not completed and not historical:
         return True
     try:
@@ -1073,12 +1080,16 @@ def _run_phase_finalization(
     if not _require_waivable_recorded_expectation(args, state, logger):
         return False
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
-    require_backup_continuity = workflow.pre_enable_cleanup_retry(state)
+    # A retry or retained Backup history rules out the fresh restore-only exception.
+    record = RunRecord(state)
+    require_backup_continuity = state.get_current_phase() == Phase.FINALIZATION or _has_backup_continuity_history(
+        record.backup_continuity_inputs()
+    )
     state.set_phase(Phase.FINALIZATION)
 
     is_restore_only = getattr(args, "restore_only", False)
     old_hub_action = "none" if is_restore_only else args.old_hub_action
-    facts = RunRecord(state).hub_facts()
+    facts = record.hub_facts()
     finalization = Finalization(
         secondary_client=secondary,
         state_manager=state,
