@@ -1073,7 +1073,8 @@ def _run_phase_finalization(
     if not _require_waivable_recorded_expectation(args, state, logger):
         return False
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
-    require_backup_continuity = workflow.pre_enable_cleanup_retry(state)
+    # Both historical and pre-enable retries must prove backup continuity.
+    require_backup_continuity = state.get_current_phase() == Phase.FINALIZATION
     state.set_phase(Phase.FINALIZATION)
 
     is_restore_only = getattr(args, "restore_only", False)

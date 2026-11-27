@@ -182,7 +182,7 @@ class Finalization:
                     self._enable_backup_schedule(journal)
 
             with self._step("verify_backup_schedule_enabled") as should_run:
-                if should_run:
+                if should_run or (self.restore_only and self.require_backup_continuity):
                     self._verify_backup_schedule_enabled()
 
             # Fix BackupSchedule collision if detected

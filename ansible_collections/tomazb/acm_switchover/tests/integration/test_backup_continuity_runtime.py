@@ -679,6 +679,26 @@ def test_fresh_predecessor_missing_boundary_still_allows_shipped_readonly_previe
 
 
 @pytest.mark.parametrize("route", ["role", "playbook"])
+def test_historical_restore_only_without_schedule_refuses_before_completion(run_backup_entry, route):
+    result, _, secondary, path, before, _ = run_backup_entry(
+        route=route,
+        restore=True,
+        good=True,
+        completed=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "No BackupSchedule found while verifying finalization" in output, output
+    assert not secondary.schedules and not secondary.writes
+    after = json.loads(path.read_bytes())
+    assert "finalization" not in after["completed_phases"]
+    assert after["operational_data"]["backup_schedule_enabled_at"] == (
+        json.loads(before)["operational_data"]["backup_schedule_enabled_at"]
+    )
+
+
+@pytest.mark.parametrize("route", ["role", "playbook"])
 def test_genuinely_fresh_restore_only_no_schedule_keeps_existing_exception(run_backup_entry, route):
     result, p, s, path, before, stat = run_backup_entry(
         route=route,
